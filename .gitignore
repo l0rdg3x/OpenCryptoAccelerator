@@ -1,0 +1,8 @@
+# Local tool builds (Verilator, help2man) — built from source, see AGENTS.md
+tools/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Personal agent kickoff prompt
+prompt-claude-code.md
