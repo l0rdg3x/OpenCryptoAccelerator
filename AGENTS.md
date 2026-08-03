@@ -116,6 +116,12 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
   the edge that consumed your stimulus returns the stale value.
+- When mutating a Python model or testbench to prove a test can fail,
+  delete `hw/sim/__pycache__` before re-running. Python invalidates its
+  cache on mtime and size at one-second granularity, so a same-size edit
+  reverted within the same second keeps executing the mutated bytecode —
+  the restore looks broken, or worse, a later run silently keeps the
+  mutation. Cost one confusing debug session on 2026-08-03.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
