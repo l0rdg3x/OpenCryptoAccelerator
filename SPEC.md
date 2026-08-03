@@ -42,8 +42,20 @@ Hardware accelerator for:
 
 # ================================================== PERFORMANCE TARGETS
 
-- MVP: aggregate crypto-core throughput in the FPGA fabric >= 10 Gbps,
-  measured in simulation and on hardware (multiple parallel cores).
+- MVP (ECP5): aggregate crypto-core throughput in the FPGA fabric high
+  enough to saturate the GbE host link with margin — target >= 2 Gbps
+  aggregate, measured in simulation and on hardware (multiple parallel
+  cores).
+- Phase 3 (Artix-7 + LitePCIe): aggregate crypto-core throughput
+  >= 10 Gbps, measured in simulation and on hardware.
+  This target was originally set for the MVP. The first ECP5 synthesis
+  of the cores (2026-08-03) showed it is out of reach on the LFE5U-45F
+  without architectural work well beyond the MVP scope: one AEAD engine
+  took 90% of the device multipliers at 26.77 MHz, and even after the
+  planned datapath rework the device holds roughly three engines for an
+  estimated ~4 Gbps. See `docs/design/2026-08-03-poly1305-datapath.md`.
+  On the MVP board the figure would in any case only be observable in
+  simulation, the host link being GbE.
 - Declared note: v1 end-to-end throughput is limited by the host
   interface (GbE); host-facing throughput scales up in later phases.
 - Final OCA-50 board: 50 Gbps aggregate multi-core/multi-session, with

@@ -69,7 +69,9 @@ chain and five cascaded MULT18X18D into the accumulator `a`. That is
 `poly1305.sv` doing the 130×130-bit multiply and the mod-2^130-5
 reduction in a single clock cycle.
 
-Two consequences for the MVP target (>= 10 Gbps aggregate):
+Two consequences for the MVP target (saturate the GbE host link with
+margin; the >= 10 Gbps aggregate figure moved to the Artix-7 phase on
+the strength of these numbers — see `SPEC.md`):
 
 1. **DSP-bound**: one AEAD engine takes 90% of the ECP5-45F multipliers,
    so the core cannot be replicated on this device as written. The
