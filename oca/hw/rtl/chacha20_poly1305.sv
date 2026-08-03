@@ -153,16 +153,20 @@ module chacha20_poly1305 (
     assign unused_ok = c_busy & p_busy;
     assign tag = p_tag;
 
-    // zero all bytes at index >= len. Built per byte on purpose: a
-    // 512-bit (1 << len*8) - 1 synthesises into one full-width carry
-    // chain, 64 independent 7-bit compares into none.
-    function automatic logic [511:0] mask_bytes(
-        input logic [511:0] d, input logic [6:0] len
+    // Zero all bytes at index >= len of one 16-byte poly1305 sub-block.
+    // The padding only ever has to be zero where poly1305 consumes it, so
+    // the mask sits on this 128-bit slice rather than on the 512-bit
+    // buses feeding it: one masking stage a quarter of the width instead
+    // of two full-width ones. Built per byte on purpose: a
+    // (1 << len*8) - 1 mask synthesises into one full-width carry chain,
+    // 16 independent 5-bit compares into none.
+    function automatic logic [127:0] mask_sub(
+        input logic [127:0] d, input logic [4:0] len
     );
-        logic [511:0] m;
+        logic [127:0] m;
         begin
-            for (int i = 0; i < 64; i++)
-                m[i*8 +: 8] = (7'(i) < len) ? 8'hff : 8'h00;
+            for (int i = 0; i < 16; i++)
+                m[i*8 +: 8] = (5'(i) < len) ? 8'hff : 8'h00;
             return d & m;
         end
     endfunction
@@ -172,6 +176,14 @@ module chacha20_poly1305 (
     logic       sub_done;
     always_comb sub_cnt  = 3'((mac_len + 7'd15) >> 4);
     always_comb sub_done = ({1'b0, sub_idx} == sub_cnt - 3'd1);
+
+    // Valid bytes of the sub-block sub_idx addresses: a full 16, except
+    // in the last sub-block of a block whose length is not a multiple of
+    // 16. mac_len[3:0] is that remainder, and it is zero exactly when the
+    // last sub-block is full, which is why the zero case selects 16.
+    logic [4:0] sub_len;
+    always_comb sub_len = (sub_done && mac_len[3:0] != 4'd0)
+                          ? {1'b0, mac_len[3:0]} : 5'd16;
 
     // An illegal block, caught on the cycle it is offered: both FSMs act
     // on it, so neither is left holding state from the dead message.
@@ -242,7 +254,7 @@ module chacha20_poly1305 (
                         in_ready  <= 1'b0;
                         cur_len   <= in_len;
                         cur_last  <= in_last;
-                        c_data_in <= mask_bytes(in_data, in_len);
+                        c_data_in <= in_data;
                         if (in_aad) begin
                             aad_len <= aad_len + 64'(in_len);
                             cur_aad <= 1'b1;
@@ -275,12 +287,13 @@ module chacha20_poly1305 (
                 S_WAITBUF: begin
                     if (buf_free) begin
                         // MAC the ciphertext: our output on encrypt, the
-                        // input block on decrypt (c_data_in is already
-                        // masked to cur_len bytes). AAD is MACed as it
-                        // arrived, so it takes the same path as decrypt.
+                        // input block on decrypt, as RFC 8439 requires.
+                        // AAD is MACed as it arrived, so it takes the
+                        // same path as decrypt. Either way the bytes past
+                        // cur_len are whatever the caller drove, and are
+                        // zeroed on the way into poly1305, not here.
                         mac_buf   <= (cur_aad || dec_r)
-                                     ? c_data_in
-                                     : mask_bytes(c_data_out, cur_len);
+                                     ? c_data_in : c_data_out;
                         mac_len   <= cur_len;
                         mac_last  <= cur_last;
                         mac_valid <= 1'b1;
@@ -335,7 +348,8 @@ module chacha20_poly1305 (
                     if (p_blk_ready) begin
                         p_blk     <= 1'b1;
                         p_last    <= 1'b0;
-                        p_data_in <= mac_buf[sub_idx * 128 +: 128];
+                        p_data_in <= mask_sub(mac_buf[sub_idx * 128 +: 128],
+                                              sub_len);
                         m_state   <= S_M_NEXT;
                     end
                 end
