@@ -30,10 +30,16 @@ oca/                        the code
   bench/                    benchmark harness
   hw/rtl/                   SystemVerilog cores (SPDX CERN-OHL-P-2.0)
   hw/sim/                   cocotb testbenches + runners (SPDX MIT)
+  hw/syn/                   ECP5 synthesis flow + results (SPDX MIT)
   .venv/                    python venv (cocotb) — NOT committed
 tools/                      local tool builds — NOT committed
   verilator/                Verilator 5.050 install (built from source, branch stable)
   help2man/                 help2man install (needed to build Verilator)
+  yosys/                    yosys 0.67+ install (CMake build, slang frontend)
+  trellis/                  prjtrellis install (ECP5 database + ecppack)
+  nextpnr/                  nextpnr-ecp5 install (45k chipdb only)
+  eigen/                    Eigen 3.4.0 headers (nextpnr analytic placer)
+  src/                      upstream sources for the above (shallow clones)
 ```
 
 ## Environment rules
@@ -46,6 +52,20 @@ tools/                      local tool builds — NOT committed
 - To rebuild Verilator: clone `verilator/verilator` branch `stable`,
   `autoconf && ./configure --prefix=$PWD/../../tools/verilator` with
   `help2man` from `tools/help2man` in PATH, `make -j && make install`.
+- To rebuild the ECP5 toolchain (sources in `tools/src/`, all installed
+  with `-DCMAKE_INSTALL_PREFIX=tools/<name>`):
+  - Eigen 3.4.0 — header-only, `cmake --install` into `tools/eigen`;
+  - prjtrellis — cmake on `libtrellis/`; `pytrellis` builds against
+    Python 3.14 with the bundled pybind11;
+  - yosys — CMake (not the old Makefile), Ninja, submodules included
+    (`abc`, `slang`);
+  - nextpnr — `-DARCH=ecp5 -DECP5_DEVICES=45k -DBUILD_PYTHON=OFF
+    -DTRELLIS_INSTALL_PREFIX=tools/trellis
+    -DEigen3_DIR=tools/eigen/share/eigen3/cmake`. Building only the 45k
+    chipdb keeps the build short; add devices when other boards appear.
+- System dependencies used as-is (already present on the dev machine, no
+  installs performed): boost 1.91 (incl. `libboost_python314`), tcl 8.6,
+  readline, libffi, zlib.
 
 ## How to build and test
 
@@ -72,6 +92,12 @@ Lint (must stay clean, `-Wall`):
 ../tools/verilator/bin/verilator --lint-only -Wall hw/rtl/*.sv --top-module chacha20_poly1305
 ```
 
+ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
+
+```sh
+.venv/bin/python hw/syn/run_synth.py chacha20_poly1305   # ~40 min (router)
+```
+
 ## Hard rules
 
 - **Test vectors are parsed from official sources in
@@ -83,6 +109,9 @@ Lint (must stay clean, `-Wall`):
   (OpenSSL CLI / Python reference) before touching RTL.
 - Licenses: software MIT/Apache-2.0, RTL CERN-OHL-P-2.0 (SPDX header in
   every file), hardware docs CERN-OHL-P v2.
+- yosys reads these cores with `read_slang`, not `read_verilog -sv`:
+  the Verilog-2005 frontend rejects functions with `return` and
+  concatenation assignments, which the RTL uses throughout.
 - cocotb gotchas: runner import is `cocotb_tools.runner` on cocotb 2.x
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
@@ -97,5 +126,11 @@ Lint (must stay clean, `-Wall`):
 - Phase 2: `chacha20.sv`, `poly1305.sv`, `chacha20_poly1305.sv` (AEAD,
   encrypt + decrypt) written and verified against RFC 8439 vectors
   (2.3.2, 2.4.2, 2.5.2, A.3 #1-4, 2.8.2, A.5). Lint `-Wall` clean.
-- Next: yosys/nextpnr-ecp5 local builds, first ECP5 synthesis of the
-  AEAD core; then streaming/packet interface toward the GbE MVP.
+- Open ECP5 toolchain built locally (yosys, prjtrellis, nextpnr-ecp5)
+  and first synthesis of the AEAD engine on the LFE5U-45F: 25% of the
+  LUTs, **90% of the multipliers**, Fmax **26.77 MHz**. The critical
+  path is the single-cycle 130x130 multiply and mod-2^130-5 reduction in
+  `poly1305.sv` (`oca/hw/syn/README.md`).
+- Next: rework the Poly1305 multiplier (limb decomposition + pipeline)
+  so the engine stops being DSP-bound and clock-bound, then the
+  streaming/packet interface toward the GbE MVP.

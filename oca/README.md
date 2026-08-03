@@ -24,6 +24,9 @@
   2.8.2 decrypt round-trip.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
+- `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
+  project-local yosys and nextpnr-ecp5; see `hw/syn/README.md` for the
+  flow and the first results on the LFE5U-45F.
 
 Requirements: `../tools/verilator` built, `oca/.venv` with cocotb
 (installed from cocotb git master — release 2.0.1 does not support
@@ -37,6 +40,9 @@ Python 3.14).
 
 Current status: chacha20 3/3 tests pass, poly1305 5/5 vectors pass,
 AEAD 3/3 tests pass; `verilator --lint-only -Wall` clean on all cores.
+First ECP5 synthesis of the AEAD engine done: 25% of the LUTs but 90%
+of the multipliers and 26.77 MHz, critical path in the single-cycle
+Poly1305 multiply (`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend
 
