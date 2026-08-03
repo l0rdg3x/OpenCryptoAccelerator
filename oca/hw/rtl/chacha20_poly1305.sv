@@ -106,16 +106,16 @@ module chacha20_poly1305 (
     assign unused_ok = c_busy & p_busy;
     assign tag = p_tag;
 
-    // zero all bytes at index >= len
+    // zero all bytes at index >= len. Built per byte on purpose: a
+    // 512-bit (1 << len*8) - 1 synthesises into one full-width carry
+    // chain, 64 independent 7-bit compares into none.
     function automatic logic [511:0] mask_bytes(
         input logic [511:0] d, input logic [6:0] len
     );
         logic [511:0] m;
         begin
-            if (len >= 7'd64)
-                m = {512{1'b1}};
-            else
-                m = (512'd1 << (len * 8)) - 512'd1;
+            for (int i = 0; i < 64; i++)
+                m[i*8 +: 8] = (7'(i) < len) ? 8'hff : 8'h00;
             return d & m;
         end
     endfunction

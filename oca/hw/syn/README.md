@@ -203,3 +203,59 @@ Build time for this configuration, measured on the dev machine with
 nothing else running: **1 min 52 s** for the full AEAD build (yosys +
 nextpnr), 13 s for standalone `chacha20`. Both builds were run twice and
 returned identical area and Fmax, as the fixed seed requires.
+
+### After the per-byte length mask
+
+Same device, package, speed grade, seed and 100 MHz constraint. Only
+`mask_bytes()` in `chacha20_poly1305.sv` changed: the 512-bit
+`(512'd1 << (len * 8)) - 512'd1` is gone, the mask is built one byte at
+a time from 64 independent 7-bit comparisons. `chacha20.sv` and
+`poly1305.sv` are untouched, and so is the FSM — the function is
+combinational, the schedule cannot move.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
+| chacha20_poly1305 (limb Poly1305) | 9579 | 5723 | 20 | 26.10 MHz |
+| chacha20_poly1305 (limb + 1 round/cycle) | 10066 | 5724 | 20 | 37.87 MHz |
+| chacha20_poly1305 (+ per-byte mask) | 10580 | 5724 | **20** | **50.08 MHz** |
+| *chacha20 standalone, for reference* | 4368 | 1418 | 0 | 53.11 MHz |
+
+- **AEAD Fmax: 37.87 -> 50.08 MHz, +32%**, and +87% over the 26.77 MHz
+  baseline. Far outside the place & route noise band.
+- **The wrapper is off the critical path.** It is now 19.97 ns (8.18 ns
+  logic, 11.78 ns routing), from the ChaCha20 state register
+  `u_chacha.st` back into `u_chacha.st`, through 44 CCU2C carry stages
+  belonging to the four adders of one quarter round (`chacha20.sv` lines
+  49, 51, 53, 55) and a final multiplexer. Not one entry in nextpnr's
+  report cites `chacha20_poly1305.sv` any more: this is the same path
+  the standalone core reports, and the engine is within 6% of that
+  core's 53.11 MHz. The wrapper no longer costs anything on top of what
+  the two cores cost by themselves.
+- **The logic delay is what collapsed.** 18.87 -> 8.18 ns logic against
+  7.54 -> 11.78 ns routing. The 512-bit ripple was almost pure logic
+  delay; removing it exposes a design that is now routing-dominated.
+- **Area: +514 LUTs (+5.1%), same flip-flops, same multipliers.** The
+  per-byte mask is not free in cells: against the same yosys and script,
+  the netlist gains 71 CCU2C and 86 L6MUX21 and loses 72 LUT4 and 16
+  PFUMX. More cells, but no long chain — and only the chain was on the
+  critical path.
+- **Throughput: 57 cycles per 64-byte block, unchanged.** The three
+  cocotb tests take the same simulated time before and after the change
+  (1690 / 3110 / 1700 ns), as a combinational-only edit requires. At the
+  new Fmax that is 50.08 MHz x 64 B / 57 = **~0.45 Gbps**, against
+  ~0.34 Gbps before (+32%) and ~0.47 Gbps for the original baseline
+  (-5%). **The engine is back to roughly its baseline throughput while
+  using 20 multipliers instead of 65.**
+
+What limits it now is unchanged and is no longer a datapath: the
+schedule. `S_ENC` still waits for `c_done` before `S_MAC_W`/`S_MAC_P`
+walks the four 16-byte sub-blocks, so a block costs 22 + 4 x 9 = 58
+cycles less one. Overlapping the two phases is the next step, and with
+the three critical paths of the previous rounds all resolved it is the
+only remaining source of the factor the MVP target needs. Of the two
+follow-ups listed above, `mask_bytes()` is now done; `ROWS_PER_CYCLE`
+remains, and is still worth spending only after the schedule is.
+
+Build time: **1 min 18 s** for the full AEAD build (yosys 4.9 s +
+nextpnr), on the same machine and with the same fixed seed.
