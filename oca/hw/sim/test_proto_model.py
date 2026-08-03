@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Self-consistency checks for proto_model, run without any RTL."""
 
-from proto_model import (HDR_LEN, MAGIC, OP_SEAL, ST_OK, build_seal,
+from proto_model import (HDR_LEN, OP_SEAL, ST_OK, build_seal,
                          parse_response, _header)
 
 
@@ -15,7 +15,9 @@ def test_header_round_trips():
 
 def test_seal_layout():
     pkt = build_seal(1, 0, b"n" * 12, b"aad", b"msg")
-    assert pkt[:2] == MAGIC
+    # literal, not the imported MAGIC: comparing the packet against the
+    # same constant that built it passes for any value and proves nothing
+    assert pkt[:2] == b"\x4f\x43"
     assert len(pkt) == HDR_LEN + 12 + 4 + 3 + 3
     assert pkt[HDR_LEN + 12:HDR_LEN + 16] == b"\x03\x00\x03\x00"
     assert pkt[HDR_LEN + 16:] == b"aadmsg"
