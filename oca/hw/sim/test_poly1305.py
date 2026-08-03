@@ -6,74 +6,13 @@ Vectors parsed from tests/vectors/sources/rfc8439.txt:
   - A.3:   full appendix vector set (includes r=0 and s=0 edge cases)
 """
 
-import re
-from pathlib import Path
-
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-SRC = Path(__file__).resolve().parents[2] / "tests" / "vectors" / "sources" / "rfc8439.txt"
+from poly1305_model import parse_rfc8439, poly1305_tag
 
-
-def _section(text: str, start: str, end: str) -> str:
-    m = re.search(rf"(?ms)^{re.escape(start)}.*?^(?={re.escape(end)})", text)
-    assert m, f"section {start!r}..{end!r} not found"
-    return m.group(0)
-
-
-def _colonhex_after(flat: str, marker: str) -> bytes:
-    i = flat.index(marker) + len(marker)
-    m = re.match(r"[()\s0-9a-f:]+", flat[i:])
-    assert m, f"no colon-hex after {marker!r}"
-    s = re.sub(r"[^0-9a-f:]", "", m.group(0)).strip(":")
-    return bytes(int(b, 16) for b in s.split(":"))
-
-
-def _hexdumps(sec: str) -> list[bytes]:
-    # at most 16 bytes per line: the ASCII gutter can start with
-    # hex-looking characters (e.g. 'ed an "IETF Cont') and must not
-    # be captured
-    runs, cur = [], []
-    for line in sec.splitlines():
-        m = re.match(r"^\s*\d{3}\s+((?:[0-9a-f]{2}\s+){1,16})", line)
-        if m:
-            cur.extend(int(b, 16) for b in m.group(1).split())
-        elif cur:
-            runs.append(bytes(cur))
-            cur = []
-    if cur:
-        runs.append(bytes(cur))
-    return runs
-
-
-def parse_rfc8439() -> list[tuple[str, bytes, bytes, bytes]]:
-    """Returns [(name, key32, msg, tag16), ...]."""
-    text = SRC.read_text()
-    vecs = []
-
-    sec = _section(text, "2.5.2.", "2.6.")
-    flat = " ".join(sec.split())
-    key = _colonhex_after(flat, "o Key Material:")
-    tag = _colonhex_after(flat, "Tag:")
-    (msg,) = _hexdumps(sec)
-    assert len(key) == 32 and len(tag) == 16 and len(msg) == 34
-    vecs.append(("rfc8439-2.5.2", key, msg, tag))
-
-    sec = _section(text, "A.3.", "A.4.")
-    parts = re.split(r"Test Vector #(\d+):", sec)
-    # parts = [pre, "1", body1, "2", body2, ...]
-    for i in range(1, len(parts), 2):
-        num, body = parts[i], parts[i + 1]
-        if "Text to MAC" not in body:
-            continue  # #5-#8 are ChaCha20 key-generation vectors, not MAC
-        dumps = _hexdumps(body)
-        assert len(dumps) == 3, f"A.3 vector #{num}: expected 3 hexdumps"
-        k, m, t = dumps
-        assert len(k) == 32 and len(t) == 16, f"A.3 vector #{num}: bad lengths"
-        vecs.append((f"rfc8439-A.3-{num}", k, m, t))
-
-    return vecs
+VECS = parse_rfc8439()
 
 
 async def run_mac(dut, key: bytes, msg: bytes) -> bytes:
@@ -132,4 +71,11 @@ async def test_all_vectors(dut):
         dut._log.info(f"{name}: OK ({len(msg)} bytes)")
 
 
-VECS = parse_rfc8439()
+@cocotb.test()
+async def test_model_matches_official_vectors(dut):
+    """The oracle must reproduce every official vector before it is
+    trusted to judge the RTL."""
+    for name, key, msg, tag in VECS:
+        got = poly1305_tag(key, msg)
+        assert got == tag, f"{name}: model got {got.hex()} want {tag.hex()}"
+    assert len(VECS) == 5, f"expected 5 official vectors, parsed {len(VECS)}"
