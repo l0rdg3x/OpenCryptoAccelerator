@@ -11,7 +11,11 @@
  * That is what lets a failed tag return no plaintext at all.
  *
  * One command is processed to completion before the next is accepted, so
- * the engine is never busy when a command arrives.
+ * the engine is never busy when a command arrives. The request stream is
+ * plain AXI-Stream for that: s_tready is high exactly while the engine
+ * is in S_RX, the one state that stores what it accepts, so a byte is
+ * never taken and discarded. A source with the next packet ready one
+ * cycle after tlast simply waits.
  *
  * The four stats counters are: packets received (every packet that
  * reaches tlast), packets dropped for an invalid header (too short to
@@ -121,6 +125,11 @@ module oca_proto #(
         S_RESPOND    // stream the response out
     } fsm_t;
     fsm_t state;
+
+    // Combinational, but only on the state register: nothing of the
+    // source's own handshake reaches it, so there is no tvalid-to-tready
+    // path and the accepting cycle is the state that stores the byte.
+    always_comb s_tready = rst_n && (state == S_RX);
 
     logic [ 7:0] opcode, slot, status;
     logic [15:0] req_id;
@@ -252,7 +261,6 @@ module oca_proto #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state         <= S_RX;
-            s_tready      <= 1'b0;
             m_tdata       <= 8'd0;
             m_tvalid      <= 1'b0;
             m_tlast       <= 1'b0;
@@ -315,15 +323,6 @@ module oca_proto #(
             ks_wr_en     <= 1'b0;
             eng_start    <= 1'b0;
             eng_in_valid <= 1'b0;
-
-            // s_tready trails the state by one cycle on purpose: the
-            // handshake for the last byte of a packet must still read as
-            // ready in the cycle after it, or a source that samples
-            // tready after the transfer stalls for the whole command.
-            // A byte offered in that one cycle is dropped; the payload
-            // stream this sits behind has an inter-frame gap, and the
-            // design accepts one command at a time anyway.
-            s_tready <= (state == S_RX);
 
             // shared sequential reader
             if (rd_left != 7'd0) begin

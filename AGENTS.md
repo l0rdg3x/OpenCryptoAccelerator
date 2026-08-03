@@ -123,6 +123,17 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
   the edge that consumed your stimulus returns the stale value.
+- **An AXI-Stream driver samples the handshake before the transfer
+  edge, not after it**: `await ReadOnly()`, read `tready`, then
+  `await RisingEdge` — and only advance to the next byte if `tready`
+  was high, holding `tdata`/`tvalid`/`tlast` stable until it is.
+  Polling `tready` after the edge reads what the slave offered
+  *before* the transfer, which is the stale read above wearing a
+  different hat, and RTL adapted to such a source grows a `tready`
+  that outlives the state which consumes the byte: against a
+  conforming master that silently drops one byte per packet, with
+  nothing in simulation to show it. Cost the `s_tready` rework of
+  2026-08-03.
 - **Proposals from per-file analysis are not additive.** The area pass
   of 2026-08-03 came out of a workflow that read the three RTL files
   independently, and two of its proposals — an early `blk_ready` in
