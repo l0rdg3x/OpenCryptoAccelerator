@@ -376,3 +376,31 @@ makes the LUT cost per engine the number worth watching from here.
 Build time: **51 s** for the full AEAD build (yosys 4.5 s + nextpnr), on
 the same machine and with the same fixed seed. The build was run twice
 and returned identical area and Fmax.
+
+### After the in_len guard (state of the branch as committed)
+
+The review that closed this branch added an `err` output rejecting an
+out-of-range `in_len` instead of wedging the MAC FSM. It is logic on the
+input path, so it was characterised rather than assumed:
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| overlapped phases | 10040 | 5737 | 20 | 52.58 MHz |
+| **+ in_len guard (committed)** | **10041** | **5738** | **20** | **50.17 MHz** |
+
+The guard costs **one LUT and one flip-flop**. The Fmax difference is
+not a cost: a three-seed sweep of the unguarded design alone returned
+49.33 / 50.81 / 52.58 MHz, so 50.17 sits inside the spread of the thing
+it is being compared with. Cycles per block are unchanged at 40 — the
+guard is on a path that only fires on an illegal length.
+
+What this does to the MVP arithmetic, stated at the margin rather than
+rounded in our favour: at 50.17 MHz a 64-byte block costs
+50.17e6 x 64 / 40 = 80.3 MB/s = **~0.64 Gbps per engine**, so three
+engines give **~1.93 Gbps** — just *under* the >= 2 Gbps MVP target of
+`SPEC.md`, where the 52.58 MHz figure put it just over. Both readings
+are inside place & route noise of each other, which is the honest
+summary: **this design lands on the target, not above it.** Any real top
+level adds IO and glue at a shared clock, so the margin is more likely
+to shrink than to grow. Replication is still the next step, but it will
+need its own measurement rather than a multiplication of this one.
