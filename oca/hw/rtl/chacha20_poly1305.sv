@@ -19,6 +19,15 @@
  *
  * An empty message is a single block with in_len=0 and in_last=1.
  *
+ * `in_len` above 64 is illegal: it does not fit the 64-byte datapath and
+ * the MAC FSM cannot terminate such a block (it counts 16-byte
+ * sub-blocks in two bits, and mac_len + 15 wraps in seven). Presenting
+ * one raises `err` instead: the message is abandoned there and then —
+ * `busy` drops, `done` never pulses, no ciphertext or tag is produced —
+ * and `err` stays high until the next `start`, which clears it and
+ * begins a fresh message. A caller that ignores `err` loses the message,
+ * never the engine.
+ *
  * Decryption (dec=1): feed the ciphertext instead of the plaintext;
  * the output stream is the recovered plaintext and the MAC is computed
  * over the input blocks (the ciphertext), as RFC 8439 requires. The
@@ -62,7 +71,9 @@ module chacha20_poly1305 (
     output logic [  6:0] out_len,
     // result
     output logic         done,
-    output logic [127:0] tag
+    output logic [127:0] tag,
+    // sticky: an illegal in_len aborted the message (see header)
+    output logic         err
 );
 
     typedef enum logic [2:0] {
@@ -115,9 +126,17 @@ module chacha20_poly1305 (
         .data_out(c_data_out)
     );
 
+    // An aborted message leaves poly1305 part-way through a message, and
+    // poly1305 only honours `start` from its idle state: it would keep
+    // the one-time key and the accumulator of the abandoned message and
+    // authenticate the next one with a reused r and s. Hold it in reset
+    // from the abort until the next `start` clears `err`.
+    logic p_rst_n;
+    assign p_rst_n = rst_n && !err;
+
     poly1305 u_poly (
         .clk,
-        .rst_n,
+        .rst_n     (p_rst_n),
         .start     (p_start),
         .blk       (p_blk),
         .last      (p_last),
@@ -154,6 +173,11 @@ module chacha20_poly1305 (
     always_comb sub_cnt  = 3'((mac_len + 7'd15) >> 4);
     always_comb sub_done = ({1'b0, sub_idx} == sub_cnt - 3'd1);
 
+    // An illegal block, caught on the cycle it is offered: both FSMs act
+    // on it, so neither is left holding state from the dead message.
+    logic len_bad;
+    always_comb len_bad = (state == S_ACCEPT) && in_valid && (in_len > 7'd64);
+
     // The buffer is released once its last sub-block has been handed to
     // poly1305 (p_data_in is registered by then), or straight away for a
     // zero-length section, which contributes no MAC block.
@@ -172,6 +196,7 @@ module chacha20_poly1305 (
             c_start   <= 1'b0;
             p_start   <= 1'b0;
             mac_valid <= 1'b0;
+            err       <= 1'b0;
         end else begin
             out_valid <= 1'b0;
             // a write in the same cycle wins: the buffer stays occupied
@@ -189,6 +214,7 @@ module chacha20_poly1305 (
                         c_data_in <= 512'd0;
                         c_start   <= 1'b1;
                         busy      <= 1'b1;
+                        err       <= 1'b0;
                         state     <= S_KEY;
                     end
                 end
@@ -206,7 +232,13 @@ module chacha20_poly1305 (
                     state    <= S_ACCEPT;
                 end
                 S_ACCEPT: begin
-                    if (in_valid) begin
+                    if (len_bad) begin
+                        err       <= 1'b1;
+                        busy      <= 1'b0;
+                        in_ready  <= 1'b0;
+                        mac_valid <= 1'b0;
+                        state     <= S_IDLE;
+                    end else if (in_valid) begin
                         in_ready  <= 1'b0;
                         cur_len   <= in_len;
                         cur_last  <= in_last;
@@ -276,6 +308,13 @@ module chacha20_poly1305 (
     // MAC FSM: drains the buffer into poly1305, then the length block.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            m_state <= S_M_IDLE;
+            p_blk   <= 1'b0;
+            p_last  <= 1'b0;
+            done    <= 1'b0;
+        end else if (len_bad) begin
+            // poly1305 goes into reset on this same edge, so a half-fed
+            // block here would wait on a blk_ready that never returns
             m_state <= S_M_IDLE;
             p_blk   <= 1'b0;
             p_last  <= 1'b0;

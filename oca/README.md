@@ -25,7 +25,9 @@
   MACs aad‖pad‖ct‖pad‖le64(|aad|)‖le64(|ct|). Streaming interface:
   64-byte input blocks (AAD then plaintext), ciphertext blocks out,
   then the tag. `dec=1` decrypts: MACs the input (ciphertext) blocks,
-  caller compares the tag.
+  caller compares the tag. `in_len` above 64 is illegal and raises the
+  sticky `err` output, which abandons the message rather than letting a
+  malformed length stall the engine.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the

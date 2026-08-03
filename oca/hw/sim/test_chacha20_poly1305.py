@@ -248,4 +248,75 @@ async def test_randomised_decrypt(dut):
             f"{got_tag.hex()} != {want_tag.hex()}")
 
 
+@cocotb.test()
+async def test_illegal_in_len_raises_err(dut):
+    """in_len above 64 does not fit a 64-byte block: the engine must raise
+    `err` and drop the message instead of wedging.
+
+    65 and 113 are the two distinct failure modes of the MAC FSM: 65 needs
+    five 16-byte sub-blocks and the sub-block index only counts to four,
+    while 113..127 make the sub-block count wrap to zero in seven bits."""
+    await setup(dut)
+    key, nonce, aad, pt, ct, tag = VEC["enc"]
+    # the aborted message must carry a different key and nonce from the
+    # one that follows it: with the same pair a stale Poly1305 one-time
+    # key would still produce the right tag and hide the reuse
+    bad_key = bytes(b ^ 0xFF for b in key)
+    bad_nonce = bytes(b ^ 0xFF for b in nonce)
+
+    for bad_len in (65, 113):
+        dut.key.value = int.from_bytes(bad_key, "little")
+        dut.nonce.value = int.from_bytes(bad_nonce, "little")
+        dut.dec.value = 0
+        dut.start.value = 1
+        await RisingEdge(dut.clk)
+        dut.start.value = 0
+
+        for _ in range(200):
+            await RisingEdge(dut.clk)
+            if dut.in_ready.value == 1:
+                break
+        else:
+            raise AssertionError("timeout: in_ready never asserted")
+        assert dut.err.value == 0, f"err set before the bad block (len={bad_len})"
+
+        dut.in_aad.value = 0
+        dut.in_last.value = 1
+        dut.in_len.value = bad_len
+        dut.in_data.value = 0
+        dut.in_valid.value = 1
+        await RisingEdge(dut.clk)
+        dut.in_valid.value = 0
+        dut.in_last.value = 0
+
+        # the engine must give up, and must never claim a result
+        for _ in range(200):
+            await RisingEdge(dut.clk)
+            assert dut.done.value == 0, f"done pulsed for in_len={bad_len}"
+            if dut.err.value == 1 and dut.busy.value == 0:
+                break
+        else:
+            raise AssertionError(
+                f"in_len={bad_len}: no error, engine wedged "
+                f"(err={dut.err.value} busy={dut.busy.value})")
+
+        # sticky: err survives until the next start
+        for _ in range(20):
+            await RisingEdge(dut.clk)
+            assert dut.err.value == 1, f"in_len={bad_len}: err did not stay high"
+            assert dut.done.value == 0, f"done pulsed for in_len={bad_len}"
+
+        # the engine must accept a new message: the RFC vector only comes
+        # back out if the Poly1305 one-time key was re-derived rather than
+        # carried over from the aborted message
+        got_ct, got_tag = await run_aead(dut, key, nonce, aad, pt)
+        assert got_ct == ct, (
+            f"after in_len={bad_len}: ciphertext mismatch\n"
+            f" got {got_ct.hex()}\nwant {ct.hex()}")
+        assert got_tag == tag, (
+            f"after in_len={bad_len}: tag {got_tag.hex()} want {tag.hex()}")
+        assert dut.err.value == 0, "err not cleared by the next start"
+        dut._log.info(f"in_len={bad_len}: err raised, engine recovered")
+
+
 VEC = parse_rfc8439()
