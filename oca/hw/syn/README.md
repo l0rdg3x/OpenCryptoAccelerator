@@ -33,6 +33,26 @@ Measured 2026-08-03 on LFE5U-45F, CABGA381, speed grade 6, 100 MHz
 constraint, seed 1. Tools: yosys 0.67+ (41a4b5a03), nextpnr-ecp5
 8945407, prjtrellis 56bb170 — all built from source into `tools/`.
 
+### Baselines
+
+Same device, same seed, `--out-of-context`. These are the numbers any
+datapath rework has to beat.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20 | 3569 | 1417 | 0 | 28.66 MHz |
+| poly1305 | 5001 | 885 | 65 | 22.94 MHz |
+| chacha20_poly1305 | 11144 | 4777 | 65 | 26.77 MHz |
+
+The AEAD engine measures *faster* than either core alone: place & route
+noise, not a real effect. Treat single-digit percentage differences
+between runs as noise; only order-of-magnitude changes mean anything.
+
+Both cores are slow for the same reason — too much arithmetic between
+two registers. Poly1305 does a 130x130 multiply and the reduction in one
+cycle; ChaCha20 does two full rounds per cycle (34.89 ns critical path,
+15.07 ns logic + 19.82 ns routing).
+
 ### chacha20_poly1305 (AEAD engine, ChaCha20 + Poly1305)
 
 | resource | used | available | % |
