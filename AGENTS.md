@@ -83,7 +83,7 @@ RTL (Phase 2), from `oca/`:
 ```sh
 .venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
-.venv/bin/python hw/sim/run_chacha20_poly1305.py  # 3/3 pass
+.venv/bin/python hw/sim/run_chacha20_poly1305.py  # 6/6 pass
 ```
 
 Lint (must stay clean, `-Wall`):
@@ -132,10 +132,12 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
 - Phase 2: `chacha20.sv`, `poly1305.sv`, `chacha20_poly1305.sv` (AEAD,
   encrypt + decrypt) written and verified against RFC 8439 vectors
   (2.3.2, 2.4.2, 2.5.2, A.3 #1-4, 2.8.2, A.5). Lint `-Wall` clean.
-  Both cores additionally have a reference model validated on the
-  official vectors before it is trusted: ChaCha20 with 100 randomised
-  blocks (counter randomised over its full 32 bits), Poly1305 with
-  digit-boundary edge cases and 200 randomised messages.
+  All three have a reference model validated on the official vectors
+  before it is trusted: ChaCha20 with 100 randomised blocks (counter
+  randomised over its full 32 bits), Poly1305 with digit-boundary edge
+  cases and 200 randomised messages, the AEAD engine with 40 randomised
+  encryptions and 40 randomised decryptions over AAD and message lengths
+  chosen around the 64-byte block and 16-byte MAC boundaries.
 - Open ECP5 toolchain built locally (yosys, prjtrellis, nextpnr-ecp5).
   Baseline synthesis of the AEAD engine on the LFE5U-45F was 25% of the
   LUTs, **90% of the multipliers**, Fmax **26.77 MHz**, critical path in
@@ -169,10 +171,33 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   and at nearly twice the clock. The critical path is back inside
   `chacha20.sv` (one quarter round, 19.97 ns), where the engine is now
   within 6% of the standalone core.
-- Next: overlap the ChaCha20 and Poly1305 phases inside the AEAD engine.
-  They run strictly in sequence today (`S_ENC` waits for `c_done` before
-  `S_MAC_W`), so each block pays 22 + 4 x 9 cycles while each core idles
-  through the other's phase; the schedule, not the clock, is now what
-  keeps the engine short of the MVP target. Cheaper follow-ups once that
-  is done: the `mask_bytes()` path, `ROWS_PER_CYCLE`, then the
-  streaming/packet interface toward the GbE MVP.
+- The AEAD FSM was then split in two, joined by a one-block buffer, so
+  the phases overlap: the input FSM accepts a block, runs ChaCha20 and
+  emits ciphertext while the MAC FSM drains the buffer into Poly1305, and
+  block N is authenticated while block N+1 is encrypted. A 64-byte block
+  costs **40 cycles instead of 57** (measured), for **-540 LUTs** and
+  **+13 flip-flops** — area went down, because the buffer replaces the
+  old `src` register one for one and the 512-bit multiplexer in front of
+  it loses one source. AEAD Fmax 50.08 -> 52.58 MHz is +5%, inside the
+  place & route noise band, as it must be: the netlist's carry chains are
+  unchanged and the critical path is still the one quarter round inside
+  `chacha20.sv` (19.02 ns), now within 1% of that core standalone.
+  Throughput **~0.67 Gbps: +50% on the previous state and +42% on the
+  ~0.47 Gbps original baseline**, on 20 multipliers instead of 65. This
+  is the first point in the series where the engine is faster than where
+  it started.
+- The 40 cycles are the MAC FSM alone: 4 sub-blocks x (9 Poly1305 cycles
+  + 1 for the registered `p_blk` handshake). ChaCha20's 22 cycles are
+  fully hidden — proved rather than assumed, by measuring an AAD block,
+  which never runs ChaCha20 and costs exactly the same 40 cycles.
+- Next: **replicate the engine.** At 20 multipliers and 10040 LUTs each,
+  an LFE5U-45F holds three — 60/72 multipliers (83%), 30120/43848 LUTs
+  (69%) — for ~2.0 Gbps aggregate, which is the figure the MVP target is
+  written against; a fourth is out of reach on multipliers alone. The
+  multiplier budget is the harder number but the **LUT budget is the
+  likelier binding constraint**: 69% is out-of-context and still has to
+  absorb the GbE MAC, the host interface and packet buffering. Note that
+  `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
+  same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
+  engine instead of three — while removing the one-cycle `p_blk` bubble
+  is free. Then the streaming/packet interface toward the GbE MVP.

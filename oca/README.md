@@ -43,7 +43,10 @@
   RTL, digit-boundary and all-ff edge cases, and 200 randomised messages
   judged by the model.
 - `hw/sim/test_chacha20_poly1305.py` — 2.8.2 encryption, A.5 decryption,
-  2.8.2 decrypt round-trip.
+  2.8.2 decrypt round-trip, the AEAD model checked against both official
+  vectors before it is trusted, then 40 randomised encryptions and 40
+  randomised decryptions judged by it, over AAD and message lengths
+  chosen around the 64-byte block and 16-byte MAC boundaries.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
 - `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
@@ -61,20 +64,25 @@ Python 3.14).
 ```
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-3/3 tests pass; `verilator --lint-only -Wall` clean on all cores.
-Two datapath reworks are done. The Poly1305 limb rework took the AEAD
-engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
-more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz).
-The ChaCha20 round-per-cycle rework then raised its standalone Fmax
+6/6 tests pass; `verilator --lint-only -Wall` clean on all cores.
+Four reworks are done. The Poly1305 limb rework took the AEAD engine
+from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and more
+than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
+ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
 26.10 -> 37.87 MHz. Rebuilding the wrapper's `mask_bytes()` per byte
 instead of as a 512-bit subtract — which had become the critical path —
-took the engine to 50.08 MHz. A 64-byte block costs 57 cycles, measured
-in simulation, so throughput is ~0.45 Gbps: level with the ~0.47 Gbps
-baseline, now on 20 multipliers instead of 65 and at nearly twice the
-clock. The critical path is back inside `chacha20.sv`, and the two
-phases still run strictly in sequence — overlapping them is the next
-step (`hw/syn/README.md`).
+took the engine to 50.08 MHz, level with the baseline's throughput at
+last. Splitting the AEAD FSM in two, joined by a one-block buffer, then
+overlapped the phases: block N is authenticated while block N+1 is
+encrypted, so a 64-byte block costs **40 cycles instead of 57**
+(measured in simulation) for -540 LUTs and +13 flip-flops. At 52.58 MHz
+that is **~0.67 Gbps, +42% on the ~0.47 Gbps original baseline** and on
+20 multipliers instead of 65 — the first point in the series where the
+engine is ahead of where it started. The critical path is inside
+`chacha20.sv`, within 1% of that core standalone. Next: replicate the
+engine — three fit on an LFE5U-45F for ~2.0 Gbps aggregate
+(`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend
 

@@ -259,3 +259,117 @@ remains, and is still worth spending only after the schedule is.
 
 Build time: **1 min 18 s** for the full AEAD build (yosys 4.9 s +
 nextpnr), on the same machine and with the same fixed seed.
+
+### After overlapping the ChaCha20 and Poly1305 phases
+
+Same device, package, speed grade, seed and 100 MHz constraint. Only
+`chacha20_poly1305.sv` changed: the single FSM became two — an input FSM
+that accepts blocks, runs ChaCha20 and emits ciphertext, and a MAC FSM
+that drains a one-block buffer into Poly1305 — so block N is
+authenticated while block N+1 is encrypted. `chacha20.sv` and
+`poly1305.sv` are untouched.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
+| chacha20_poly1305 (limb Poly1305) | 9579 | 5723 | 20 | 26.10 MHz |
+| chacha20_poly1305 (limb + 1 round/cycle) | 10066 | 5724 | 20 | 37.87 MHz |
+| chacha20_poly1305 (+ per-byte mask) | 10580 | 5724 | 20 | 50.08 MHz |
+| chacha20_poly1305 (+ overlapped phases) | **10040** | 5737 | **20** | **52.58 MHz** |
+| *chacha20 standalone, for reference* | 4368 | 1418 | 0 | 53.11 MHz |
+
+- **Throughput: 57 -> 40 cycles per 64-byte block, -30%.** Measured the
+  same differential way as every earlier point (227 cycles for a 4-block
+  message, 387 for 8, difference over 4, so start-up, key derivation,
+  the length block and the tag all cancel). The three official-vector
+  tests corroborate it in simulated time: 1530 / 2440 / 1540 ns against
+  1690 / 3110 / 1700 ns before.
+- **The engine is faster than where this series started.** At the
+  measured Fmax, 52.58 MHz x 64 B / 40 = **~0.67 Gbps**:
+
+  | state | Fmax | cycles / 64 B | throughput |
+  |-------|------|---------------|------------|
+  | baseline | 26.77 MHz | 29 | ~0.47 Gbps |
+  | limb Poly1305 | 26.10 MHz | 47 | ~0.28 Gbps |
+  | + 1 round/cycle | 37.87 MHz | 57 | ~0.34 Gbps |
+  | + per-byte mask | 50.08 MHz | 57 | ~0.45 Gbps |
+  | + overlapped phases | 52.58 MHz | 40 | **~0.67 Gbps** |
+
+  That is **+50% on the previous state and +42% on the original
+  baseline**, on 20 multipliers instead of 65. Three of the four reworks
+  bought clock (26.77 -> 52.58 MHz, +96%) while paying cycles; this one
+  gives cycles back, and it is the one that puts the engine ahead. The
+  cycle count is still above the baseline's 29 — the reworked Poly1305
+  costs 9 cycles per 16-byte block instead of 3, and no amount of
+  overlapping hides that — but the clock now more than covers it.
+- **40 cycles, not the 38 the plan estimated, and the two extra are the
+  handshake.** The block cost is set entirely by the MAC FSM: four
+  16-byte sub-blocks at 9 Poly1305 cycles each, plus one cycle per
+  sub-block because `p_blk` is registered — Poly1305 raises `blk_ready`,
+  the MAC FSM samples it and asserts `p_blk` on the next edge, so the
+  core spends two cycles in its `S_WAIT` instead of one. 4 x (9 + 1) =
+  40. ChaCha20's 22 cycles are now entirely hidden underneath, which is
+  what the overlap set out to do: 40 - 22 - the accept and emit cycles
+  leaves the input FSM idling in `S_WAITBUF` for roughly 15 cycles of
+  every block, waiting on the MAC side.
+- **Confirmed by a falsifiable measurement, not by reading the FSM.** An
+  AAD block never runs ChaCha20 at all, so if the schedule were still
+  paying for both phases an AAD block would be cheaper. Measured the same
+  differential way — 4 and 8 AAD blocks followed by a one-byte plaintext
+  block, 214 and 374 cycles — an AAD block costs **exactly the same 40
+  cycles**. The pace is the MAC FSM's alone.
+- **Area went down, not up: -540 LUTs (-5.1%), +13 flip-flops.** The
+  opposite of what the plan expected. The buffer is not new silicon: it
+  replaces the old `src` register one for one, 512 bits for 512 bits, so
+  the flip-flop cost is only the bookkeeping — `mac_len` (7), `cur_aad`,
+  `mac_last`, `mac_valid` and the second FSM's state register, a dozen
+  bits, which is the order of the measured delta. The LUTs come off the
+  multiplexer fabric: against the same yosys and script the netlist loses
+  540 LUT4 and gains 20 PFUMX, with **CCU2C (2088) and L6MUX21 (172)
+  identical**
+  — not one carry chain moved. The old `src` register was fed by three
+  512-bit sources (masked `in_data`, `c_data_in`, masked `c_data_out`);
+  `mac_buf` is fed by two, because AAD and decrypt now take the same
+  path.
+- **Fmax: 50.08 -> 52.58 MHz, +5%, which is noise.** Inside the place &
+  route band documented above, and it has to be: the critical path is
+  unchanged and the netlist's carry chains are bit-for-bit the same. It
+  is 19.02 ns (8.12 ns logic, 10.90 ns routing), from the ChaCha20 state
+  register `u_chacha.st` back into `u_chacha.st` through the CCU2C carry
+  chains of the four adders of one quarter round (`chacha20.sv` lines
+  49, 51, 53, 55) and a pair of L6MUX21/PFUMX stages. Not one entry in
+  nextpnr's report cites `chacha20_poly1305.sv` or `poly1305.sv`. The
+  engine is now within 1% of the 53.11 MHz standalone `chacha20` core,
+  which is the ceiling until that core is reworked again.
+
+What limits it now, in order: the clock is capped by `chacha20.sv` at
+~53 MHz, and the cycles are capped by `poly1305.sv` at 9 per 16 bytes
+plus the handshake. Both are datapath questions again — the schedule is
+no longer the answer, since the slower core is now busy essentially all
+the time. The cheap follow-ups are `ROWS_PER_CYCLE` in `poly1305.sv`
+(5 rows per cycle would take a 16-byte block from 9 cycles to 5, at 100
+MULT18X18D — more than the 45F's 72, so only 2 or 3 rows per cycle are
+affordable) and removing the one-cycle `p_blk` bubble.
+
+Only the second of those is free. `ROWS_PER_CYCLE` and the replication
+below spend the same 72 multipliers: raising one engine to 2 rows per
+cycle costs 40 of them, which leaves room for one engine, not three.
+Per-engine speed and engine count come out of the same budget, and it is
+the aggregate the MVP target is written against.
+
+The next step, then, is replication rather than another datapath round:
+at 20 multipliers and 10040 LUTs an LFE5U-45F holds **three engines** —
+60 of 72 multipliers (83%) and 30120 of 43848 LUTs (69%) — for
+**~2.0 Gbps aggregate**. A fourth is out of reach on multipliers alone
+(80 > 72). But watch which of the two binds first in practice. The
+multiplier figure is exact and final: 83% of a fixed budget, and nothing
+else on the die wants a MULT18X18D. The 69% LUT figure is neither. It is
+out-of-context — no IO buffers, no host interface — and the remaining
+31% has to hold the GbE MAC, the packet buffering and whatever glue the
+top level needs, at a clock the engines have to share. **LUTs, not
+multipliers, are the likelier constraint on a real top level**, which
+makes the LUT cost per engine the number worth watching from here.
+
+Build time: **51 s** for the full AEAD build (yosys 4.5 s + nextpnr), on
+the same machine and with the same fixed seed. The build was run twice
+and returned identical area and Fmax.
