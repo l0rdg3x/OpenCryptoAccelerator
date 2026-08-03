@@ -6,13 +6,17 @@
  * at random offsets. Deliberately the simplest thing that works: at one
  * byte per cycle a 64-byte block takes 64 cycles to read out against the
  * AEAD engine's 40 to process it, so the buffer, not the engine, sets
- * the pace. With a further 64 cycles to write the result back, the whole
- * path runs at roughly 0.16 Gbps against the engine's own 0.68 Gbps --
- * about 16% of the GbE link. This is the largest deliberate
- * simplification in the design, not an oversight: widening this memory
- * to 32 bits and overlapping the phases is the first optimisation to
- * make once there is hardware to measure it on
- * (docs/design/2026-08-03-host-protocol.md).
+ * the pace. Measured end to end, a 64-byte block costs 415 cycles:
+ * 64 in, 159 through buffer and engine, and 192 out, because the
+ * response stream re-fetches through the registered read port and
+ * spends three cycles a byte. That is about 0.062 Gbps against the
+ * engine's own 0.68, a fifteenth of it, and 6% of the GbE link.
+ *
+ * This is the largest deliberate simplification in the design, not an
+ * oversight. Note where the cost actually sits: the response handshake
+ * dominates, not this memory's width, so the first optimisation is that
+ * state machine (measured at 287 cycles, +45%) rather than a wider
+ * buffer (docs/design/2026-08-03-host-protocol.md).
  *
  * Writes past BYTES are dropped and wr_full is raised: a truncated
  * packet becomes a length error at the protocol layer rather than a
