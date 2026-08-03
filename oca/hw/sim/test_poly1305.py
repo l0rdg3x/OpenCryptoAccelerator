@@ -3,7 +3,10 @@
 
 Vectors parsed from tests/vectors/sources/rfc8439.txt:
   - 2.5.2: 34-byte message, exercises the partial final block
-  - A.3:   full appendix vector set (includes r=0 and s=0 edge cases)
+  - A.3 #1-4: full-message vectors (includes r=0 and s=0 edge cases)
+  - A.3 #5-11: partial-reduction edge cases the RFC authors wrote to
+    break 130-bit partial-reduction datapaths (exact 2^130-5 results,
+    131-bit intermediate/final reduction results, s-overflow, ...)
 """
 
 import random
@@ -80,7 +83,7 @@ async def test_model_matches_official_vectors(dut):
     for name, key, msg, tag in VECS:
         got = poly1305_tag(key, msg)
         assert got == tag, f"{name}: model got {got.hex()} want {tag.hex()}"
-    assert len(VECS) == 5, f"expected 5 official vectors, parsed {len(VECS)}"
+    assert len(VECS) == 12, f"expected 12 official vectors, parsed {len(VECS)}"
 
 
 def edge_case_messages() -> list[tuple[str, bytes, bytes]]:
