@@ -16,15 +16,16 @@
  * (RFC 8439 2.3.1), one state register shared by both. ROUNDS_PER_CYCLE
  * chooses how many rounds a single cycle covers: it trades the length of
  * the combinational path, and so the achievable clock, against the
- * number of cycles a block costs.
+ * number of cycles a block costs. Only 1 and 2 are implemented; any
+ * other value is rejected at elaboration (see the guard below).
  *
  * Latency: 1 (load) + 20/ROUNDS_PER_CYCLE (rounds) + 1 (serialize)
  * cycles, so 22 cycles at the default ROUNDS_PER_CYCLE = 1.
  */
 module chacha20 #(
-    // Rounds computed per cycle. 1 halves the combinational path (20
-    // cycles per block); 2 is the original behaviour (10 cycles) and
-    // suits devices that can clock it.
+    // Rounds computed per cycle. 1 halves the combinational path (22
+    // cycles per block); 2 is the original behaviour (12 cycles) and
+    // suits devices that can clock it. No other value is supported.
     parameter int ROUNDS_PER_CYCLE = 1
 ) (
     input  logic         clk,
@@ -99,6 +100,14 @@ module chacha20 #(
             return o;
         end
     endfunction
+
+    // NCYCLE divides for any divisor of 20, but the FSM below only ever
+    // composes two rounds in a cycle for the literal 2 and one round
+    // otherwise: any other value would run NCYCLE single rounds and emit
+    // wrong keystream. Stop the build rather than the crypto.
+    if (ROUNDS_PER_CYCLE != 1 && ROUNDS_PER_CYCLE != 2) begin : gen_bad_rounds
+        $fatal(1, "chacha20: ROUNDS_PER_CYCLE must be 1 or 2");
+    end
 
     localparam int NROUND = 20;
     localparam int NCYCLE = NROUND / ROUNDS_PER_CYCLE;
