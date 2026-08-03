@@ -53,36 +53,77 @@ two registers. Poly1305 does a 130x130 multiply and the reduction in one
 cycle; ChaCha20 does two full rounds per cycle (34.89 ns critical path,
 15.07 ns logic + 19.82 ns routing).
 
-### chacha20_poly1305 (AEAD engine, ChaCha20 + Poly1305)
+The baseline AEAD critical path was 37.36 ns — 20.77 ns logic, 16.59 ns
+routing — entirely inside `u_poly`, from the `prod` register through a
+long CCU2C carry chain and five cascaded MULT18X18D into the accumulator
+`a`: the 130x130-bit multiply and the mod-2^130-5 reduction in a single
+clock cycle.
 
-| resource | used | available | % |
-|----------|------|-----------|---|
-| TRELLIS_COMB | 11144 | 43848 | 25.4% |
-| TRELLIS_FF | 4777 | 43848 | 10.9% |
-| MULT18X18D | 65 | 72 | 90.3% |
+### After the Poly1305 limb rework
 
-Fmax: **26.77 MHz** (constraint 100 MHz, not met).
+Same device, package, speed grade, seed and 100 MHz constraint.
+`poly1305.sv` is now the 26-bit limb datapath (five digits, reduction
+folded into the accumulation, default `ROWS_PER_CYCLE = 1`);
+`chacha20.sv` and `chacha20_poly1305.sv` are untouched.
 
-Critical path: 37.36 ns — 20.77 ns logic, 16.59 ns routing — entirely
-inside `u_poly`, from the `prod` register through a long CCU2C carry
-chain and five cascaded MULT18X18D into the accumulator `a`. That is
-`poly1305.sv` doing the 130×130-bit multiply and the mod-2^130-5
-reduction in a single clock cycle.
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| poly1305 (baseline) | 5001 | 885 | 65 | 22.94 MHz |
+| poly1305 (limb) | 3044 | 1830 | **20** | **52.68 MHz** |
+| chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
+| chacha20_poly1305 (limb) | 9579 | 5723 | **20** | 26.10 MHz |
 
-Two consequences for the MVP target (saturate the GbE host link with
-margin; the >= 10 Gbps aggregate figure moved to the Artix-7 phase on
-the strength of these numbers — see `SPEC.md`):
+What the rework achieved, and what it did not:
 
-1. **DSP-bound**: one AEAD engine takes 90% of the ECP5-45F multipliers,
-   so the core cannot be replicated on this device as written. The
-   Poly1305 multiplier has to be decomposed (limb-based, pipelined)
-   before any parallel-core plan.
-2. **Clock-bound**: at 26.77 MHz the engine is far below what the target
-   needs. From the FSM, a full 64-byte block costs roughly 27 cycles
-   (12 for the ChaCha20 block plus 4 Poly1305 sub-blocks at 3 cycles) —
-   an estimate read off the RTL, not yet measured in simulation, worth
-   ~0.5 Gbps. Splitting the single-cycle multiply and reduction across
-   pipeline stages is the same fix as (1).
+- **Multipliers: target met.** 65 -> 20 MULT18X18D, 90.3% -> 27.8% of
+  the device. Each of the five 28x29-bit products is wider than one
+  18x18 block, so yosys decomposes it into four: 5 x 4 = 20. The engine
+  is no longer DSP-bound — the multiplier budget of an LFE5U-45F would
+  now hold three engines instead of one, though at 9579 LUTs each that
+  is 65% of the fabric and has not been placed.
+- **Poly1305 Fmax: target met.** 22.94 -> 52.68 MHz, +130%: far outside
+  the noise band. Its critical path is 18.98 ns (8.24 ns logic, 10.74 ns
+  routing), from the `r5_d` register through the `mul_b` row selection
+  into one multiplier's partial-product carry chain, ending at the
+  `prod` register. The path is the multiply itself; the reduction is no
+  longer on it.
+- **AEAD Fmax: unchanged.** 26.77 -> 26.10 MHz is -2.5%, inside the
+  place & route noise band documented above — neither an improvement nor
+  a regression, the same number. The AEAD engine did not get faster
+  because its critical path left `u_poly` and landed in `u_chacha`:
+  38.31 ns (15.08 ns logic, 23.22 ns routing) from the ChaCha20 state
+  register `u_chacha.st`, through a long CCU2C carry chain, back into
+  `u_chacha.st`. ChaCha20's two-rounds-per-cycle datapath is now the
+  limit, as its 28.66 MHz standalone baseline already predicted.
+- **LUTs down, flip-flops up.** Poly1305 trades 1957 LUTs for 945 FFs
+  (the AEAD engine, 1565 for 946): the limb datapath registers r, 5*r,
+  the digit sums, the products and the five 64-bit accumulators, but
+  stops building a 261-bit reduction out of combinational logic.
+- **Throughput went down.** A 16-byte block now costs 9 cycles in
+  `poly1305.sv` instead of 3. Measured in simulation — the difference
+  between a 4-block and an 8-block message, so start-up, key derivation,
+  the length block and the tag all cancel — a steady-state 64-byte block
+  costs **47 cycles against the baseline's 29**. (Neither is simply
+  4 x the Poly1305 block cost: the AEAD FSM releases `in_ready` at the
+  last MAC sub-block, so the next block's ChaCha20 encryption overlaps
+  the tail of the previous block's MAC.) At the measured Fmax that is
+  26.10 MHz x 64 B / 47 = **~0.28 Gbps**, against 26.77 MHz x 64 B / 29
+  = ~0.47 Gbps for the baseline: **freeing the multipliers cost about
+  40% of the throughput.** By the cost formula in the module header,
+  `ROWS_PER_CYCLE` buys it back — 5 rows per cycle would return the
+  Poly1305 block to 5 cycles at 100 MULT18X18D, more than the 45F has.
+  Only the default is characterised here.
 
-Router runtime for this design was ~38 minutes on the dev machine
-(nextpnr Router1); plan for it.
+So of the two consequences recorded against the baseline, the first is
+resolved and the second is not: the engine is no longer DSP-bound, and
+it is still clock-bound at ~26 MHz, now by `chacha20.sv`. Against the
+MVP target (saturate the GbE host link with margin; the >= 10 Gbps
+aggregate figure moved to the Artix-7 phase — see `SPEC.md`), ~0.28 Gbps
+is further from the goal than the baseline was. The ChaCha20 datapath is
+the next thing to rework: it now owns the critical path, and until it
+moves, spending the freed multipliers on `ROWS_PER_CYCLE` cannot pay
+off.
+
+Router runtime collapsed with the multiplier count: the full AEAD build
+(yosys + nextpnr) now takes **1 min 44 s** on the dev machine where the
+baseline needed ~38 minutes, and standalone `poly1305` takes 15 s.

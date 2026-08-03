@@ -82,7 +82,7 @@ RTL (Phase 2), from `oca/`:
 
 ```sh
 .venv/bin/python hw/sim/run_chacha20.py           # 3/3 pass
-.venv/bin/python hw/sim/run_poly1305.py           # 5/5 vectors pass
+.venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 3/3 pass
 ```
 
@@ -95,7 +95,7 @@ Lint (must stay clean, `-Wall`):
 ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
 
 ```sh
-.venv/bin/python hw/syn/run_synth.py chacha20_poly1305   # ~40 min (router)
+.venv/bin/python hw/syn/run_synth.py chacha20_poly1305   # ~2 min
 ```
 
 ## Hard rules
@@ -126,11 +126,24 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
 - Phase 2: `chacha20.sv`, `poly1305.sv`, `chacha20_poly1305.sv` (AEAD,
   encrypt + decrypt) written and verified against RFC 8439 vectors
   (2.3.2, 2.4.2, 2.5.2, A.3 #1-4, 2.8.2, A.5). Lint `-Wall` clean.
-- Open ECP5 toolchain built locally (yosys, prjtrellis, nextpnr-ecp5)
-  and first synthesis of the AEAD engine on the LFE5U-45F: 25% of the
-  LUTs, **90% of the multipliers**, Fmax **26.77 MHz**. The critical
-  path is the single-cycle 130x130 multiply and mod-2^130-5 reduction in
-  `poly1305.sv` (`oca/hw/syn/README.md`).
-- Next: rework the Poly1305 multiplier (limb decomposition + pipeline)
-  so the engine stops being DSP-bound and clock-bound, then the
-  streaming/packet interface toward the GbE MVP.
+  Poly1305 additionally has a reference model validated on the official
+  vectors, digit-boundary edge cases and 200 randomised messages.
+- Open ECP5 toolchain built locally (yosys, prjtrellis, nextpnr-ecp5).
+  Baseline synthesis of the AEAD engine on the LFE5U-45F was 25% of the
+  LUTs, **90% of the multipliers**, Fmax **26.77 MHz**, critical path in
+  the single-cycle 130x130 multiply of `poly1305.sv`.
+- `poly1305.sv` reworked into a 26-bit limb datapath (five digits, the
+  mod-2^130-5 reduction folded into the accumulation, parameter
+  `ROWS_PER_CYCLE`). Result: the AEAD engine drops from **65 to 20**
+  multipliers (90% -> 28%) and standalone Poly1305 Fmax more than
+  doubles (22.94 -> **52.68 MHz**). **AEAD Fmax is unchanged**
+  (26.77 -> 26.10 MHz, inside place & route noise) and throughput fell
+  ~40% to ~0.28 Gbps — a 64-byte block costs 47 cycles instead of 29,
+  measured in simulation — because a Poly1305 block now takes 9 cycles
+  instead of 3 and the critical path moved into `chacha20.sv`
+  (`oca/hw/syn/README.md`).
+- Next: rework `chacha20.sv` — it now owns the critical path
+  (two full rounds per cycle, 38.31 ns in the AEAD engine) and it is
+  what keeps the engine clock-bound at ~26 MHz. Then recover throughput
+  (`ROWS_PER_CYCLE`, deeper pipelining) and build the streaming/packet
+  interface toward the GbE MVP.
