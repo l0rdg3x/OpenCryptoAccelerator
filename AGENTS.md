@@ -160,9 +160,15 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   throughput is **~0.34 Gbps**: above the ~0.28 Gbps of the previous
   state, still **28% below the ~0.47 Gbps baseline** — Fmax gained 41%
   while cycles per block grew 97% across the two reworks.
-- The critical path is now in neither core: 26.41 ns inside
-  `chacha20_poly1305.sv`, in the `mask_bytes()` expression
-  `(512'd1 << (len * 8)) - 512'd1` (a 512-bit CCU2C carry chain).
+- `mask_bytes()` in `chacha20_poly1305.sv` then stopped building its
+  mask with `(512'd1 << (len * 8)) - 512'd1` — one 512-bit carry chain,
+  which had become the critical path — and builds it per byte instead,
+  64 independent 7-bit compares. **AEAD Fmax 37.87 -> 50.08 MHz** (+32%)
+  for +514 LUTs, cycles unchanged, so throughput reaches **~0.45 Gbps**:
+  level with the ~0.47 Gbps baseline, on 20 multipliers instead of 65
+  and at nearly twice the clock. The critical path is back inside
+  `chacha20.sv` (one quarter round, 19.97 ns), where the engine is now
+  within 6% of the standalone core.
 - Next: overlap the ChaCha20 and Poly1305 phases inside the AEAD engine.
   They run strictly in sequence today (`S_ENC` waits for `c_done` before
   `S_MAC_W`), so each block pays 22 + 4 x 9 cycles while each core idles

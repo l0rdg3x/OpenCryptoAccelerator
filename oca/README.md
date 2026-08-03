@@ -67,14 +67,14 @@ engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
 more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz).
 The ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
-26.10 -> 37.87 MHz (+41% over the 26.77 MHz baseline). A 64-byte block
-costs 57 cycles, measured in simulation, so throughput is ~0.34 Gbps:
-above the ~0.28 Gbps of the previous state but still 28% below the
-~0.47 Gbps baseline, because the cycle count grew faster than the
-clock. The critical path is now in neither core but in the AEAD
-wrapper's `mask_bytes()` (a 512-bit subtract), and the two phases still
-run strictly in sequence — overlapping them is the next step
-(`hw/syn/README.md`).
+26.10 -> 37.87 MHz. Rebuilding the wrapper's `mask_bytes()` per byte
+instead of as a 512-bit subtract — which had become the critical path —
+took the engine to 50.08 MHz. A 64-byte block costs 57 cycles, measured
+in simulation, so throughput is ~0.45 Gbps: level with the ~0.47 Gbps
+baseline, now on 20 multipliers instead of 65 and at nearly twice the
+clock. The critical path is back inside `chacha20.sv`, and the two
+phases still run strictly in sequence — overlapping them is the next
+step (`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend
 
