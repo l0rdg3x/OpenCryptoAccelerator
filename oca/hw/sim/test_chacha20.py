@@ -90,7 +90,9 @@ async def run_block(dut, key: bytes, nonce: bytes, ctr: int, data: bytes) -> byt
     dut.start.value = 1
     await RisingEdge(dut.clk)
     dut.start.value = 0
-    for _ in range(20):
+    # Bound only: the core costs 1 + 20/ROUNDS_PER_CYCLE + 1 cycles, so 22
+    # at the default. Poll wide enough for either setting of the parameter.
+    for _ in range(32):
         await RisingEdge(dut.clk)
         if dut.done.value == 1:
             return int(dut.data_out.value).to_bytes(64, "little")
