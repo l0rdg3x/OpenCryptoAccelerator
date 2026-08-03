@@ -84,7 +84,14 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
+.venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 ```
+
+`run_dirty_pad.py` is separate from the official-vector suite on
+purpose: it drives random garbage into the bytes past `in_len` instead
+of zeros, and is the only test that can fail when the engine's padding
+masking is wrong. The suite above zero-pads and passes with that masking
+removed entirely.
 
 Lint (must stay clean, `-Wall`):
 
@@ -116,6 +123,18 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
   the edge that consumed your stimulus returns the stale value.
+- **Proposals from per-file analysis are not additive.** The area pass
+  of 2026-08-03 came out of a workflow that read the three RTL files
+  independently, and two of its proposals — an early `blk_ready` in
+  `poly1305.sv`, a combinational `p_blk` in the wrapper — were each
+  correct against the file their author had read and silently corrupted
+  the authentication tag when combined: both attacked the same one-cycle
+  handshake bubble, each assuming the *other* side kept its signal
+  registered. Per-file review cannot see this by construction, and the
+  official-vector suite is not a safety net for a data-dependent
+  handshake failure. Before applying two proposals that touch opposite
+  ends of one handshake, measure the combination; never infer it from
+  the parts.
 - When mutating a Python model or testbench to prove a test can fail,
   delete `hw/sim/__pycache__` before re-running. Python invalidates its
   cache on mtime and size at one-second granularity, so a same-size edit
@@ -152,8 +171,7 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   measured in simulation — because a Poly1305 block now takes 9 cycles
   instead of 3 and the critical path moved into `chacha20.sv`
   (`oca/hw/syn/README.md`).
-- `chacha20.sv` reworked to compute one round per cycle (`double_round`
-  split into `column_round` + `diagonal_round`, parameter
+- `chacha20.sv` reworked to compute one round per cycle (parameter
   `ROUNDS_PER_CYCLE`, 22 cycles per block instead of 12). Result:
   standalone Fmax 28.66 -> **53.11 MHz** (+85%), level with Poly1305's
   52.68 MHz, and **AEAD Fmax 26.10 -> 37.87 MHz** (+41% over the
@@ -162,8 +180,8 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   throughput is **~0.34 Gbps**: above the ~0.28 Gbps of the previous
   state, still **28% below the ~0.47 Gbps baseline** — Fmax gained 41%
   while cycles per block grew 97% across the two reworks.
-- `mask_bytes()` in `chacha20_poly1305.sv` then stopped building its
-  mask with `(512'd1 << (len * 8)) - 512'd1` — one 512-bit carry chain,
+- The wrapper's byte mask in `chacha20_poly1305.sv` then stopped building
+  itself with `(512'd1 << (len * 8)) - 512'd1` — one 512-bit carry chain,
   which had become the critical path — and builds it per byte instead,
   64 independent 7-bit compares. **AEAD Fmax 37.87 -> 50.08 MHz** (+32%)
   for +514 LUTs, cycles unchanged, so throughput reaches **~0.45 Gbps**:
@@ -190,13 +208,36 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   + 1 for the registered `p_blk` handshake). ChaCha20's 22 cycles are
   fully hidden — proved rather than assumed, by measuring an AAD block,
   which never runs ChaCha20 and costs exactly the same 40 cycles.
-- Next: **replicate the engine.** At 20 multipliers and 10040 LUTs each,
-  an LFE5U-45F holds three — 60/72 multipliers (83%), 30120/43848 LUTs
-  (69%) — for ~2.0 Gbps aggregate, which is the figure the MVP target is
-  written against; a fourth is out of reach on multipliers alone. The
-  multiplier budget is the harder number but the **LUT budget is the
-  likelier binding constraint**: 69% is out-of-context and still has to
-  absorb the GbE MAC, the host interface and packet buffering. Note that
+- An **area pass** then took the engine from **10041 to 7358 LUTs
+  (-26.7%)** with flip-flops (5738), multipliers (20) and cycles per
+  block (40, measured differentially: 227 cycles for 4 blocks, 387 for 8)
+  all unchanged. Two independent changes: `chacha20.sv` carries **one**
+  round datapath instead of two — a diagonal round is a column round on a
+  row-rotated state and rotating by a constant is wiring, so 16 of the 32
+  adders and the multiplexer choosing between them are deleted (4368 ->
+  3125 standalone, exactly -256 CCU2C) — and `chacha20_poly1305.sv` masks
+  the padding on the 16-byte sub-block Poly1305 reads instead of on the
+  512-bit buses feeding it, replacing two full-width masking stages with
+  one quarter-width one (-1454 LUTs). **No speed is claimed**, and one
+  seed could not settle whether any was there: over seeds 1-4 the engine
+  means 50.72 -> 52.83 MHz (+4.2%) while the standalone core shows no
+  effect at all (51.50 -> 52.76, distributions overlapping). The critical
+  path is structurally the same quarter round inside `chacha20.sv`, so
+  the engine's separation is recorded as a plausible congestion effect
+  and kept out of the throughput figures. The masking change is covered
+  by `hw/sim/test_dirty_pad.py`, without which no test in the project
+  could see it (`oca/hw/syn/README.md`).
+- Next: **replicate the engine.** At 20 multipliers and 7358 LUTs each,
+  an LFE5U-45F holds three — 60/72 multipliers (83%), 22074/43848 LUTs
+  (50.3%) — for **1.97-2.07 Gbps** aggregate over four seeds, which
+  straddles the >= 2 Gbps the MVP target is written against, exactly as
+  the previous state did. A fourth is still out of reach on
+  multipliers alone (80 > 72) and the area pass did not change that; on
+  LUTs alone four would now fit (67.1%), so **the multiplier budget is
+  now the binding constraint on engine count**, where before the pass the
+  LUT budget was the likelier one. The 50.3% is out-of-context and still
+  has to absorb the GbE MAC, the host interface and packet buffering, so
+  it is a floor for three engines, not a budget for the board. Note that
   `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
   same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
   engine instead of three — while removing the one-cycle `p_blk` bubble

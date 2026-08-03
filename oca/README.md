@@ -33,7 +33,10 @@
   then the tag. `dec=1` decrypts: MACs the input (ciphertext) blocks,
   caller compares the tag. `in_len` above 64 is illegal and raises the
   sticky `err` output, which abandons the message rather than letting a
-  malformed length stall the engine.
+  malformed length stall the engine. The bytes past `in_len` of a partial
+  block are ignored: they are zeroed on the 16-byte sub-block on its way
+  into Poly1305, which is the only place the padding is ever read, rather
+  than on the 512-bit buses feeding it.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
@@ -55,6 +58,11 @@
   vectors before it is trusted, then 40 randomised encryptions and 40
   randomised decryptions judged by it, over AAD and message lengths
   chosen around the 64-byte block and 16-byte MAC boundaries.
+- `hw/sim/test_dirty_pad.py` — adversarial padding test, encrypt and
+  decrypt: random garbage is driven into the bytes past `in_len` and
+  neither the ciphertext nor the tag may move. The suite above cannot
+  see this — it zero-pads, so it passes with the engine's input masking
+  removed entirely — which is why the masking has a test of its own.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
 - `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
@@ -69,28 +77,46 @@ Python 3.14).
 .venv/bin/python hw/sim/run_chacha20.py
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
+.venv/bin/python hw/sim/run_dirty_pad.py
 ```
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-6/6 tests pass; `verilator --lint-only -Wall` clean on all cores.
-Four reworks are done. The Poly1305 limb rework took the AEAD engine
-from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and more
-than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
+7/7 tests pass, dirty-padding 2/2; `verilator --lint-only -Wall` clean on
+all cores. Five reworks are done. The Poly1305 limb rework took the AEAD
+engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
+more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
-26.10 -> 37.87 MHz. Rebuilding the wrapper's `mask_bytes()` per byte
-instead of as a 512-bit subtract — which had become the critical path —
-took the engine to 50.08 MHz, level with the baseline's throughput at
-last. Splitting the AEAD FSM in two, joined by a one-block buffer, then
+26.10 -> 37.87 MHz. Rebuilding the wrapper's byte mask per byte instead
+of as a 512-bit subtract — which had become the critical path — took the
+engine to 50.08 MHz, level with the baseline's throughput at last.
+Splitting the AEAD FSM in two, joined by a one-block buffer, then
 overlapped the phases: block N is authenticated while block N+1 is
 encrypted, so a 64-byte block costs **40 cycles instead of 57**
 (measured in simulation) for -540 LUTs and +13 flip-flops. At 52.58 MHz
 that is **~0.67 Gbps, +42% on the ~0.47 Gbps original baseline** and on
 20 multipliers instead of 65 — the first point in the series where the
-engine is ahead of where it started. The critical path is inside
-`chacha20.sv`, within 1% of that core standalone. Next: replicate the
-engine — three fit on an LFE5U-45F for ~2.0 Gbps aggregate
-(`hw/syn/README.md`).
+engine is ahead of where it started.
+
+The fifth rework buys area rather than speed, and is the largest single
+move in the series: **10041 -> 7358 LUTs, -26.7%**, with flip-flops
+(5738), multipliers (20) and cycles per block (40, measured) all
+unchanged. `chacha20.sv` now carries one round datapath instead of two —
+a diagonal round is a column round on a row-rotated state and rotation is
+wiring, so 16 of its 32 adders and the multiplexer choosing between them
+are gone — and `chacha20_poly1305.sv` masks the padding on the 16-byte
+sub-block Poly1305 reads instead of on the 512-bit buses feeding it, two
+full-width masking stages becoming one quarter-width one. Three engines
+now take 50.3% of an LFE5U-45F's LUTs instead of 68.7%. That does **not**
+buy a fourth engine — 4 x 20 = 80 multipliers against the device's 72,
+unchanged by this pass — and it does not buy throughput; what it buys is
+headroom for the GbE MAC, packet buffering and top-level glue that do not
+exist yet, none of which is in these out-of-context numbers. Fmax is not
+claimed either: over four placer seeds the engine means 50.72 -> 52.83
+MHz while the standalone core shows no effect at all, and the critical
+path is structurally the same quarter round it was. Next: replicate the
+engine — three fit for 1.97-2.07 Gbps aggregate over those seeds, which
+straddles the >= 2 Gbps MVP target (`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend
 

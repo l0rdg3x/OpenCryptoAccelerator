@@ -42,6 +42,7 @@ cd oca
 .venv/bin/python hw/sim/run_chacha20.py
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
+.venv/bin/python hw/sim/run_dirty_pad.py
 ```
 
 ## Documentation
