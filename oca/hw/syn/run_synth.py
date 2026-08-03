@@ -35,6 +35,9 @@ DESIGNS = {
     "chacha20": ["chacha20.sv"],
     "poly1305": ["poly1305.sv"],
     "chacha20_poly1305": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"],
+    "oca_core": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+                 "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+                 "oca_core.sv"],
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).

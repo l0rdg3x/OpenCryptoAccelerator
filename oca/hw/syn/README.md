@@ -7,6 +7,7 @@ the Lattice ECP5 on the MVP board (Colorlight i9 v7.2, LFE5U-45F-6BG381C
 ```sh
 .venv/bin/python hw/syn/run_synth.py chacha20_poly1305
 .venv/bin/python hw/syn/run_synth.py --freq 50 poly1305
+.venv/bin/python hw/syn/run_synth.py oca_core          # ~3 min
 ```
 
 Outputs land in `hw/syn/build/` (gitignored): yosys and nextpnr logs,
@@ -600,3 +601,156 @@ in a throwaway worktree. The seed sweep above is 16 builds — four seeds x
 two designs x two states — and cost under ten minutes in total, which is
 cheap enough that a single-seed Fmax comparison is not worth publishing
 again.
+
+### The host protocol layer: oca_core
+
+Same device, package, speed grade and 100 MHz constraint. This is the
+first entry in this series that is not the engine: `oca_core` wraps
+`chacha20_poly1305` in the host protocol of
+`docs/design/2026-08-03-host-protocol.md` — two 2048-byte packet
+buffers (`oca_pktbuf`), eight key slots (`oca_keystore`) and the
+protocol FSM (`oca_proto`) — and exposes a pair of 8-bit AXI-Stream
+ports. It is the module the Ethernet integration will instantiate. The
+engine's own numbers are repeated alongside so the protocol layer's
+cost is visible separately.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | DP16KD | Fmax (seed 1) |
+|--------|--------------|------------|------------|--------|------|
+| chacha20_poly1305 (engine alone) | 7358 | 5738 | 20 | 0 | 53.55 MHz |
+| **oca_core (engine + protocol)** | **11149** | **10842** | **20** | **2** | **50.95 MHz** |
+| *protocol layer, by difference* | *+3791 (+51.5%)* | *+5104 (+89.0%)* | *0* | *+2* | *—* |
+
+Device occupancy: 25.4% of the LUTs, 24.7% of the flip-flops, 27.8% of
+the multipliers and **1.9% of the block RAM** (2 of 108 DP16KD).
+
+- **The packet buffers infer block RAM. Both of them.** This was the
+  open question the previous task could argue but not measure, and it is
+  worth stating plainly because the alternative was expensive: 4096
+  bytes of LUT RAM would have been a serious area regression. yosys maps
+  them explicitly — `mapping memory oca_core.u_txbuf.mem via $__DP16KD_`
+  and the same line for `u_rxbuf.mem` — and the final netlist contains
+  **2 DP16KD and zero LUT RAM cells**: no `TRELLIS_DPR16X4`, no
+  `DPR16X4C`, no `TRELLIS_RAM16X2`. One 16 Kbit block per 2048-byte
+  buffer, which is the exact fit. What earns this is the coding style in
+  `oca_pktbuf.sv`: the read port is registered, and the range check sits
+  on the *address* rather than on the read data, so no multiplexer comes
+  between the memory and its output register. Nothing is instantiated —
+  the memory is inferred, as `SPEC.md`'s portability rule requires.
+- **The multiplier count did not move.** 20 MULT18X18D, exactly the
+  engine's. The protocol layer is buffers, comparators and a state
+  machine; it wants no arithmetic. Since multipliers are what caps
+  engine replication at three (60 of 72), **the protocol layer does not
+  cost an engine.**
+- **Flip-flops nearly doubled, and that is where the protocol lives.**
+  +5104 FF against +3791 LUTs — the opposite ratio to every datapath
+  entry above. Most of it is storage rather than logic: the key store is
+  8 slots x 256 bits = 2048 FF plus a registered 256-bit read port, and
+  `oca_proto` carries a 512-bit block being assembled, a 512-bit block
+  draining back, 256 bits of parsed arguments, the header, the received
+  tag and four 32-bit counters. None of it is on a critical path.
+- **Fmax: 50.95 MHz at seed 1, and the protocol layer is not on the
+  critical path.** The path is 19.63 ns (7.91 ns logic, 11.72 ns
+  routing) from `u_aead.u_chacha.st` back into `u_chacha.st` through the
+  CCU2C carry chains of the four adders of one quarter round — and every
+  single entry in nextpnr's report cites `chacha20.sv` lines 58, 60, 62
+  and 64. **Not one cites `oca_proto.sv`, `oca_pktbuf.sv`,
+  `oca_keystore.sv`, `oca_core.sv`, `chacha20_poly1305.sv` or
+  `poly1305.sv`.** It is structurally the same path the engine reports
+  alone, at the same source lines.
+- **Against the engine's Fmax the difference is inside the noise, and
+  is routing rather than logic.** Four seeds, same netlist, area
+  identical on every one as it must be:
+
+  | design | seed 1 | seed 2 | seed 3 | seed 4 | mean | spread |
+  |--------|--------|--------|--------|--------|------|--------|
+  | chacha20_poly1305 (engine alone) | 53.55 | 52.46 | 53.97 | 51.32 | 52.83 | 5.0% |
+  | oca_core (engine + protocol) | 50.95 | 50.02 | 49.70 | 51.67 | **50.59** | 3.9% |
+
+  Mean -4.2%, and the distributions overlap: `oca_core`'s best seed
+  (51.67) beats the engine's worst (51.32). The logic delay is what
+  settles it — 7.77 ns in the engine against 7.91 ns here, +0.14 ns, on
+  a path made of the same cells at the same source lines. The routing
+  delay carries the rest (10.90 -> 11.72 ns), which is what a design
+  half again as large would be expected to pay in congestion.
+  **Recorded as congestion, not as a datapath cost of the protocol
+  layer.**
+
+**Throughput: measured, and 2.5x worse than the plan estimated.** The
+implementation plan predicted 64 cycles to read a block out of the
+buffer, 40 to process it and 64 to write it back — 168 cycles, about
+0.16 Gbps. Measured the same differential way as every earlier point in
+this series (a seal command at 4, 8, 12 and 16 blocks; the difference
+over the block delta, so the header, the key schedule, the tag and every
+fixed cost cancel), a 64-byte block costs **415 cycles end to end**. The
+figure is exactly linear: the three consecutive pairs (4->8, 8->12,
+12->16) and the 4->16 span all return 415.0.
+
+| phase | cycles per 64 B | rate | share |
+|-------|-----------------|------|-------|
+| request in (`s_axis`) | 64 | 1.00 cyc/byte | 15% |
+| buffer -> engine -> buffer | 159 | — | 38% |
+| response out (`m_axis`) | **192** | **3.00 cyc/byte** | **46%** |
+| **total** | **415** | | |
+
+The plan's 168 was a model of the middle row alone — and that row is the
+one it got roughly right, measuring 159. What it omitted is that this is
+store and forward on an 8-bit port: the request must be received whole
+before processing starts and the response transmitted whole afterwards,
+and neither overlaps anything.
+
+**The largest single term is the response path, and it is a handshake,
+not a bandwidth limit.** `oca_proto`'s output loop spends three cycles
+per byte: one in `S_RESP_FETCH` issuing the buffer address, one
+asserting `m_tvalid`, and one completing the handshake and dropping it
+again. The receive side does not pay this — `s_tready` is held for the
+whole of `S_RX`, so the request streams at a byte per cycle, and the
+internal reader that feeds the engine runs a two-deep valid pipeline
+for the same reason. `oca_proto.sv` names the cost exactly, in the
+comment on that reader: one byte per cycle "instead of the three a
+per-byte handshake would cost". The response path is the one place the
+same file did not take its own advice.
+
+At the four-seed mean of 50.59 MHz, 64 B x 50.59e6 / 415 =
+7.80 MB/s = **~62 Mbps (~0.062 Gbps)**, and 61-64 Mbps across the seed
+spread. Set against the two figures that matter:
+
+| | throughput | |
+|---|---|---|
+| the AEAD engine alone, 40 cyc / 64 B at 52.83 MHz | ~0.68 Gbps | |
+| **oca_core end to end, 415 cyc / 64 B at 50.59 MHz** | **~0.062 Gbps** | **9% of the engine** |
+| the GbE link the MVP board has to fill | 1 Gbps | **6% of it** |
+
+**The protocol layer costs 91% of the engine's throughput** — the
+engine is idle for about nine cycles in ten. That is the price of the
+deliberate simplifications recorded at the top of the implementation
+plan (a one-byte-wide buffer, nothing overlapping), and it is enough to
+demonstrate the path end to end, which is what the MVP is for.
+
+Two follow-ups, in cost order. **Fixing the response handshake is the
+cheap one and needs no design change**: holding `m_tvalid` up and
+pipelining the buffer read, exactly as the receive feed already does,
+takes the response from 192 cycles to 64 and the block from 415 to 287
+— **~90 Mbps, +45%** — for a rewrite of one state. Widening the buffers
+to 32 bits and overlapping the phases is the structural fix and the
+larger one; it needs a board to measure honestly.
+
+**None of this has run on silicon.** Every cycle count here comes from
+Verilator, every area and Fmax figure from yosys and nextpnr on an
+`--out-of-context` build with no IO buffers, no pin constraints and no
+Ethernet MAC — and the MAC, the RGMII wrapper and the PLL are not in
+these numbers and have to share the fabric and the clock with them. This
+is a simulation-derived estimate of a design that has never been
+programmed into a device.
+
+**One stale figure is knowingly left in the RTL.** The header comment of
+`oca_pktbuf.sv` still carries the plan's pre-measurement estimate — "the
+whole path runs at roughly 0.16 Gbps ... about 16% of the GbE link" —
+which the 415-cycle measurement above supersedes. It was left because
+this pass changed no RTL; it should be corrected to ~0.062 Gbps by
+whoever next edits that file. Recorded here rather than fixed silently,
+so the comment is not mistaken for a second, independent source.
+
+Build time: **3 min 11 s** for the full `oca_core` build (yosys 8.1 s +
+nextpnr), on the same machine at seed 1. The three extra seeds were run
+against the same netlist, since yosys output does not depend on the
+placer seed.

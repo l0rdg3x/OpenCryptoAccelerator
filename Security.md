@@ -3,13 +3,18 @@
 Threat scope and side-channel limits of the OCA hardware, as required by
 `SPEC.md` (sections CONSTRAINTS and DOCUMENTATION).
 
-This document describes the RTL cores as they stand on this branch:
-`oca/hw/rtl/chacha20.sv`, `oca/hw/rtl/poly1305.sv` and
-`oca/hw/rtl/chacha20_poly1305.sv`. It is not a statement about a
-finished product: there is no host interface, no driver and no board
-yet, and the parts that do not exist cannot be assessed here. Every
-claim below was checked against the RTL; where a property is a caller
-obligation rather than something the hardware enforces, it says so.
+This document describes the RTL as it stands on this branch: the three
+engine cores `oca/hw/rtl/chacha20.sv`, `oca/hw/rtl/poly1305.sv` and
+`oca/hw/rtl/chacha20_poly1305.sv`, and the host protocol layer
+`oca_keystore.sv`, `oca_pktbuf.sv`, `oca_proto.sv` and `oca_core.sv`
+that wraps them. It is not a statement about a finished product: there
+is no Ethernet MAC, no driver and no board yet, and the parts that do
+not exist cannot be assessed here. Every claim below was checked against
+the RTL; where a property is a caller obligation rather than something
+the hardware enforces, it says so.
+
+Section 6 covers what the host protocol exposes, and is the section to
+read before putting a board on a network.
 
 ## 1. Threat model
 
@@ -122,14 +127,26 @@ section 2.
 These are not recommendations. Ignoring any of them breaks the
 construction, and the hardware cannot detect or prevent the mistake.
 
-1. **Compare the tag in constant time. The RTL does not compare it.**
-   `chacha20_poly1305.sv` computes the tag and presents it on the `tag`
-   output; there is no expected-tag input and no comparison anywhere in
-   the RTL. On decryption the caller must compare the engine's `tag`
-   with the received tag using a constant-time comparison — one that
-   examines every byte and does not return early — and discard the
-   plaintext on mismatch. SPEC.md requires tag comparison to be
-   constant-time; this is where that requirement lands.
+1. **Compare the tag in constant time — if you instantiate
+   `chacha20_poly1305.sv` directly.** That module computes the tag and
+   presents it on the `tag` output; there is no expected-tag input and
+   no comparison anywhere in it. A caller wiring to it must compare the
+   engine's `tag` with the received tag using a constant-time
+   comparison — one that examines every byte and does not return
+   early — and discard the plaintext on mismatch. SPEC.md requires tag
+   comparison to be constant-time; this is where that requirement lands.
+
+   **This obligation does not apply to traffic through `oca_core`.**
+   `oca_proto.sv` compares the tag on the FPGA, as a single 128-bit
+   equality against the 16 bytes carried in the open command — fixed-width
+   combinational logic, so constant-time by construction rather than by
+   the caller's discipline. Because the protocol is store and forward,
+   the plaintext is complete in the transmit buffer before anything is
+   sent, so a failed comparison returns status `06` and **zero bytes of
+   body**. That property is held by a test that can fail:
+   `test_corrupt_tag_yields_no_plaintext` in `oca/hw/sim/test_oca_core.py`
+   asserts on the leak, not merely on the status, and was checked against
+   a deliberately broken comparison.
 
 2. **Never repeat a (key, nonce) pair. The core cannot detect reuse.**
    The engine keeps no history: `key` and `nonce` are latched on
@@ -219,7 +236,72 @@ around a limitation it has not been told about.
    wait forever for a `done` that is not coming, so `err` must be
    monitored alongside `done`.
 
-## 6. Reporting a vulnerability
+## 6. The host protocol: what it exposes
+
+`oca_core` turns a UDP payload into an AEAD operation
+(`docs/design/2026-08-03-host-protocol.md`). Three things it does
+**not** protect, recorded here because they are properties of the
+protocol rather than of the engine:
+
+1. **The key crosses the wire in the clear.** The load-key command
+   carries 32 raw key bytes. It happens once per key rather than once
+   per packet, but there is no key wrapping, no key agreement and no
+   transport encryption: anyone who can observe that network segment
+   reads the key, and from then on holds everything it protects.
+
+2. **There is no authentication of the requester.** Anyone who can send
+   a UDP packet to the board can seal and open with whatever slots are
+   loaded, and can overwrite any slot with a key of their own. The
+   accelerator trusts whoever talks to it, exactly as a PCIe
+   accelerator trusts its host — except that an Ethernet cable is far
+   easier to reach than a PCIe slot. **The intended deployment is a
+   direct host-to-board link, not a shared network.** There is no
+   session, no ownership and no privilege: the isolation between users
+   noted in section 1 is absent here too. No command reads a key back —
+   the four opcodes are load-key, seal, open and stats — but a slot
+   loaded by one client is *usable* by any other, which for an attacker
+   is as good as holding the key.
+
+3. **The nonce comes from the host.** `oca_proto` passes the 12 nonce
+   bytes of the request to the engine as given. Reuse of a (key, nonce)
+   pair remains a host error the hardware cannot detect, with the
+   consequences set out in section 4 item 2 — and the protocol widens
+   the blast radius, because the host that must get it right is now
+   anyone on the wire rather than a local driver.
+
+What the protocol layer does add, against the engine alone:
+
+- **Key slots carry a loaded bit and are cleared on reset.** Using a
+  slot that was never written returns status `04` rather than
+  encrypting under a key of zeros, and `rst_n` clears both the key
+  material and the loaded bits. `oca_proto.sv` clears its own secret
+  registers too — `eng_key`, `ks_wr_key`, the block being assembled,
+  the block draining back, the parsed arguments and the received tag
+  are all zeroed on reset.
+
+  **The packet buffers are the exception, and it is a real one.**
+  `oca_pktbuf.sv` resets `wr_count` and the output register but
+  **not the memory array**, so after a reset both 2048-byte BRAMs still
+  hold the last packet — plaintext, ciphertext, and for a load-key
+  command the 32 raw key bytes, which necessarily pass through the
+  receive buffer on their way to the slot. Limitation 4 above therefore
+  extends to the protocol layer rather than being resolved by it, and
+  the three engine cores are unchanged: reset restores control state,
+  not confidentiality. Clearing 4096 bytes of BRAM costs a counter and
+  as many cycles as there are addresses; it is not implemented.
+- **The tag is compared on the FPGA in constant time, and a failure
+  emits no plaintext.** See section 4 item 1.
+- **Failures are reported rather than dropped silently.** Every request
+  whose header can be read is answered with a status code, and the
+  packets too malformed to answer increment a counter readable through
+  the stats command.
+
+Neither the load-key exposure nor the missing authentication is fixable
+inside this protocol; both need a transport that does not exist yet.
+Until it does, treat the link between host and board as part of the
+trust boundary.
+
+## 7. Reporting a vulnerability
 
 Report security issues privately by email to Gennaro Cimmino
 <gcimmino@rayonra.net> rather than opening a public issue on

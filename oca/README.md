@@ -37,6 +37,29 @@
   block are ignored: they are zeroed on the 16-byte sub-block on its way
   into Poly1305, which is the only place the padding is ever read, rather
   than on the 512-bit buses feeding it.
+- `hw/rtl/oca_keystore.sv` — key slots for the host protocol, `NUM_SLOTS`
+  of them (default 8). The only place key material lives. Each slot
+  carries a loaded bit, so reading a slot that was never written reports
+  `rd_valid = 0` instead of handing back a key of zeros: a host mistake
+  becomes a protocol error rather than a message encrypted under a key
+  an attacker can guess. Keys and loaded bits are cleared on reset.
+- `hw/rtl/oca_pktbuf.sv` — one byte-wide packet buffer (default 2048
+  bytes), written sequentially from the stream and read at random
+  offsets. Writes past capacity are dropped and `wr_full` is raised, so a
+  truncated packet becomes a length error rather than a silent wrap. The
+  read port is registered and the range check sits on the address rather
+  than the read data, which is what makes the memory infer block RAM —
+  confirmed in synthesis, one DP16KD per buffer and no LUT RAM.
+- `hw/rtl/oca_proto.sv` — the protocol FSM: parses the fixed 8-byte
+  header, validates it, drives the engine and builds the response. Knows
+  nothing of cryptography beyond driving `chacha20_poly1305` and
+  comparing its tag — a single 128-bit equality, constant-time by
+  construction. Store and forward, so a failed tag returns status `06`
+  and no plaintext at all.
+- `hw/rtl/oca_core.sv` — wiring only: the two packet buffers, the key
+  store, the protocol FSM and the AEAD engine behind a pair of 8-bit
+  AXI-Stream ports. This is the module the Ethernet integration will
+  instantiate.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
@@ -63,6 +86,27 @@
   neither the ciphertext nor the tag may move. The suite above cannot
   see this — it zero-pads, so it passes with the engine's input masking
   removed entirely — which is why the masking has a test of its own.
+- `hw/sim/proto_model.py` — builds and parses host-protocol packets in
+  Python, the reference for the wire format. The cryptography comes from
+  `aead_model.py`, so no expected value is written by hand.
+- `hw/sim/test_proto_model.py` — self-consistency checks for the model,
+  run as plain Python: there is no DUT, and pulling a simulator into a
+  pure Python check would be noise.
+- `hw/sim/test_keystore.py` — a slot reads back what was written, an
+  unwritten or out-of-range slot reports invalid, and reset clears both
+  the keys and the loaded bits.
+- `hw/sim/test_pktbuf.py` — bytes come back at the offset they went in,
+  the counter tracks the write position, and the full flag fires at
+  capacity without wrapping over what is already stored.
+- `hw/sim/test_oca_core.py` — end-to-end: packets in, packets out, with
+  no Ethernet in the simulation. Load-key then seal, a seal/open round
+  trip, an unloaded slot refused, every header failure and every length
+  failure, and 20 randomised round trips judged by the model. The one
+  that matters is `test_corrupt_tag_yields_no_plaintext`, which asserts
+  that a flipped tag bit yields status `06` and **zero bytes of body** —
+  it asserts on the leak, not on the status, and was checked against a
+  deliberately broken tag comparison. Without it the design's security
+  property would be written down rather than held.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
 - `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
@@ -78,11 +122,17 @@ Python 3.14).
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 .venv/bin/python hw/sim/run_dirty_pad.py
+.venv/bin/python hw/sim/run_keystore.py
+.venv/bin/python hw/sim/run_pktbuf.py
+.venv/bin/python hw/sim/run_oca_core.py
+cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2; `verilator --lint-only -Wall` clean on
-all cores. Five reworks are done. The Poly1305 limb rework took the AEAD
+7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 3/3, oca_core
+9/9, and the protocol model checks pass as plain Python;
+`verilator --lint-only -Wall` clean on all cores with `--top-module
+oca_core`. Five reworks are done. The Poly1305 limb rework took the AEAD
 engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
 more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
@@ -114,9 +164,40 @@ headroom for the GbE MAC, packet buffering and top-level glue that do not
 exist yet, none of which is in these out-of-context numbers. Fmax is not
 claimed either: over four placer seeds the engine means 50.72 -> 52.83
 MHz while the standalone core shows no effect at all, and the critical
-path is structurally the same quarter round it was. Next: replicate the
-engine — three fit for 1.97-2.07 Gbps aggregate over those seeds, which
-straddles the >= 2 Gbps MVP target (`hw/syn/README.md`).
+path is structurally the same quarter round it was. Three engines fit,
+for 1.97-2.07 Gbps aggregate over those seeds, which straddles the
+>= 2 Gbps MVP target (`hw/syn/README.md`).
+
+**The host protocol is implemented and verified**
+(`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
+operation, a payload out, with no Ethernet in the simulation. `oca_core`
+synthesises to **11149 LUTs (25.4%), 10842 FF (24.7%), 20 MULT18X18D
+(27.8%) and 2 DP16KD (1.9%)** at **50.95 MHz** (seed 1; 50.59 MHz mean
+over seeds 1-4). **Both packet buffers infer block RAM** — one DP16KD
+each, and not a single LUT RAM cell in the netlist — which was the open
+question, because 4096 bytes in LUTs would have been a serious area
+regression. The protocol layer adds no multipliers at all, so it does
+not cost an engine, and it is not on the critical path: every entry in
+nextpnr's report still cites `chacha20.sv`.
+
+Throughput is the honest disappointment. Measured differentially in
+simulation, a 64-byte block costs **415 cycles end to end** — 64 to
+receive at a byte per cycle, 159 through buffer, engine and buffer, and
+**192 to transmit at three cycles per byte** — which at the measured
+clock is **~0.062 Gbps: 9% of the engine's own ~0.68 Gbps and 6% of the
+GbE link**. The implementation plan predicted 168 cycles and was 2.5x
+optimistic, having modelled only the middle term and omitted both stream
+transfers. The response path is the largest single cost and is a
+handshake rather than a bandwidth limit, so it is also the cheapest
+thing to fix: holding `m_tvalid` up and pipelining the buffer read, as
+the receive side already does, would take a block to 287 cycles and
+throughput to ~0.090 Gbps. Widening the buffers to 32 bits and
+overlapping the phases is the structural fix. **None of this has run on
+silicon.**
+
+Next: the Ethernet integration, which needs the board —
+`verilog-ethernet` (MIT) as a submodule, the RGMII wrapper with its ECP5
+DDR primitives, PLL, reset and the Colorlight i9 pin constraints.
 
 ## Phase 1: abstract API + software backend
 

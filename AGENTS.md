@@ -42,6 +42,18 @@ tools/                      local tool builds — NOT committed
   src/                      upstream sources for the above (shallow clones)
 ```
 
+**The Ethernet MAC is an external dependency, not project RTL.** The
+1G MAC, the RGMII interface and the IP/ARP/UDP stack come from
+`verilog-ethernet` (Alex Forencich, **MIT licence**), which has working
+ECP5 support; it will arrive as a submodule when the board does. Writing
+a MAC from scratch is weeks of work on well-trodden ground where every
+bug presents as "the link does not come up". That choice sets the
+project's RTL boundary: `verilog-ethernet` hands over the UDP payload as
+an 8-bit AXI-Stream, and everything in `hw/rtl/` sits behind that
+interface — which is why `oca_core` can be tested end to end with no
+Ethernet in the simulation at all
+(`docs/design/2026-08-03-host-protocol.md`).
+
 ## Environment rules
 
 - **No system-wide installs without explicit permission.** Everything
@@ -85,6 +97,17 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
+.venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 3/3 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 9/9 pass
+```
+
+The protocol model has no DUT, so it runs as plain Python rather than
+through a simulator — pulling Verilator into a pure Python check would
+be noise:
+
+```sh
+cd hw/sim && ../../.venv/bin/python test_proto_model.py   # prints "proto_model: OK"
 ```
 
 `run_dirty_pad.py` is separate from the official-vector suite on
@@ -96,13 +119,14 @@ removed entirely.
 Lint (must stay clean, `-Wall`):
 
 ```sh
-../tools/verilator/bin/verilator --lint-only -Wall hw/rtl/*.sv --top-module chacha20_poly1305
+../tools/verilator/bin/verilator --lint-only -Wall hw/rtl/*.sv --top-module oca_core
 ```
 
 ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
 
 ```sh
 .venv/bin/python hw/syn/run_synth.py chacha20_poly1305   # ~2 min
+.venv/bin/python hw/syn/run_synth.py oca_core            # ~3 min
 ```
 
 ## Hard rules
@@ -238,18 +262,61 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   and kept out of the throughput figures. The masking change is covered
   by `hw/sim/test_dirty_pad.py`, without which no test in the project
   could see it (`oca/hw/syn/README.md`).
-- Next: **replicate the engine.** At 20 multipliers and 7358 LUTs each,
-  an LFE5U-45F holds three — 60/72 multipliers (83%), 22074/43848 LUTs
-  (50.3%) — for **1.97-2.07 Gbps** aggregate over four seeds, which
-  straddles the >= 2 Gbps the MVP target is written against, exactly as
-  the previous state did. A fourth is still out of reach on
-  multipliers alone (80 > 72) and the area pass did not change that; on
-  LUTs alone four would now fit (67.1%), so **the multiplier budget is
-  now the binding constraint on engine count**, where before the pass the
-  LUT budget was the likelier one. The 50.3% is out-of-context and still
-  has to absorb the GbE MAC, the host interface and packet buffering, so
-  it is a floor for three engines, not a budget for the board. Note that
-  `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
-  same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
-  engine instead of three — while removing the one-cycle `p_blk` bubble
-  is free. Then the streaming/packet interface toward the GbE MVP.
+- **Engine replication** is characterised but not built. At 20
+  multipliers and 7358 LUTs each, an LFE5U-45F holds three — 60/72
+  multipliers (83%), 22074/43848 LUTs (50.3%) — for **1.97-2.07 Gbps**
+  aggregate over four seeds, which straddles the >= 2 Gbps the MVP
+  target is written against. A fourth is out of reach on multipliers
+  alone (80 > 72); on LUTs alone four would fit (67.1%), so **the
+  multiplier budget is the binding constraint on engine count**. The
+  50.3% is out-of-context and still has to absorb the GbE MAC, the host
+  interface and packet buffering, so it is a floor for three engines,
+  not a budget for the board. Note that `ROWS_PER_CYCLE` in
+  `poly1305.sv` competes with replication for the same 72 multipliers —
+  2 rows per cycle costs 40 per engine, so one engine instead of three —
+  while removing the one-cycle `p_blk` bubble is free.
+- **The host protocol is implemented and verified** (design:
+  `docs/design/2026-08-03-host-protocol.md`). Four new modules behind an
+  8-bit AXI-Stream boundary: `oca_keystore.sv` (8 key slots, each with a
+  loaded bit, cleared on reset), `oca_pktbuf.sv` (a 2048-byte byte-wide
+  buffer), `oca_proto.sv` (the protocol FSM) and `oca_core.sv` (wiring
+  only). Store and forward throughout: the request is buffered whole
+  before the engine sees it and the response is built whole before a
+  byte leaves, which is what lets a failed tag return no plaintext at
+  all. Suites: keystore 4/4, pktbuf 3/3, oca_core 9/9, plus
+  `test_proto_model.py` as plain Python. Lint `-Wall` clean with
+  `--top-module oca_core`. **The security property has a test that can
+  fail**: `test_corrupt_tag_yields_no_plaintext` asserts on the leak
+  rather than on the status code, and was checked against a deliberately
+  broken tag comparison.
+- **`oca_core` synthesised: 11149 LUTs (25.4%), 10842 FF (24.7%), 20
+  MULT18X18D (27.8%), 2 DP16KD (1.9%), Fmax 50.95 MHz at seed 1**
+  (50.59 MHz mean over seeds 1-4). **Both packet buffers infer block
+  RAM** — one DP16KD each, zero LUT RAM cells in the netlist — which was
+  the open question, since 4096 bytes in LUTs would have been a serious
+  regression. The protocol layer costs +3791 LUTs and +5104 FF over the
+  engine, **no multipliers at all** (so it does not cost an engine), and
+  is **not on the critical path**: every entry in nextpnr's report cites
+  `chacha20.sv` lines 58-64, none cites the protocol modules. Against
+  the engine's 52.83 MHz mean the -4.2% is inside the seed spread and is
+  routing, not logic (+0.14 ns logic, +0.82 ns routing).
+- **End-to-end throughput ~0.062 Gbps — 9% of the engine's own
+  ~0.68 Gbps and 6% of the GbE link.** Measured differentially in
+  simulation over seal commands of 4/8/12/16 blocks, a 64-byte block
+  costs **415 cycles**, exactly linear: 64 in (1 byte/cycle) + 159
+  through buffer/engine/buffer + **192 out (3 cycles/byte)**. The
+  implementation plan predicted 168 and was 2.5x optimistic — it modelled
+  only the middle term and omitted both stream transfers. The response
+  path is the largest single cost and is a handshake, not a bandwidth
+  limit: `oca_proto` spends a cycle fetching, a cycle asserting
+  `m_tvalid` and a cycle completing, where the receive side holds
+  `s_tready` for the whole of `S_RX` and streams at a byte per cycle.
+  **Nothing here has run on silicon** — Verilator cycle counts and
+  `--out-of-context` synthesis, with no IO, no pin constraints and no MAC.
+- Next: **the Ethernet integration**, which needs the board (expected
+  ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII wrapper
+  with its ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
+  constraints. Cheapest RTL follow-up meanwhile is the response
+  handshake — holding `m_tvalid` up and pipelining the buffer read, as
+  the receive feed already does, takes a block from 415 cycles to 287
+  and throughput to ~0.090 Gbps (+45%) for a rewrite of one state.
