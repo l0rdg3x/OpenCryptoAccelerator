@@ -13,9 +13,10 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from aead_model import aead_encrypt
-from proto_model import (HDR_LEN, OP_LOAD_KEY, OP_OPEN, OP_SEAL, ST_BAD_SLOT,
-                         ST_OK, build_load_key, build_open, build_seal,
-                         parse_response)
+from proto_model import (HDR_LEN, OP_LOAD_KEY, OP_OPEN, OP_SEAL, ST_AUTH_FAIL,
+                         ST_BAD_LENGTH, ST_BAD_MAGIC, ST_BAD_OPCODE,
+                         ST_BAD_SLOT, ST_BAD_VERSION, ST_OK, build_load_key,
+                         build_open, build_seal, parse_response)
 
 KEY = bytes(range(32))
 NONCE = bytes(range(12))
@@ -211,3 +212,75 @@ async def test_next_packet_offered_with_no_gap(dut):
             f"status {rsp['status']} for req_id {req_id:#06x}"
         assert rsp["body"] == want_tag + want_ct, \
             f"body mismatch for req_id {req_id:#06x}"
+
+
+@cocotb.test()
+async def test_corrupt_tag_yields_no_plaintext(dut):
+    """The security property of the whole design: a failed tag must
+    return an error and not one byte of plaintext.
+
+    The leak is asserted before the status on purpose. Break the tag
+    comparison in oca_proto.sv and this test has to fail on the
+    plaintext coming out, because a failure on the status alone would
+    only say the status changed, which is not the property.
+    """
+    await setup(dut)
+    await command(dut, build_load_key(1, 0, KEY))
+    msg = b"secret payload that must not leak"
+    sealed = await command(dut, build_seal(2, 0, NONCE, b"", msg))
+    tag, ct = bytearray(sealed["body"][:16]), sealed["body"][16:]
+    tag[0] ^= 0x01
+    rsp = await command(dut, build_open(3, 0, NONCE, b"", ct, bytes(tag)))
+    assert msg not in rsp["body"], "plaintext present in the response"
+    assert rsp["body"] == b"", f"plaintext leaked: {rsp['body']!r}"
+    assert rsp["status"] == ST_AUTH_FAIL, f"status {rsp['status']}"
+
+
+@cocotb.test()
+async def test_bad_header_fields(dut):
+    await setup(dut)
+    bad_magic = b"XX" + build_seal(1, 0, NONCE, b"", b"x")[2:]
+    assert (await command(dut, bad_magic))["status"] == ST_BAD_MAGIC
+
+    pkt = bytearray(build_seal(2, 0, NONCE, b"", b"x"))
+    pkt[2] = 0x99
+    assert (await command(dut, bytes(pkt)))["status"] == ST_BAD_VERSION
+
+    pkt = bytearray(build_seal(3, 0, NONCE, b"", b"x"))
+    pkt[3] = 0x7F
+    assert (await command(dut, bytes(pkt)))["status"] == ST_BAD_OPCODE
+
+
+@cocotb.test()
+async def test_inconsistent_lengths(dut):
+    await setup(dut)
+    await command(dut, build_load_key(1, 0, KEY))
+    pkt = bytearray(build_seal(2, 0, NONCE, b"aad", b"message"))
+    pkt[22] = 0xFF          # msg_len low byte, now far past the packet
+    pkt[23] = 0x00
+    rsp = await command(dut, bytes(pkt))
+    assert rsp["status"] == ST_BAD_LENGTH, f"status {rsp['status']}"
+
+
+@cocotb.test()
+async def test_randomised_round_trips(dut):
+    await setup(dut)
+    rng = random.Random(0x0CA0)
+    for i in range(20):
+        key = bytes(rng.getrandbits(8) for _ in range(32))
+        nonce = bytes(rng.getrandbits(8) for _ in range(12))
+        slot = rng.randrange(8)
+        alen = rng.choice([0, 1, 16, 63, 64, 65])
+        mlen = rng.choice([1, 16, 63, 64, 65, 128, 200])
+        aad = bytes(rng.getrandbits(8) for _ in range(alen))
+        msg = bytes(rng.getrandbits(8) for _ in range(mlen))
+        await command(dut, build_load_key(i, slot, key))
+        sealed = await command(dut, build_seal(i, slot, nonce, aad, msg))
+        want_ct, want_tag = aead_encrypt(key, nonce, aad, msg)
+        assert sealed["status"] == ST_OK, f"#{i} seal status"
+        assert sealed["body"][:16] == want_tag, f"#{i} tag"
+        assert sealed["body"][16:] == want_ct, f"#{i} ct"
+        opened = await command(dut, build_open(
+            i, slot, nonce, aad, want_ct, want_tag))
+        assert opened["status"] == ST_OK, f"#{i} open status"
+        assert opened["body"] == msg, f"#{i} plaintext"
