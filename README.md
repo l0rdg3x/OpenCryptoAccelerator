@@ -48,6 +48,8 @@ cd oca
 
 - [SPEC.md](SPEC.md) — project specification: goals, phases, constraints
 - [BOM-MVP.md](BOM-MVP.md) — hardware required for MVP development
+- [Security.md](Security.md) — threat scope, side-channel limits,
+  caller obligations, known limitations
 - [oca/README.md](oca/README.md) — code layout, tests, benchmarks,
   security notes
 - [AGENTS.md](AGENTS.md) — contributor/agent guide: environment rules,
