@@ -22,6 +22,30 @@ half-round-per-cycle ChaCha20 would reach far beyond that and the limit
 would simply move back to Poly1305 — wasted work. One round per cycle is
 the point where the two cores balance.
 
+> **Superseded in part, 2026-08-03, by the measurement of what it
+> built.** The goal held: one round per cycle took the standalone core
+> 28.66 -> 53.11 MHz and the AEAD engine to 37.87 MHz, and one round per
+> cycle is still the right point. The **architecture did not survive the
+> area numbers.** Building `column_round()` and `diagonal_round()` as two
+> datapaths and alternating them cost +799 LUTs standalone, because two
+> sets of adders share nothing and need a 512-bit multiplexer to choose
+> between their results — a cost this plan accepted as inherent and which
+> is not. A diagonal round is a column round applied to a row-rotated
+> state (the standard SIMD diagonalisation), and rotating by a constant
+> is wiring rather than logic.
+>
+> `chacha20.sv` therefore builds **one** column-round datapath and
+> alternates the state register between the plain and the diagonalised
+> frame. It measures **3125 TRELLIS_COMB against this plan's 4368**, at
+> the same Fmax within place & route noise, the same flip-flop count and
+> the same 22 cycles per block: 16 of the 32 adders deleted, exactly
+> -256 CCU2C. `diagonal_round()` no longer exists, so the steps below
+> that name it describe a shape the file no longer has — they are kept as
+> the record of how it got here.
+>
+> Measurement and method: `oca/hw/syn/README.md`, section "After the area
+> pass: one round datapath, and a narrow padding mask".
+
 ## Global Constraints
 
 - Product in English: code, identifiers, comments, commit messages.

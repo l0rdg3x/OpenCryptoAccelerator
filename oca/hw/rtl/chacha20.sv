@@ -12,12 +12,20 @@
  *   data_in/out[i*32+:32]= data word i  (byte 4i is bits [7:0])
  * In other words: drive/read these buses with int.from_bytes(x, "little").
  *
- * Datapath: the 20 rounds alternate a column round and a diagonal round
- * (RFC 8439 2.3.1), one state register shared by both. ROUNDS_PER_CYCLE
- * chooses how many rounds a single cycle covers: it trades the length of
- * the combinational path, and so the achievable clock, against the
- * number of cycles a block costs. Only 1 and 2 are implemented; any
- * other value is rejected at elaboration (see the guard below).
+ * Datapath: a single column-round datapath, 16 adders, serves both
+ * round types. A diagonal round is a column round on a row-rotated
+ * state (RFC 8439 2.3.1; the standard SIMD diagonalisation), and a
+ * rotation by a constant is wiring rather than logic, so the diagonal
+ * round needs no adders of its own. The state register therefore
+ * alternates between the plain and the diagonalised frame instead of
+ * being fed by a 512-bit multiplexer between two round datapaths --
+ * see diagonalise() and the parity note on NROUND.
+ *
+ * ROUNDS_PER_CYCLE chooses how many rounds a single cycle covers: it
+ * trades the length of the combinational path, and so the achievable
+ * clock, against the number of cycles a block costs. Only 1 and 2 are
+ * implemented; any other value is rejected at elaboration (see the
+ * guard below).
  *
  * Latency: 1 (load) + 20/ROUNDS_PER_CYCLE (rounds) + 1 (serialize)
  * cycles, so 22 cycles at the default ROUNDS_PER_CYCLE = 1.
@@ -80,23 +88,29 @@ module chacha20 #(
         end
     endfunction
 
-    // Diagonal round: quarter rounds on the four diagonals.
-    function automatic logic [511:0] diagonal_round(input logic [511:0] c);
+    // Diagonalisation. Rotating row b left by one column, row c by two
+    // and row d by three lands the four diagonals of RFC 8439 2.3.1 on
+    // the four columns: column i of the rotated state is
+    //   (s[i], s[4+(i+1)%4], s[8+(i+2)%4], s[12+(i+3)%4])
+    // which for i = 0..3 enumerates exactly the RFC's four diagonals
+    // (0,5,10,15) (1,6,11,12) (2,7,8,13) (3,4,9,14). So
+    //   column_round(D(s)) == D(diagonal_round(s)),
+    // and a diagonal round costs one column round plus a rewiring.
+    // `back` selects D^-1, which undoes it; row c rotates by two either
+    // way and row a not at all, so only rows b and d cost a multiplexer.
+    function automatic logic [511:0] diagonalise(
+        input logic [511:0] s, input logic back
+    );
         logic [511:0] o;
-        logic [127:0] q;
         begin
-            q = qr(c[ 0*32 +: 32], c[ 5*32 +: 32], c[10*32 +: 32], c[15*32 +: 32]);
-            o[ 0*32 +: 32] = q[127:96]; o[ 5*32 +: 32] = q[95:64];
-            o[10*32 +: 32] = q[ 63:32]; o[15*32 +: 32] = q[31: 0];
-            q = qr(c[ 1*32 +: 32], c[ 6*32 +: 32], c[11*32 +: 32], c[12*32 +: 32]);
-            o[ 1*32 +: 32] = q[127:96]; o[ 6*32 +: 32] = q[95:64];
-            o[11*32 +: 32] = q[ 63:32]; o[12*32 +: 32] = q[31: 0];
-            q = qr(c[ 2*32 +: 32], c[ 7*32 +: 32], c[ 8*32 +: 32], c[13*32 +: 32]);
-            o[ 2*32 +: 32] = q[127:96]; o[ 7*32 +: 32] = q[95:64];
-            o[ 8*32 +: 32] = q[ 63:32]; o[13*32 +: 32] = q[31: 0];
-            q = qr(c[ 3*32 +: 32], c[ 4*32 +: 32], c[ 9*32 +: 32], c[14*32 +: 32]);
-            o[ 3*32 +: 32] = q[127:96]; o[ 4*32 +: 32] = q[95:64];
-            o[ 9*32 +: 32] = q[ 63:32]; o[14*32 +: 32] = q[31: 0];
+            for (int i = 0; i < 4; i++) begin
+                o[( 0 + i)*32 +: 32] = s[( 0 + i)*32 +: 32];
+                o[( 4 + i)*32 +: 32] = back ? s[( 4 + (i + 3) % 4)*32 +: 32]
+                                            : s[( 4 + (i + 1) % 4)*32 +: 32];
+                o[( 8 + i)*32 +: 32] = s[( 8 + (i + 2) % 4)*32 +: 32];
+                o[(12 + i)*32 +: 32] = back ? s[(12 + (i + 1) % 4)*32 +: 32]
+                                            : s[(12 + (i + 3) % 4)*32 +: 32];
+            end
             return o;
         end
     endfunction
@@ -109,6 +123,14 @@ module chacha20 #(
         $fatal(1, "chacha20: ROUNDS_PER_CYCLE must be 1 or 2");
     end
 
+    // NROUND must be EVEN, and not only because RFC 8439 counts rounds in
+    // pairs. At ROUNDS_PER_CYCLE = 1 the register alternates frames -- one
+    // round leaves it diagonalised, the next brings it back -- so it holds
+    // the plain frame at the end only after an even number of rounds, and
+    // the final addition against st_init is defined only in that frame. An
+    // odd NROUND would emit wrong keystream silently: nothing here fails to
+    // elaborate over it. (At ROUNDS_PER_CYCLE = 2 each cycle does both
+    // directions, so a cycle always ends plain.)
     localparam int NROUND = 20;
     localparam int NCYCLE = NROUND / ROUNDS_PER_CYCLE;
 
@@ -158,10 +180,20 @@ module chacha20 #(
                 end
                 S_RUN: begin
                     if (ROUNDS_PER_CYCLE == 2)
-                        st <= diagonal_round(column_round(st));
+                        // Both directions in one cycle: D^-1(CR(D(CR(st))))
+                        // is the RFC's column round followed by its
+                        // diagonal round, exactly as before.
+                        st <= diagonalise(
+                                  column_round(
+                                      diagonalise(column_round(st), 1'b0)),
+                                  1'b1);
                     else
-                        st <= round_cnt[0] ? diagonal_round(st)
-                                           : column_round(st);
+                        // Even rounds hand the state on diagonalised, odd
+                        // rounds return it to the plain frame. The selector
+                        // is a bit of the round counter, never of the data:
+                        // the cycle count and the logic exercised are the
+                        // same for every key, nonce and block.
+                        st <= diagonalise(column_round(st), round_cnt[0]);
                     round_cnt <= round_cnt + 5'd1;
                     if (round_cnt == 5'(NCYCLE - 1))
                         state <= S_FINISH;

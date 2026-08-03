@@ -404,3 +404,199 @@ summary: **this design lands on the target, not above it.** Any real top
 level adds IO and glue at a shared clock, so the margin is more likely
 to shrink than to grow. Replication is still the next step, but it will
 need its own measurement rather than a multiplication of this one.
+
+### After the area pass: one round datapath, and a narrow padding mask
+
+Same device, package, speed grade, seed and 100 MHz constraint. Two
+changes, in two files, both area-only by construction: `chacha20.sv`
+carries **one** round datapath instead of two, and
+`chacha20_poly1305.sv` masks the padding on the 16-byte sub-block
+Poly1305 actually reads instead of on the 512-bit buses feeding it. No
+FSM state and no transition moves in either; `poly1305.sv` is untouched.
+
+This is the first entry in this series that buys area rather than speed.
+Every earlier point that spent LUTs spent them to move the clock or to
+close a hole — +487 for one round per cycle, +514 for the per-byte mask,
++1 for the `in_len` guard, 1002 in total. This one gives back 2683, and
+changes nothing else.
+
+**Why a round datapath could be deleted rather than optimised.** The
+core alternates a column round and a diagonal round, and the
+round-per-cycle rework built both: 32 32-bit adders, plus a 512-bit
+multiplexer choosing which result went back into the state register. But
+a diagonal round *is* a column round — applied to a state whose rows
+have been rotated. This is the standard SIMD diagonalisation, and it is
+an identity rather than an approximation: rotating row b left by one
+column, row c by two and row d by three lands RFC 8439 2.3.1's four
+diagonals (0,5,10,15) (1,6,11,12) (2,7,8,13) (3,4,9,14) on the four
+columns, so `column_round(D(s)) == D(diagonal_round(s))`. Rotating by a
+constant is wiring, not logic. The state register therefore alternates
+between the plain frame and the diagonalised one, a single column-round
+datapath serves both round types, and **16 of the 32 adders and the
+multiplexer that chose between them are gone.** The price is a parity
+obligation, not silicon: the register holds the plain frame only after
+an *even* number of rounds, and the final addition against `st_init` is
+defined only in that frame — which is why `NROUND` must be even for a
+reason beyond the RFC counting rounds in pairs. The module header states
+it, because nothing fails to elaborate over an odd value.
+
+**Why the wide masks could be deleted.** The engine zeroed the bytes
+past `len` of a partial block twice, both times over 512 bits: once on
+the accepted input block, once on the ChaCha20 output on its way into
+the MAC buffer. Every path those masks protected ends in the same place,
+`mac_buf`, whose only consumer is the 16-byte slice handed to Poly1305 —
+so **one mask on the 128-bit sub-block feed covers both**, at a quarter
+of the width and once instead of twice. Only the last sub-block of a
+block whose length is not a multiple of 16 is ever partial. Nothing else
+read the padding: the length accounting adds `in_len`, never data, and
+`out_data` past `out_len` was already unspecified.
+
+That change was made verifiable before it was made. The project
+testbench zero-pads, so it cannot see whether the engine masks its input
+*at all* — with the mask removed entirely, its decrypt tests still pass.
+`hw/sim/test_dirty_pad.py` drives random garbage into the bytes past
+`in_len` and asserts that neither the ciphertext nor the tag moves; it is
+the only test in the repository that can fail on this.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20 (baseline, 2 rounds/cycle) | 3569 | 1417 | 0 | 28.66 MHz |
+| chacha20 (1 round/cycle, two datapaths) | 4368 | 1418 | 0 | 53.11 MHz |
+| chacha20 (1 round/cycle, **one** datapath) | **3125** | 1418 | 0 | 52.09 MHz |
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
+| chacha20_poly1305 (limb Poly1305) | 9579 | 5723 | 20 | 26.10 MHz |
+| chacha20_poly1305 (+ 1 round/cycle) | 10066 | 5724 | 20 | 37.87 MHz |
+| chacha20_poly1305 (+ per-byte mask) | 10580 | 5724 | 20 | 50.08 MHz |
+| chacha20_poly1305 (+ overlapped phases) | 10040 | 5737 | 20 | 52.58 MHz |
+| chacha20_poly1305 (+ in_len guard) | 10041 | 5738 | 20 | 50.17 MHz |
+| chacha20_poly1305 (+ one round datapath) | 8812 | 5738 | 20 | 54.21 MHz |
+| **chacha20_poly1305 (+ sub-block mask, committed)** | **7358** | **5738** | **20** | 53.55 MHz |
+| *chacha20 standalone, for reference* | 3125 | 1418 | 0 | 52.09 MHz |
+
+- **Area: 10041 -> 7358 TRELLIS_COMB, -2683, -26.7%.** The two changes
+  are separable and were measured separately: **-1229** for the round
+  datapath (10041 -> 8812) and **-1454** for the mask (8812 -> 7358).
+  Standalone, the ChaCha20 core goes 4368 -> 3125, **-1243, -28.5%**.
+- **The deleted adders are visible cell for cell.** From yosys `stat` on
+  the top level:
+
+  | netlist | CCU2C | L6MUX21 | LUT4 | PFUMX |
+  |---------|-------|---------|------|-------|
+  | chacha20, two datapaths | 770 | 172 | 2630 | 517 |
+  | chacha20, one datapath | **514** | 168 | 1963 | 373 |
+  | engine, previous committed state | 2085 | 172 | 5037 | 553 |
+  | engine, + one round datapath | 1832 | 168 | 4374 | 417 |
+  | engine, + sub-block mask | **1526** | 168 | 3952 | 549 |
+
+  The standalone core loses **exactly 256 CCU2C**, which is exactly the
+  arithmetic that was deleted: 16 adders x 32 bits, two bits to a CCU2C.
+  Inside the engine the same edit takes 253; the three-cell difference
+  was not chased, and is mapping either side of the module boundary
+  rather than a different amount of arithmetic. The mask edit then takes
+  a further 306 CCU2C and 422 LUT4 — which is worth noting because the
+  earlier rework had already stopped the *mask value* from being one long
+  carry chain: on the reading these cells suggest, the per-byte
+  comparators kept costing carry cells of their own. Not investigated
+  further; the cell counts are the measurement, that sentence is a
+  reading of them.
+- **Flip-flops, multipliers and cycles are all unchanged.** 5738 FF and
+  20 MULT18X18D, bit for bit. Cycles per 64-byte block are **40.0**,
+  measured the same differential way as every earlier point in this
+  series: 227 cycles for a 4-block message, 387 for 8, difference over 4.
+  An AAD block, which never runs ChaCha20, costs the same 40.0 (214 and
+  374 cycles) — the falsifiable check that the MAC FSM still sets the
+  pace. Both figures are identical to the state before this pass, as an
+  edit that moves no FSM state requires.
+- **Fmax: measured over four seeds, because one seed could not settle
+  it.** At seed 1 the engine reads 50.17 -> 53.55 MHz and the standalone
+  core 53.11 -> 52.09 — a gain and a loss, from the same pair of edits,
+  which is the signature of a number that is mostly placement. Seeds 1-4,
+  same device and constraint, area identical on every seed as it must be:
+
+  | design | seed 1 | seed 2 | seed 3 | seed 4 | mean | spread |
+  |--------|--------|--------|--------|--------|------|--------|
+  | chacha20, two datapaths (4368) | 53.11 | 51.89 | 51.32 | 49.69 | 51.50 | 6.9% |
+  | chacha20, one datapath (3125) | 52.09 | 52.93 | 52.88 | 53.12 | **52.76** | 2.0% |
+  | engine, previous state (10041) | 50.17 | 50.81 | 51.26 | 50.64 | 50.72 | 2.2% |
+  | engine, committed (7358) | 53.55 | 52.46 | 53.97 | 51.32 | **52.83** | 5.2% |
+
+  Standalone, the two distributions overlap heavily and the seed-1
+  reading (-1.9%) is the *worst* of four: there is no effect to claim
+  either way. In the engine there is a separation — mean +4.2%, and the
+  four post-pass seeds happen to sit above all four pre-pass ones, though
+  by 0.06 MHz at the closest point. **It is still not a datapath
+  speedup**: the critical path is the same one it was, from `u_chacha.st`
+  back into `u_chacha.st` through the CCU2C carry chains of the four
+  adders of one quarter round (`chacha20.sv` lines 58, 60, 62, 64), and
+  not one entry in nextpnr's report cites `chacha20_poly1305.sv` or
+  `poly1305.sv`. At seed 1 it measures 18.67 ns (7.77 ns logic, 10.90 ns
+  routing) against the previous state's 19.93 ns (8.08 ns logic, 11.85 ns
+  routing) — three quarters of the difference is routing, which is what a
+  design a quarter smaller would be expected to gain. **Recorded as a
+  plausible congestion effect, not as a speed result, and deliberately
+  not built into any throughput claim below**: four seeds and a 2 MHz
+  separation are not enough to promote it, and the honest summary of this
+  pass is still that it bought area.
+
+**What the LUTs buy — and what they do not.** Three engines now take
+3 x 7358 = **22074 of 43848 LUTs, 50.3%**, where the same three took
+30123, **68.7%**, before this pass. That is 8049 LUTs and 18.4 points of
+the device given back.
+
+- **It does not buy a fourth engine.** Multipliers are unchanged at 20
+  per engine, so three engines are 60 of 72 (83%) and a fourth needs
+  80 — more than the device has. That was true before this pass and is
+  true after it. What changed is which budget binds: on LUTs alone four
+  engines would now fit (4 x 7358 = 29432, 67.1%), so for the first time
+  in this series **the multiplier count, not the LUT count, is what caps
+  engine replication**. It caps it at three.
+- **It does not buy throughput.** Cycles per block and multipliers per
+  engine are unchanged, so per-engine throughput moves only with a clock
+  this pass is not claiming. 40 cycles per 64 bytes over the four seeds
+  above is 0.66-0.69 Gbps per engine and **1.97-2.07 Gbps for three** —
+  the same straddle of the >= 2 Gbps MVP target of `SPEC.md` the previous
+  section reported from one seed, now with four behind it. The reading is
+  unchanged: **this design lands on the target, not above it**, and it
+  does so on 50.3% of the LUTs instead of 68.7%.
+- **What it buys is headroom for the parts that do not exist yet.** The
+  GbE MAC, packet buffering, the host interface and the glue of a real
+  top level — none of which is in these numbers, all of which have to
+  share the fabric and the clock. These builds are `--out-of-context`:
+  no IO buffers, no top level, no pin constraints. **50.3% is therefore a
+  floor for three engines, not a budget for the board.** Three engines
+  plus a real top level went from tight to comfortable on paper; it did
+  not become certain, and only a pinned-out top-level build will say.
+
+**How this pass was found, and the bug that nearly shipped with it.**
+Both changes came out of a workflow that put one analyst on each of the
+three files independently. That is what found them — nobody reading the
+wrapper alone would have proposed deleting a ChaCha20 adder. It is also
+how the pass nearly shipped a corrupted tag. Two *other* proposals from
+the same workflow, each correct against the file its author had read,
+broke authentication when applied together: raising `blk_ready` a cycle
+early in `poly1305.sv`, and making `p_blk` combinational in the wrapper.
+Both target the same one-cycle handshake bubble, and each silently
+assumed the *other* side of the handshake kept its signal registered.
+Per-file review cannot see that class of defect by construction, and the
+official-vector suite is not a safety net for it either — a broken
+handshake is a data-dependent failure, not a lint error. The rule it
+leaves behind, for whoever runs the next optimisation pass:
+**proposals from separate analysts are not additive.** A change to one
+side of a handshake invalidates every other proposal touching that
+handshake, and a combination has to be measured as a combination, not
+inferred from its parts.
+
+Build time: **51 s** for the full AEAD build (yosys 3.8 s + nextpnr) and
+**10 s** for standalone `chacha20`, on the same machine at seed 1. Every
+figure in this section was measured while writing it rather than carried
+over. The seed-1 engine build reproduced the committed report exactly;
+the standalone `chacha20` report on disk had to be rebuilt, because it
+predated the RTL change and still showed 4368; and the two intermediate
+points (8812 and 10041 TRELLIS_COMB) were rebuilt from their own commits
+in a throwaway worktree. The seed sweep above is 16 builds — four seeds x
+two designs x two states — and cost under ten minutes in total, which is
+cheap enough that a single-seed Fmax comparison is not worth publishing
+again.
