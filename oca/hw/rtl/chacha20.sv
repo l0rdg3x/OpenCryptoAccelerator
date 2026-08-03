@@ -3,7 +3,7 @@
  * ChaCha20 stream cipher core (RFC 8439 section 2.3/2.4).
  *
  * One 64-byte block per operation: pulse `start` with key/nonce/counter
- * and data_in stable; `done` pulses 12 clock cycles later with data_out
+ * and data_in stable; `done` pulses 22 clock cycles later with data_out
  * valid. The caller increments `counter` between blocks (RFC 8439 2.4).
  *
  * Bus layout (little-endian, matching the RFC's word encoding):
@@ -12,9 +12,22 @@
  *   data_in/out[i*32+:32]= data word i  (byte 4i is bits [7:0])
  * In other words: drive/read these buses with int.from_bytes(x, "little").
  *
- * Latency: 1 (load) + 10 (20 rounds, 2 rounds/cycle) + 1 (serialize) cycles.
+ * Datapath: the 20 rounds alternate a column round and a diagonal round
+ * (RFC 8439 2.3.1), one state register shared by both. ROUNDS_PER_CYCLE
+ * chooses how many rounds a single cycle covers: it trades the length of
+ * the combinational path, and so the achievable clock, against the
+ * number of cycles a block costs. Only 1 and 2 are implemented; any
+ * other value is rejected at elaboration (see the guard below).
+ *
+ * Latency: 1 (load) + 20/ROUNDS_PER_CYCLE (rounds) + 1 (serialize)
+ * cycles, so 22 cycles at the default ROUNDS_PER_CYCLE = 1.
  */
-module chacha20 (
+module chacha20 #(
+    // Rounds computed per cycle. 1 halves the combinational path (22
+    // cycles per block); 2 is the original behaviour (12 cycles) and
+    // suits devices that can clock it. No other value is supported.
+    parameter int ROUNDS_PER_CYCLE = 1
+) (
     input  logic         clk,
     input  logic         rst_n,
     input  logic         start,
@@ -46,12 +59,11 @@ module chacha20 (
         end
     endfunction
 
-    // Column round + diagonal round (2 of the 20 rounds).
-    function automatic logic [511:0] double_round(input logic [511:0] s);
-        logic [511:0] c, o;
+    // Column round: quarter rounds on the four columns (RFC 8439 2.3.1).
+    function automatic logic [511:0] column_round(input logic [511:0] s);
+        logic [511:0] c;
         logic [127:0] q;
         begin
-            // column round
             q = qr(s[ 0*32 +: 32], s[ 4*32 +: 32], s[ 8*32 +: 32], s[12*32 +: 32]);
             c[ 0*32 +: 32] = q[127:96]; c[ 4*32 +: 32] = q[95:64];
             c[ 8*32 +: 32] = q[ 63:32]; c[12*32 +: 32] = q[31: 0];
@@ -64,7 +76,15 @@ module chacha20 (
             q = qr(s[ 3*32 +: 32], s[ 7*32 +: 32], s[11*32 +: 32], s[15*32 +: 32]);
             c[ 3*32 +: 32] = q[127:96]; c[ 7*32 +: 32] = q[95:64];
             c[11*32 +: 32] = q[ 63:32]; c[15*32 +: 32] = q[31: 0];
-            // diagonal round
+            return c;
+        end
+    endfunction
+
+    // Diagonal round: quarter rounds on the four diagonals.
+    function automatic logic [511:0] diagonal_round(input logic [511:0] c);
+        logic [511:0] o;
+        logic [127:0] q;
+        begin
             q = qr(c[ 0*32 +: 32], c[ 5*32 +: 32], c[10*32 +: 32], c[15*32 +: 32]);
             o[ 0*32 +: 32] = q[127:96]; o[ 5*32 +: 32] = q[95:64];
             o[10*32 +: 32] = q[ 63:32]; o[15*32 +: 32] = q[31: 0];
@@ -81,11 +101,22 @@ module chacha20 (
         end
     endfunction
 
+    // NCYCLE divides for any divisor of 20, but the FSM below only ever
+    // composes two rounds in a cycle for the literal 2 and one round
+    // otherwise: any other value would run NCYCLE single rounds and emit
+    // wrong keystream. Stop the build rather than the crypto.
+    if (ROUNDS_PER_CYCLE != 1 && ROUNDS_PER_CYCLE != 2) begin : gen_bad_rounds
+        $fatal(1, "chacha20: ROUNDS_PER_CYCLE must be 1 or 2");
+    end
+
+    localparam int NROUND = 20;
+    localparam int NCYCLE = NROUND / ROUNDS_PER_CYCLE;
+
     typedef enum logic [1:0] {S_IDLE, S_RUN, S_FINISH} fsm_t;
     fsm_t       state;
     logic [511:0] st;       // working state, 16 words
     logic [511:0] st_init;  // snapshot for the final addition
-    logic [3:0]   round_cnt;
+    logic [4:0]   round_cnt;
 
     // "expand 32-byte k" || key || counter || nonce, word-wise
     function automatic logic [511:0] init_state(
@@ -112,7 +143,7 @@ module chacha20 (
             state     <= S_IDLE;
             busy      <= 1'b0;
             done      <= 1'b0;
-            round_cnt <= 4'd0;
+            round_cnt <= 5'd0;
         end else begin
             done <= 1'b0;
             case (state)
@@ -121,14 +152,18 @@ module chacha20 (
                         st        <= init_state(key, nonce, counter);
                         st_init   <= init_state(key, nonce, counter);
                         busy      <= 1'b1;
-                        round_cnt <= 4'd0;
+                        round_cnt <= 5'd0;
                         state     <= S_RUN;
                     end
                 end
                 S_RUN: begin
-                    st        <= double_round(st);
-                    round_cnt <= round_cnt + 4'd1;
-                    if (round_cnt == 4'd9)
+                    if (ROUNDS_PER_CYCLE == 2)
+                        st <= diagonal_round(column_round(st));
+                    else
+                        st <= round_cnt[0] ? diagonal_round(st)
+                                           : column_round(st);
+                    round_cnt <= round_cnt + 5'd1;
+                    if (round_cnt == 5'(NCYCLE - 1))
                         state <= S_FINISH;
                 end
                 S_FINISH: begin

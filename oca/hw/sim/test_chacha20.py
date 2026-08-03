@@ -7,12 +7,15 @@ the same source of truth as the software tests:
   - 2.4.2: ChaCha20 encryption, 114-byte message (2 blocks)
 """
 
+import random
 import re
 from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
+
+from chacha20_model import chacha20_block, chacha20_xor
 
 SRC = Path(__file__).resolve().parents[2] / "tests" / "vectors" / "sources" / "rfc8439.txt"
 
@@ -87,7 +90,9 @@ async def run_block(dut, key: bytes, nonce: bytes, ctr: int, data: bytes) -> byt
     dut.start.value = 1
     await RisingEdge(dut.clk)
     dut.start.value = 0
-    for _ in range(20):
+    # Bound only: the core costs 1 + 20/ROUNDS_PER_CYCLE + 1 cycles, so 22
+    # at the default. Poll wide enough for either setting of the parameter.
+    for _ in range(32):
         await RisingEdge(dut.clk)
         if dut.done.value == 1:
             return int(dut.data_out.value).to_bytes(64, "little")
@@ -141,6 +146,38 @@ async def test_decrypt_roundtrip(dut):
     for blk in range(0, len(ct), 64):
         out += await run_block(dut, key, nonce, ctr + blk // 64, ct[blk:blk + 64])
     assert out[: len(ct)] == pt, "decrypt(encrypt(x)) != x"
+
+
+@cocotb.test()
+async def test_model_matches_official_vectors(dut):
+    """The oracle must reproduce the official vectors before it judges
+    the RTL."""
+    key, nonce, ctr, keystream = VEC["block"]
+    got = chacha20_block(key, ctr, nonce)
+    assert got == keystream, f"2.3.2: model got {got.hex()} want {keystream.hex()}"
+
+    key2, nonce2, ctr2, pt, ct = VEC["enc"]
+    out = b""
+    for blk in range(0, len(pt), 64):
+        chunk = pt[blk:blk + 64]
+        out += chacha20_xor(key2, ctr2 + blk // 64, nonce2, chunk)
+    assert out[: len(pt)] == ct, f"2.4.2: model got {out.hex()} want {ct.hex()}"
+
+
+@cocotb.test()
+async def test_randomised_blocks(dut):
+    await setup(dut)
+    rng = random.Random(0x5EED)      # fixed seed: failures replay
+    for i in range(100):
+        key = bytes(rng.getrandbits(8) for _ in range(32))
+        nonce = bytes(rng.getrandbits(8) for _ in range(12))
+        counter = rng.getrandbits(32)
+        data = bytes(rng.getrandbits(8) for _ in range(64))
+        want = chacha20_xor(key, counter, nonce, data)
+        got = await run_block(dut, key, nonce, counter, data)
+        assert got == want, (
+            f"random #{i}: got {got.hex()} want {want.hex()}\n"
+            f"  key={key.hex()} nonce={nonce.hex()} counter={counter}")
 
 
 VEC = parse_rfc8439()

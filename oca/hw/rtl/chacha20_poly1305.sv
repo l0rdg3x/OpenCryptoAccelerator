@@ -19,11 +19,36 @@
  *
  * An empty message is a single block with in_len=0 and in_last=1.
  *
+ * `in_len` above 64 is illegal: it does not fit the 64-byte datapath and
+ * the MAC FSM cannot terminate such a block (it counts 16-byte
+ * sub-blocks in two bits, and mac_len + 15 wraps in seven). Presenting
+ * one raises `err` instead: the message is abandoned there and then —
+ * `busy` drops, `done` never pulses, no ciphertext or tag is produced —
+ * and `err` stays high until the next `start`, which clears it and
+ * begins a fresh message. A caller that ignores `err` loses the message,
+ * never the engine.
+ *
  * Decryption (dec=1): feed the ciphertext instead of the plaintext;
  * the output stream is the recovered plaintext and the MAC is computed
  * over the input blocks (the ciphertext), as RFC 8439 requires. The
  * caller must compare `tag` with the received tag and discard the
  * plaintext on mismatch.
+ *
+ * Structure: two FSMs joined by a one-block buffer, so the two cores
+ * run at the same time instead of taking turns. The input FSM accepts a
+ * block, runs ChaCha20 over it and emits the ciphertext; the MAC FSM
+ * drains the buffer into Poly1305 sixteen bytes at a time. Block N is
+ * authenticated while block N+1 is encrypted, and a block costs the
+ * slower of the two phases instead of their sum.
+ *
+ * The buffer is one block deep on purpose. `mac_valid` is set by the
+ * input FSM and cleared by `mac_take` from the MAC FSM, and a block is
+ * written only while `buf_free` holds, so a block can never be
+ * overwritten before it has been authenticated. Poly1305 sees the AAD
+ * blocks, then the ciphertext blocks, then the length block, in that
+ * order, because the input FSM fills the buffer in the order it accepts
+ * blocks and the MAC FSM drains it in the order it was filled.
+ * Deepening the buffer would break that argument.
  */
 module chacha20_poly1305 (
     input  logic         clk,
@@ -46,24 +71,38 @@ module chacha20_poly1305 (
     output logic [  6:0] out_len,
     // result
     output logic         done,
-    output logic [127:0] tag
+    output logic [127:0] tag,
+    // sticky: an illegal in_len aborted the message (see header)
+    output logic         err
 );
 
-    typedef enum logic [3:0] {
-        S_IDLE, S_KEY, S_KEYP, S_RUN, S_ENC,
-        S_MAC_W, S_MAC_P, S_LEN, S_LEN_P, S_TAG
-    } fsm_t;
-    fsm_t state;
+    typedef enum logic [2:0] {
+        S_IDLE, S_KEY, S_KEYP, S_ACCEPT, S_ENC, S_WAITBUF, S_FIN
+    } in_fsm_t;
+    in_fsm_t state;
+
+    typedef enum logic [2:0] {
+        S_M_IDLE, S_M_FEED, S_M_NEXT, S_M_LEN, S_M_LENP, S_M_TAG
+    } mac_fsm_t;
+    mac_fsm_t m_state;
 
     logic [255:0] key_r;
     logic [ 95:0] nonce_r;
     logic         dec_r;
     logic [ 31:0] ctr;
     logic [ 63:0] aad_len, ct_len;
-    logic [511:0] src;          // bytes to MAC for the current block
-    logic [  6:0] cur_len;
+    logic [  6:0] cur_len;      // block held by the input FSM
     logic         cur_last;
+    logic         cur_aad;      // block needs no ChaCha20 run
     logic [  1:0] sub_idx;
+
+    // one-block buffer between the two FSMs
+    logic [511:0] mac_buf;      // bytes to MAC (AAD, or ciphertext)
+    logic [  6:0] mac_len;      // valid bytes, 0..64
+    logic         mac_last;     // final block of the whole message
+    logic         mac_valid;    // buffer holds a block to authenticate
+    logic         mac_take;     // MAC FSM has consumed it
+    logic         buf_free;
 
     // chacha20 instance
     logic         c_start, c_busy, c_done;
@@ -87,9 +126,17 @@ module chacha20_poly1305 (
         .data_out(c_data_out)
     );
 
+    // An aborted message leaves poly1305 part-way through a message, and
+    // poly1305 only honours `start` from its idle state: it would keep
+    // the one-time key and the accumulator of the abandoned message and
+    // authenticate the next one with a reused r and s. Hold it in reset
+    // from the abort until the next `start` clears `err`.
+    logic p_rst_n;
+    assign p_rst_n = rst_n && !err;
+
     poly1305 u_poly (
         .clk,
-        .rst_n,
+        .rst_n     (p_rst_n),
         .start     (p_start),
         .blk       (p_blk),
         .last      (p_last),
@@ -106,38 +153,54 @@ module chacha20_poly1305 (
     assign unused_ok = c_busy & p_busy;
     assign tag = p_tag;
 
-    // zero all bytes at index >= len
+    // zero all bytes at index >= len. Built per byte on purpose: a
+    // 512-bit (1 << len*8) - 1 synthesises into one full-width carry
+    // chain, 64 independent 7-bit compares into none.
     function automatic logic [511:0] mask_bytes(
         input logic [511:0] d, input logic [6:0] len
     );
         logic [511:0] m;
         begin
-            if (len >= 7'd64)
-                m = {512{1'b1}};
-            else
-                m = (512'd1 << (len * 8)) - 512'd1;
+            for (int i = 0; i < 64; i++)
+                m[i*8 +: 8] = (7'(i) < len) ? 8'hff : 8'h00;
             return d & m;
         end
     endfunction
 
-    // number of 16-byte poly1305 sub-blocks for cur_len bytes
+    // number of 16-byte poly1305 sub-blocks for the buffered block
     logic [2:0] sub_cnt;
-    always_comb sub_cnt = 3'((cur_len + 7'd15) >> 4);
+    logic       sub_done;
+    always_comb sub_cnt  = 3'((mac_len + 7'd15) >> 4);
+    always_comb sub_done = ({1'b0, sub_idx} == sub_cnt - 3'd1);
 
+    // An illegal block, caught on the cycle it is offered: both FSMs act
+    // on it, so neither is left holding state from the dead message.
+    logic len_bad;
+    always_comb len_bad = (state == S_ACCEPT) && in_valid && (in_len > 7'd64);
+
+    // The buffer is released once its last sub-block has been handed to
+    // poly1305 (p_data_in is registered by then), or straight away for a
+    // zero-length section, which contributes no MAC block.
+    always_comb mac_take = (m_state == S_M_NEXT && sub_done)
+                        || (m_state == S_M_IDLE && mac_valid
+                            && mac_len == 7'd0);
+    always_comb buf_free = !mac_valid || mac_take;
+
+    // Input FSM: accepts blocks, runs ChaCha20, fills the buffer.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state     <= S_IDLE;
             busy      <= 1'b0;
             in_ready  <= 1'b0;
             out_valid <= 1'b0;
-            done      <= 1'b0;
             c_start   <= 1'b0;
             p_start   <= 1'b0;
-            p_blk     <= 1'b0;
-            p_last    <= 1'b0;
+            mac_valid <= 1'b0;
+            err       <= 1'b0;
         end else begin
             out_valid <= 1'b0;
-            done      <= 1'b0;
+            // a write in the same cycle wins: the buffer stays occupied
+            if (mac_take) mac_valid <= 1'b0;
             case (state)
                 S_IDLE: begin
                     if (start) begin
@@ -151,6 +214,7 @@ module chacha20_poly1305 (
                         c_data_in <= 512'd0;
                         c_start   <= 1'b1;
                         busy      <= 1'b1;
+                        err       <= 1'b0;
                         state     <= S_KEY;
                     end
                 end
@@ -165,31 +229,36 @@ module chacha20_poly1305 (
                 S_KEYP: begin
                     p_start  <= 1'b0;
                     in_ready <= 1'b1;
-                    state    <= S_RUN;
+                    state    <= S_ACCEPT;
                 end
-                S_RUN: begin
-                    if (in_valid) begin
-                        in_ready <= 1'b0;
-                        cur_len  <= in_len;
-                        cur_last <= in_last;
-                        sub_idx  <= 2'd0;
+                S_ACCEPT: begin
+                    if (len_bad) begin
+                        err       <= 1'b1;
+                        busy      <= 1'b0;
+                        in_ready  <= 1'b0;
+                        mac_valid <= 1'b0;
+                        state     <= S_IDLE;
+                    end else if (in_valid) begin
+                        in_ready  <= 1'b0;
+                        cur_len   <= in_len;
+                        cur_last  <= in_last;
+                        c_data_in <= mask_bytes(in_data, in_len);
                         if (in_aad) begin
                             aad_len <= aad_len + 64'(in_len);
-                            src     <= mask_bytes(in_data, in_len);
-                            if (in_len == 7'd0) begin
-                                in_ready <= !in_last;
-                                state    <= in_last ? S_LEN : S_RUN;
-                            end else begin
-                                state <= S_MAC_W;
-                            end
+                            cur_aad <= 1'b1;
+                            state   <= S_WAITBUF;
                         end else if (in_len == 7'd0) begin
-                            state <= S_LEN;  // empty-message marker
+                            // empty-message marker: nothing to encrypt
+                            // and nothing more to accept
+                            cur_aad  <= 1'b1;
+                            cur_last <= 1'b1;
+                            state    <= S_WAITBUF;
                         end else begin
                             ct_len    <= ct_len + 64'(in_len);
                             c_counter <= ctr;
                             ctr       <= ctr + 32'd1;
-                            c_data_in <= mask_bytes(in_data, in_len);
                             c_start   <= 1'b1;
+                            cur_aad   <= 1'b0;
                             state     <= S_ENC;
                         end
                     end
@@ -200,57 +269,105 @@ module chacha20_poly1305 (
                         out_valid <= 1'b1;
                         out_data  <= c_data_out;
                         out_len   <= cur_len;
-                        // MAC the ciphertext: our output on encrypt,
-                        // the input block on decrypt (c_data_in is
-                        // already masked to cur_len bytes)
-                        src       <= dec_r ? c_data_in
-                                           : mask_bytes(c_data_out, cur_len);
-                        state     <= S_MAC_W;
+                        state     <= S_WAITBUF;
                     end
                 end
-                S_MAC_W: begin
-                    if (p_blk_ready) begin
-                        p_blk     <= 1'b1;
-                        p_data_in <= src[sub_idx * 128 +: 128];
-                        p_last    <= 1'b0;
-                        state     <= S_MAC_P;
-                    end
-                end
-                S_MAC_P: begin
-                    p_blk <= 1'b0;
-                    if ({1'b0, sub_idx} == sub_cnt - 3'd1) begin
+                S_WAITBUF: begin
+                    if (buf_free) begin
+                        // MAC the ciphertext: our output on encrypt, the
+                        // input block on decrypt (c_data_in is already
+                        // masked to cur_len bytes). AAD is MACed as it
+                        // arrived, so it takes the same path as decrypt.
+                        mac_buf   <= (cur_aad || dec_r)
+                                     ? c_data_in
+                                     : mask_bytes(c_data_out, cur_len);
+                        mac_len   <= cur_len;
+                        mac_last  <= cur_last;
+                        mac_valid <= 1'b1;
                         if (cur_last) begin
-                            state <= S_LEN;
+                            state <= S_FIN;
                         end else begin
                             in_ready <= 1'b1;
-                            state    <= S_RUN;
+                            state    <= S_ACCEPT;
                         end
-                    end else begin
-                        sub_idx <= sub_idx + 2'd1;
-                        state   <= S_MAC_W;
                     end
                 end
-                S_LEN: begin
-                    if (p_blk_ready) begin
-                        p_blk     <= 1'b1;
-                        p_last    <= 1'b1;
-                        p_data_in <= {ct_len, aad_len};
-                        state     <= S_LEN_P;
-                    end
-                end
-                S_LEN_P: begin
-                    p_blk  <= 1'b0;
-                    p_last <= 1'b0;
-                    state  <= S_TAG;
-                end
-                S_TAG: begin
+                S_FIN: begin
+                    // p_done, not done: the engine must be back in
+                    // S_IDLE on the cycle `done` is visible outside
                     if (p_done) begin
-                        done  <= 1'b1;
                         busy  <= 1'b0;
                         state <= S_IDLE;
                     end
                 end
                 default: state <= S_IDLE;
+            endcase
+        end
+    end
+
+    // MAC FSM: drains the buffer into poly1305, then the length block.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            m_state <= S_M_IDLE;
+            p_blk   <= 1'b0;
+            p_last  <= 1'b0;
+            done    <= 1'b0;
+        end else if (len_bad) begin
+            // poly1305 goes into reset on this same edge, so a half-fed
+            // block here would wait on a blk_ready that never returns
+            m_state <= S_M_IDLE;
+            p_blk   <= 1'b0;
+            p_last  <= 1'b0;
+            done    <= 1'b0;
+        end else begin
+            done <= 1'b0;
+            case (m_state)
+                S_M_IDLE: begin
+                    sub_idx <= 2'd0;
+                    if (mac_valid) begin
+                        if (mac_len == 7'd0)
+                            m_state <= mac_last ? S_M_LEN : S_M_IDLE;
+                        else
+                            m_state <= S_M_FEED;
+                    end
+                end
+                S_M_FEED: begin
+                    if (p_blk_ready) begin
+                        p_blk     <= 1'b1;
+                        p_last    <= 1'b0;
+                        p_data_in <= mac_buf[sub_idx * 128 +: 128];
+                        m_state   <= S_M_NEXT;
+                    end
+                end
+                S_M_NEXT: begin
+                    p_blk <= 1'b0;
+                    if (sub_done) begin
+                        m_state <= mac_last ? S_M_LEN : S_M_IDLE;
+                    end else begin
+                        sub_idx <= sub_idx + 2'd1;
+                        m_state <= S_M_FEED;
+                    end
+                end
+                S_M_LEN: begin
+                    if (p_blk_ready) begin
+                        p_blk     <= 1'b1;
+                        p_last    <= 1'b1;
+                        p_data_in <= {ct_len, aad_len};
+                        m_state   <= S_M_LENP;
+                    end
+                end
+                S_M_LENP: begin
+                    p_blk   <= 1'b0;
+                    p_last  <= 1'b0;
+                    m_state <= S_M_TAG;
+                end
+                S_M_TAG: begin
+                    if (p_done) begin
+                        done    <= 1'b1;
+                        m_state <= S_M_IDLE;
+                    end
+                end
+                default: m_state <= S_M_IDLE;
             endcase
         end
     end

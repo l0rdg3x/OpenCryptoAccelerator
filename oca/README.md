@@ -3,27 +3,59 @@
 ## Phase 2: FPGA cores (in progress)
 
 - `hw/rtl/chacha20.sv` — ChaCha20 stream cipher core (RFC 8439):
-  one 64-byte block per `start` pulse, 12-cycle latency
-  (2 rounds/cycle), little-endian bus layout documented in the header.
+  one 64-byte block per `start` pulse, little-endian bus layout
+  documented in the header. The 20 rounds alternate a column round and a
+  diagonal round over one state register; `ROUNDS_PER_CYCLE` chooses how
+  many rounds a cycle covers, trading combinational path against cycle
+  count. At the default 1 a block costs 22 cycles; 2 restores the
+  original 12 cycles and its longer path. Only those two values are
+  implemented, and any other one fails elaboration rather than emitting
+  a core that runs too few rounds.
 - `hw/rtl/poly1305.sv` — Poly1305 one-time authenticator (RFC 8439):
-  `start` loads the one-time key, then 16-byte blocks via `blk`/`last`,
-  3 cycles per block. r and s must be single-use (see header).
+  `start` loads the one-time key, then 16-byte blocks via `blk`/`last`.
+  26-bit limb datapath — the accumulator and r are held as five 26-bit
+  digits and the mod 2^130-5 reduction is folded into the accumulation,
+  so no stage carries a 130x130 multiply. A block costs
+  4 + ceil(5/`ROWS_PER_CYCLE`) cycles and uses 5 x `ROWS_PER_CYCLE`
+  multiply operators: at the default `ROWS_PER_CYCLE = 1` that is
+  9 cycles and 5 multiplies (20 ECP5 MULT18X18D), rising to 5 cycles
+  and 25 multiplies at `ROWS_PER_CYCLE = 5`. Latency is independent of
+  the data. r and s must be single-use (see header).
 - `hw/rtl/chacha20_poly1305.sv` — AEAD_CHACHA20_POLY1305 engine
   (RFC 8439 2.8) combining the two cores: derives the Poly1305 key
   internally (ChaCha20 block, counter 0), encrypts with counter 1+,
   MACs aad‖pad‖ct‖pad‖le64(|aad|)‖le64(|ct|). Streaming interface:
   64-byte input blocks (AAD then plaintext), ciphertext blocks out,
   then the tag. `dec=1` decrypts: MACs the input (ciphertext) blocks,
-  caller compares the tag.
+  caller compares the tag. `in_len` above 64 is illegal and raises the
+  sticky `err` output, which abandons the message rather than letting a
+  malformed length stall the engine.
+- `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
+  arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
   same `tests/vectors/sources/rfc8439.txt` as the software tests
-  (2.3.2 block function, 2.4.2 two-block encryption, decrypt round-trip).
-- `hw/sim/test_poly1305.py` — 2.5.2 (partial final block) + all four
-  A.3 MAC vectors (zero key, r=0, s=0, general case).
+  (2.3.2 block function, 2.4.2 two-block encryption, decrypt
+  round-trip), the model checked against those vectors before it is
+  trusted, then 100 randomised blocks with the counter randomised over
+  its full 32 bits.
+- `hw/sim/poly1305_model.py` — Poly1305 reference model (plain integer
+  arithmetic from RFC 8439 2.5.1) and the RFC vector parser shared with
+  the testbench.
+- `hw/sim/test_poly1305.py` — the model checked against the official
+  vectors before it is trusted, then 2.5.2 (partial final block) and all
+  four A.3 MAC vectors (zero key, r=0, s=0, general case) against the
+  RTL, digit-boundary and all-ff edge cases, and 200 randomised messages
+  judged by the model.
 - `hw/sim/test_chacha20_poly1305.py` — 2.8.2 encryption, A.5 decryption,
-  2.8.2 decrypt round-trip.
+  2.8.2 decrypt round-trip, the AEAD model checked against both official
+  vectors before it is trusted, then 40 randomised encryptions and 40
+  randomised decryptions judged by it, over AAD and message lengths
+  chosen around the 64-byte block and 16-byte MAC boundaries.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
+- `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
+  project-local yosys and nextpnr-ecp5; see `hw/syn/README.md` for the
+  flow and the first results on the LFE5U-45F.
 
 Requirements: `../tools/verilator` built, `oca/.venv` with cocotb
 (installed from cocotb git master — release 2.0.1 does not support
@@ -35,8 +67,26 @@ Python 3.14).
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 ```
 
-Current status: chacha20 3/3 tests pass, poly1305 5/5 vectors pass,
-AEAD 3/3 tests pass; `verilator --lint-only -Wall` clean on all cores.
+Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
+6/6 tests pass; `verilator --lint-only -Wall` clean on all cores.
+Four reworks are done. The Poly1305 limb rework took the AEAD engine
+from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and more
+than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
+ChaCha20 round-per-cycle rework then raised its standalone Fmax
+28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
+26.10 -> 37.87 MHz. Rebuilding the wrapper's `mask_bytes()` per byte
+instead of as a 512-bit subtract — which had become the critical path —
+took the engine to 50.08 MHz, level with the baseline's throughput at
+last. Splitting the AEAD FSM in two, joined by a one-block buffer, then
+overlapped the phases: block N is authenticated while block N+1 is
+encrypted, so a 64-byte block costs **40 cycles instead of 57**
+(measured in simulation) for -540 LUTs and +13 flip-flops. At 52.58 MHz
+that is **~0.67 Gbps, +42% on the ~0.47 Gbps original baseline** and on
+20 multipliers instead of 65 — the first point in the series where the
+engine is ahead of where it started. The critical path is inside
+`chacha20.sv`, within 1% of that core standalone. Next: replicate the
+engine — three fit on an LFE5U-45F for ~2.0 Gbps aggregate
+(`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend
 

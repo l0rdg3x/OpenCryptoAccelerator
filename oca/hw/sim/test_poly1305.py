@@ -3,77 +3,21 @@
 
 Vectors parsed from tests/vectors/sources/rfc8439.txt:
   - 2.5.2: 34-byte message, exercises the partial final block
-  - A.3:   full appendix vector set (includes r=0 and s=0 edge cases)
+  - A.3 #1-4: full-message vectors (includes r=0 and s=0 edge cases)
+  - A.3 #5-11: partial-reduction edge cases the RFC authors wrote to
+    break 130-bit partial-reduction datapaths (exact 2^130-5 results,
+    131-bit intermediate/final reduction results, s-overflow, ...)
 """
 
-import re
-from pathlib import Path
+import random
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-SRC = Path(__file__).resolve().parents[2] / "tests" / "vectors" / "sources" / "rfc8439.txt"
+from poly1305_model import parse_rfc8439, poly1305_tag
 
-
-def _section(text: str, start: str, end: str) -> str:
-    m = re.search(rf"(?ms)^{re.escape(start)}.*?^(?={re.escape(end)})", text)
-    assert m, f"section {start!r}..{end!r} not found"
-    return m.group(0)
-
-
-def _colonhex_after(flat: str, marker: str) -> bytes:
-    i = flat.index(marker) + len(marker)
-    m = re.match(r"[()\s0-9a-f:]+", flat[i:])
-    assert m, f"no colon-hex after {marker!r}"
-    s = re.sub(r"[^0-9a-f:]", "", m.group(0)).strip(":")
-    return bytes(int(b, 16) for b in s.split(":"))
-
-
-def _hexdumps(sec: str) -> list[bytes]:
-    # at most 16 bytes per line: the ASCII gutter can start with
-    # hex-looking characters (e.g. 'ed an "IETF Cont') and must not
-    # be captured
-    runs, cur = [], []
-    for line in sec.splitlines():
-        m = re.match(r"^\s*\d{3}\s+((?:[0-9a-f]{2}\s+){1,16})", line)
-        if m:
-            cur.extend(int(b, 16) for b in m.group(1).split())
-        elif cur:
-            runs.append(bytes(cur))
-            cur = []
-    if cur:
-        runs.append(bytes(cur))
-    return runs
-
-
-def parse_rfc8439() -> list[tuple[str, bytes, bytes, bytes]]:
-    """Returns [(name, key32, msg, tag16), ...]."""
-    text = SRC.read_text()
-    vecs = []
-
-    sec = _section(text, "2.5.2.", "2.6.")
-    flat = " ".join(sec.split())
-    key = _colonhex_after(flat, "o Key Material:")
-    tag = _colonhex_after(flat, "Tag:")
-    (msg,) = _hexdumps(sec)
-    assert len(key) == 32 and len(tag) == 16 and len(msg) == 34
-    vecs.append(("rfc8439-2.5.2", key, msg, tag))
-
-    sec = _section(text, "A.3.", "A.4.")
-    parts = re.split(r"Test Vector #(\d+):", sec)
-    # parts = [pre, "1", body1, "2", body2, ...]
-    for i in range(1, len(parts), 2):
-        num, body = parts[i], parts[i + 1]
-        if "Text to MAC" not in body:
-            continue  # #5-#8 are ChaCha20 key-generation vectors, not MAC
-        dumps = _hexdumps(body)
-        assert len(dumps) == 3, f"A.3 vector #{num}: expected 3 hexdumps"
-        k, m, t = dumps
-        assert len(k) == 32 and len(t) == 16, f"A.3 vector #{num}: bad lengths"
-        vecs.append((f"rfc8439-A.3-{num}", k, m, t))
-
-    return vecs
+VECS = parse_rfc8439()
 
 
 async def run_mac(dut, key: bytes, msg: bytes) -> bytes:
@@ -87,7 +31,7 @@ async def run_mac(dut, key: bytes, msg: bytes) -> bytes:
     for off in range(0, len(msg), 16):
         chunk = msg[off:off + 16]
         is_last = off + 16 >= len(msg)
-        for _ in range(20):
+        for _ in range(64):
             if dut.blk_ready.value == 1:
                 break
             await RisingEdge(dut.clk)
@@ -101,7 +45,7 @@ async def run_mac(dut, key: bytes, msg: bytes) -> bytes:
         dut.last.value = 0
         await RisingEdge(dut.clk)
 
-    for _ in range(20):
+    for _ in range(64):
         if dut.done.value == 1:
             return int(dut.tag.value).to_bytes(16, "little")
         await RisingEdge(dut.clk)
@@ -132,4 +76,55 @@ async def test_all_vectors(dut):
         dut._log.info(f"{name}: OK ({len(msg)} bytes)")
 
 
-VECS = parse_rfc8439()
+@cocotb.test()
+async def test_model_matches_official_vectors(dut):
+    """The oracle must reproduce every official vector before it is
+    trusted to judge the RTL."""
+    for name, key, msg, tag in VECS:
+        got = poly1305_tag(key, msg)
+        assert got == tag, f"{name}: model got {got.hex()} want {tag.hex()}"
+    assert len(VECS) == 12, f"expected 12 official vectors, parsed {len(VECS)}"
+
+
+def edge_case_messages() -> list[tuple[str, bytes, bytes]]:
+    """(name, key, msg) triples aimed at 26-bit digit carries."""
+    k_ff = b"\xff" * 32
+    k_mix = bytes(range(32))
+    cases = [
+        ("all-ff-1blk", k_ff, b"\xff" * 16),
+        ("all-ff-4blk", k_ff, b"\xff" * 64),
+        ("all-ff-partial", k_ff, b"\xff" * 17),
+        ("one-byte", k_mix, b"\x01"),
+        ("fifteen-bytes", k_mix, b"\xff" * 15),
+        ("digit-boundary", k_mix, (1 << 26).to_bytes(16, "little")),
+        ("high-bit", k_mix, (1 << 127).to_bytes(16, "little")),
+        ("zeros", k_mix, bytes(16)),
+        ("r-zero", bytes(16) + b"\xaa" * 16, b"\xff" * 32),
+        ("s-zero", b"\xaa" * 16 + bytes(16), b"\xff" * 32),
+    ]
+    return cases
+
+
+@cocotb.test()
+async def test_edge_cases(dut):
+    await setup(dut)
+    for name, key, msg in edge_case_messages():
+        want = poly1305_tag(key, msg)
+        got = await run_mac(dut, key, msg)
+        assert got == want, f"{name}: got {got.hex()} want {want.hex()}"
+        dut._log.info(f"{name}: OK ({len(msg)} bytes)")
+
+
+@cocotb.test()
+async def test_randomised(dut):
+    await setup(dut)
+    rng = random.Random(0xC0FFEE)   # fixed seed: failures are reproducible
+    for i in range(200):
+        key = bytes(rng.getrandbits(8) for _ in range(32))
+        n = rng.choice([1, 15, 16, 17, 31, 32, 33, 64, 129])
+        msg = bytes(rng.getrandbits(8) for _ in range(n))
+        want = poly1305_tag(key, msg)
+        got = await run_mac(dut, key, msg)
+        assert got == want, (
+            f"random #{i} ({n} bytes): got {got.hex()} want {want.hex()}\n"
+            f"  key={key.hex()}\n  msg={msg.hex()}")
