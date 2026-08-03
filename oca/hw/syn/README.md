@@ -296,9 +296,12 @@ authenticated while block N+1 is encrypted. `chacha20.sv` and
   | + overlapped phases | 52.58 MHz | 40 | **~0.67 Gbps** |
 
   That is **+50% on the previous state and +42% on the original
-  baseline**, on 20 multipliers instead of 65. Three of the four reworks
-  bought clock (26.77 -> 52.58 MHz, +96%) while paying cycles; this one
-  gives cycles back, and it is the one that puts the engine ahead. The
+  baseline**, on 20 multipliers instead of 65. The three reworks before
+  this one took the clock from 26.77 to 50.08 MHz (+87%) while paying
+  cycles — two of them moved it, the limb datapath spent its gain on
+  multipliers instead; this one gives cycles back, and it is the one
+  that puts the engine ahead. The last 50.08 -> 52.58 MHz is noise, as
+  the Fmax bullet below says, and is not part of that +87%. The
   cycle count is still above the baseline's 29 — the reworked Poly1305
   costs 9 cycles per 16-byte block instead of 3, and no amount of
   overlapping hides that — but the clock now more than covers it.

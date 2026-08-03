@@ -52,10 +52,17 @@ Hardware accelerator for:
   of the cores (2026-08-03) showed it is out of reach on the LFE5U-45F
   without architectural work well beyond the MVP scope: one AEAD engine
   took 90% of the device multipliers at 26.77 MHz, and even after the
-  planned datapath rework the device holds roughly three engines for an
-  estimated ~4 Gbps. See `docs/design/2026-08-03-poly1305-datapath.md`.
-  On the MVP board the figure would in any case only be observable in
-  simulation, the host link being GbE.
+  datapath reworks the device holds roughly three engines for an
+  estimated ~2 Gbps aggregate. That estimate now rests on the
+  measured Fmax of the reworked engine — 52.58 MHz at 40 cycles per
+  64-byte block, so ~0.67 Gbps each — and no longer, as the first
+  version of it did, on both cores reaching a 100 MHz target they did
+  not reach. It remains an estimate: three engines have not been placed
+  together, and only the multiplier budget is a hard figure. See
+  `oca/hw/syn/README.md` for the measurements and
+  `docs/design/2026-08-03-poly1305-datapath.md` for the earlier
+  projection. On the MVP board the figure would in any case only be
+  observable in simulation, the host link being GbE.
 - Declared note: v1 end-to-end throughput is limited by the host
   interface (GbE); host-facing throughput scales up in later phases.
 - Final OCA-50 board: 50 Gbps aggregate multi-core/multi-session, with

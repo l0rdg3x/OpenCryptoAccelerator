@@ -83,7 +83,7 @@ RTL (Phase 2), from `oca/`:
 ```sh
 .venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
-.venv/bin/python hw/sim/run_chacha20_poly1305.py  # 6/6 pass
+.venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 ```
 
 Lint (must stay clean, `-Wall`):
