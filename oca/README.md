@@ -5,12 +5,16 @@
 - `hw/rtl/chacha20.sv` — ChaCha20 stream cipher core (RFC 8439):
   one 64-byte block per `start` pulse, little-endian bus layout
   documented in the header. The 20 rounds alternate a column round and a
-  diagonal round over one state register; `ROUNDS_PER_CYCLE` chooses how
-  many rounds a cycle covers, trading combinational path against cycle
-  count. At the default 1 a block costs 22 cycles; 2 restores the
-  original 12 cycles and its longer path. Only those two values are
-  implemented, and any other one fails elaboration rather than emitting
-  a core that runs too few rounds.
+  diagonal round, but only one round datapath is built: a diagonal round
+  is a column round on a row-rotated state, and rotating by a constant
+  is wiring, so the state register alternates between the plain and the
+  diagonalised frame instead of a 512-bit multiplexer choosing between
+  two sets of adders. `ROUNDS_PER_CYCLE` chooses how many rounds a cycle
+  covers, trading combinational path against cycle count. At the default
+  1 a block costs 22 cycles; 2 restores the original 12 cycles and its
+  longer path. Only those two values are implemented, and any other one
+  fails elaboration rather than emitting a core that runs too few
+  rounds.
 - `hw/rtl/poly1305.sv` — Poly1305 one-time authenticator (RFC 8439):
   `start` loads the one-time key, then 16-byte blocks via `blk`/`last`.
   26-bit limb datapath — the accumulator and r are held as five 26-bit
