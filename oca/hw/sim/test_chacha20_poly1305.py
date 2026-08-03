@@ -7,12 +7,15 @@ of truth as the software tests:
   - A.5:   AEAD decryption example (265-byte ciphertext, 12-byte AAD)
 """
 
+import random
 import re
 from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
+
+from aead_model import aead_decrypt, aead_encrypt
 
 SRC = Path(__file__).resolve().parents[2] / "tests" / "vectors" / "sources" / "rfc8439.txt"
 
@@ -180,6 +183,69 @@ async def test_roundtrip(dut):
     assert got_pt == pt, "decrypt(encrypt(x)) != x"
     assert got_tag == tag, "tag mismatch on decrypt direction"
     dut._log.info("rfc8439-2.8.2 round-trip: OK")
+
+
+@cocotb.test()
+async def test_model_matches_official_vectors(dut):
+    """The oracle must reproduce both official vectors before it judges
+    the RTL."""
+    key, nonce, aad, pt, ct, tag = VEC["enc"]
+    got_ct, got_tag = aead_encrypt(key, nonce, aad, pt)
+    assert got_ct == ct, f"2.8.2 ct: {got_ct.hex()} != {ct.hex()}"
+    assert got_tag == tag, f"2.8.2 tag: {got_tag.hex()} != {tag.hex()}"
+
+    key, nonce, aad, pt, ct, tag = VEC["dec"]
+    got_pt, got_tag = aead_decrypt(key, nonce, aad, ct)
+    assert got_pt == pt, f"A.5 pt: {got_pt.hex()} != {pt.hex()}"
+    assert got_tag == tag, f"A.5 tag: {got_tag.hex()} != {tag.hex()}"
+
+
+@cocotb.test()
+async def test_randomised_encrypt(dut):
+    """Randomised plaintext/AAD lengths around the 64-byte block and
+    16-byte MAC boundaries, checked against the reference model."""
+    await setup(dut)
+    rng = random.Random(0xA11CE)      # fixed seed: failures replay
+    for i in range(40):
+        key = bytes(rng.getrandbits(8) for _ in range(32))
+        nonce = bytes(rng.getrandbits(8) for _ in range(12))
+        # lengths chosen around the 64-byte block and 16-byte MAC
+        # boundaries, where padding and partial blocks interact
+        alen = rng.choice([0, 1, 12, 15, 16, 17, 64, 65])
+        plen = rng.choice([1, 15, 16, 63, 64, 65, 127, 128, 130])
+        aad = bytes(rng.getrandbits(8) for _ in range(alen))
+        pt = bytes(rng.getrandbits(8) for _ in range(plen))
+        want_ct, want_tag = aead_encrypt(key, nonce, aad, pt)
+        got_ct, got_tag = await run_aead(dut, key, nonce, aad, pt)
+        assert got_ct == want_ct, (
+            f"random enc #{i} (aad={alen} pt={plen}): ct mismatch\n"
+            f"  got  {got_ct.hex()}\n  want {want_ct.hex()}")
+        assert got_tag == want_tag, (
+            f"random enc #{i} (aad={alen} pt={plen}): tag "
+            f"{got_tag.hex()} != {want_tag.hex()}")
+
+
+@cocotb.test()
+async def test_randomised_decrypt(dut):
+    """Randomised ciphertext/AAD lengths, including lengths that are not
+    a multiple of 64: the testbench zero-pads short input blocks, which
+    makes masking the *input* a no-op on the encrypt path, so only the
+    decrypt direction exercises an off-by-one on the input mask."""
+    await setup(dut)
+    rng = random.Random(0xDEC0DE)
+    for i in range(40):
+        key = bytes(rng.getrandbits(8) for _ in range(32))
+        nonce = bytes(rng.getrandbits(8) for _ in range(12))
+        alen = rng.choice([0, 12, 16, 17, 64])
+        clen = rng.choice([1, 16, 63, 64, 65, 128, 130])
+        aad = bytes(rng.getrandbits(8) for _ in range(alen))
+        ct = bytes(rng.getrandbits(8) for _ in range(clen))
+        want_pt, want_tag = aead_decrypt(key, nonce, aad, ct)
+        got_pt, got_tag = await run_aead(dut, key, nonce, aad, ct, dec=True)
+        assert got_pt == want_pt, f"random dec #{i}: plaintext mismatch"
+        assert got_tag == want_tag, (
+            f"random dec #{i} (aad={alen} ct={clen}): tag "
+            f"{got_tag.hex()} != {want_tag.hex()}")
 
 
 VEC = parse_rfc8439()
