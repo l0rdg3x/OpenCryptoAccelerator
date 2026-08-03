@@ -3,8 +3,12 @@
 ## Phase 2: FPGA cores (in progress)
 
 - `hw/rtl/chacha20.sv` — ChaCha20 stream cipher core (RFC 8439):
-  one 64-byte block per `start` pulse, 12-cycle latency
-  (2 rounds/cycle), little-endian bus layout documented in the header.
+  one 64-byte block per `start` pulse, little-endian bus layout
+  documented in the header. The 20 rounds alternate a column round and a
+  diagonal round over one state register; `ROUNDS_PER_CYCLE` chooses how
+  many rounds a cycle covers, trading combinational path against cycle
+  count. At the default 1 a block costs 22 cycles; 2 restores the
+  original 12 cycles and its longer path.
 - `hw/rtl/poly1305.sv` — Poly1305 one-time authenticator (RFC 8439):
   `start` loads the one-time key, then 16-byte blocks via `blk`/`last`.
   26-bit limb datapath — the accumulator and r are held as five 26-bit
@@ -22,9 +26,14 @@
   64-byte input blocks (AAD then plaintext), ciphertext blocks out,
   then the tag. `dec=1` decrypts: MACs the input (ciphertext) blocks,
   caller compares the tag.
+- `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
+  arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
   same `tests/vectors/sources/rfc8439.txt` as the software tests
-  (2.3.2 block function, 2.4.2 two-block encryption, decrypt round-trip).
+  (2.3.2 block function, 2.4.2 two-block encryption, decrypt
+  round-trip), the model checked against those vectors before it is
+  trusted, then 100 randomised blocks with the counter randomised over
+  its full 32 bits.
 - `hw/sim/poly1305_model.py` — Poly1305 reference model (plain integer
   arithmetic from RFC 8439 2.5.1) and the RFC vector parser shared with
   the testbench.
@@ -51,14 +60,20 @@ Python 3.14).
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 ```
 
-Current status: chacha20 3/3 tests pass, poly1305 4/4 tests pass, AEAD
+Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
 3/3 tests pass; `verilator --lint-only -Wall` clean on all cores.
-The Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
-multipliers (90% -> 28% of an LFE5U-45F) and more than doubled the
-standalone Poly1305 Fmax (22.94 -> 52.68 MHz). AEAD Fmax is unchanged
-at 26.10 MHz (within place & route noise) and a 64-byte block went from
-29 to 47 cycles, so throughput dropped ~40% to ~0.28 Gbps: the critical
-path moved into `chacha20.sv`, which is the next core to rework
+Two datapath reworks are done. The Poly1305 limb rework took the AEAD
+engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
+more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz).
+The ChaCha20 round-per-cycle rework then raised its standalone Fmax
+28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
+26.10 -> 37.87 MHz (+41% over the 26.77 MHz baseline). A 64-byte block
+costs 57 cycles, measured in simulation, so throughput is ~0.34 Gbps:
+above the ~0.28 Gbps of the previous state but still 28% below the
+~0.47 Gbps baseline, because the cycle count grew faster than the
+clock. The critical path is now in neither core but in the AEAD
+wrapper's `mask_bytes()` (a 512-bit subtract), and the two phases still
+run strictly in sequence — overlapping them is the next step
 (`hw/syn/README.md`).
 
 ## Phase 1: abstract API + software backend

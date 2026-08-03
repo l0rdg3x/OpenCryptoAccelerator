@@ -127,3 +127,79 @@ off.
 Router runtime collapsed with the multiplier count: the full AEAD build
 (yosys + nextpnr) now takes **1 min 44 s** on the dev machine where the
 baseline needed ~38 minutes, and standalone `poly1305` takes 15 s.
+
+### After the ChaCha20 round-per-cycle rework
+
+Same device, package, speed grade, seed and 100 MHz constraint.
+`chacha20.sv` now computes one round per cycle (`ROUNDS_PER_CYCLE = 1`,
+22 cycles per block instead of 12): `double_round()` is split into
+`column_round()` and `diagonal_round()`, and the FSM alternates them.
+`poly1305.sv` keeps the limb datapath; `chacha20_poly1305.sv` is
+untouched.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | Fmax |
+|--------|--------------|------------|------------|------|
+| chacha20 (baseline, 2 rounds/cycle) | 3569 | 1417 | 0 | 28.66 MHz |
+| chacha20 (1 round/cycle) | 4368 | 1418 | 0 | **53.11 MHz** |
+| chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
+| chacha20_poly1305 (limb Poly1305) | 9579 | 5723 | 20 | 26.10 MHz |
+| chacha20_poly1305 (limb + 1 round/cycle) | 10066 | 5724 | **20** | **37.87 MHz** |
+
+- **ChaCha20 Fmax: target met.** 28.66 -> 53.11 MHz, +85%, far outside
+  the noise band — and within 1% of the reworked Poly1305's 52.68 MHz.
+  The two cores are now balanced, which is the point the plan aimed at.
+  Its critical path is 18.83 ns (8.26 ns logic, 10.56 ns routing), from
+  the state register `st` back into `st`, through 45 CCU2C carry stages
+  belonging to the four adders of one quarter round (`chacha20.sv` lines
+  49, 51, 53, 55) and a final 2:1 multiplexer. One round of logic
+  between two registers, which is what the rework set out to build.
+- **Area: +799 LUTs standalone (+22%), +487 in the AEAD engine (+5%),
+  and exactly one flip-flop.** Two rounds per cycle chained one round
+  into the next, so the two round functions shared no logic and needed
+  no selection; one round per cycle keeps both as separate logic and
+  adds a 512-bit multiplexer in front of the state register. The extra
+  flip-flop is the fifth bit of `round_cnt`, which now counts to 20
+  instead of 10. Multipliers unchanged at 20.
+- **AEAD Fmax: 26.10 -> 37.87 MHz, +45%**, and +41% over the 26.77 MHz
+  baseline. Both are far outside the place & route noise band.
+- **The critical path moved to a third place, and it is in neither
+  core.** It is now 26.41 ns (18.87 ns logic, 7.54 ns routing), from the
+  wrapper's `c_data_in` register to its `src` register. Nothing on it
+  belongs to `u_chacha` or `u_poly`: every one of its 224 carry stages
+  is attributed to `chacha20_poly1305.sv:118`, the mask expression
+  `m = (512'd1 << (len * 8)) - 512'd1` in `mask_bytes()`, whose 512-bit
+  subtract becomes one full-width CCU2C ripple-carry chain. That path
+  was always there — it only became the longest one once both cores got
+  out of the way.
+- **Throughput: up on the previous state, still below the baseline.**
+  Measured the same way as before (the difference between an 8-block and
+  a 4-block message, over 4, so start-up, key derivation, the length
+  block and the tag cancel): 276 cycles for 4 blocks, 504 for 8, so a
+  steady-state 64-byte block costs **57 cycles**, against 47 after the
+  Poly1305 rework and 29 at the baseline. At the measured Fmax that is
+  37.87 MHz x 64 B / 57 = **~0.34 Gbps**, against ~0.28 Gbps for the
+  previous state (+20%) and ~0.47 Gbps for the original baseline
+  (**-28%**). **The engine is faster than it was, and still slower than
+  where it started.** Fmax has gained 41% over the baseline; the cycles
+  per block have grown 97% (29 -> 57) across the two reworks, and that
+  is the larger number.
+
+Where that leaves the engine: it is no longer DSP-bound (20 of 72
+multipliers), it is no longer clock-bound at ~26 MHz, and neither core
+owns the critical path any more. What limits it now is the schedule. The
+AEAD FSM runs the two phases of a block strictly in sequence — `S_ENC`
+waits for `c_done`, only then does `S_MAC_W`/`S_MAC_P` walk the four
+16-byte sub-blocks — so a block costs 22 + 4 x 9 = 58 cycles, and the
+57 measured is one less because `S_MAC_P` raises `in_ready` on the last
+sub-block. Poly1305 is idle for the whole ChaCha20 phase and ChaCha20 is
+idle for the whole MAC phase, yet the MAC of block N only needs that
+block's ciphertext. Overlapping the two phases is the next step and is
+where the remaining factor towards the MVP target (saturate the GbE host
+link with margin) has to come from. The wrapper's `mask_bytes()` path
+and `ROWS_PER_CYCLE` are cheaper follow-ups, worth spending once the
+schedule is what is being paid for.
+
+Build time for this configuration, measured on the dev machine with
+nothing else running: **1 min 52 s** for the full AEAD build (yosys +
+nextpnr), 13 s for standalone `chacha20`. Both builds were run twice and
+returned identical area and Fmax, as the fixed seed requires.
