@@ -47,9 +47,20 @@ DESIGNS = {
 # non-functional bitstream (see README.md, "The cmp2lut trap").
 #
 # oca_keystore.sv: NUM_SLOTS*256 keys + NUM_SLOTS loaded + 256 rd_key
-# + 1 rd_valid = 2313 for the default NUM_SLOTS = 8.
+# + 1 rd_valid = 2313 for the default NUM_SLOTS = 8. Derived, so it is
+# exact and only NUM_SLOTS moves it.
+#
+# oca_proto.sv: measured, not derived. The registers the module declares
+# add up to more than the netlist keeps — yosys folds fields it can prove
+# equal — so a figure computed from the RTL would fail a healthy build.
+# 3645 live at the RTL of this commit with the toolchain in tools/; the
+# floor sits just under that, loose enough to survive the optimiser
+# moving a few registers and tight enough to catch storage vanishing
+# wholesale, which is what the cmp2lut trap did to 89% of the key store.
+# It has to be re-measured whenever oca_proto's state changes, and the
+# census check_netlist prints below is where the new number comes from.
 NETLIST_FF_FLOOR = {
-    "oca_core": {"oca_keystore.sv": 2313},
+    "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
@@ -116,6 +127,26 @@ def check_cmp2lut():
         )
 
 
+def live_ff_census(top, netlist):
+    """Live flip-flops per RTL file, as yosys attributes them.
+
+    A cell whose DI is its own Q is storage in name only: that is the
+    signature the cmp2lut defect left behind, 2056 of the key store's
+    2313 registers still present and each holding itself.
+    """
+    design = json.loads(netlist.read_text())
+    census = {}
+    for c in design["modules"][top]["cells"].values():
+        if "FF" not in c["type"] or "Q" not in c["connections"]:
+            continue
+        if c["connections"].get("DI") == c["connections"]["Q"]:
+            continue
+        src = c.get("attributes", {}).get("src", "")
+        for f in sorted(set(re.findall(r"([\w.]+\.sv):", src))) or ["(none)"]:
+            census[f] = census.get(f, 0) + 1
+    return census
+
+
 def check_netlist(top, netlist):
     """Fail if storage the design depends on has vanished from the netlist.
 
@@ -123,21 +154,22 @@ def check_netlist(top, netlist):
     passes every simulation — Verilator never runs yosys — and answers
     'bad slot' to every request on hardware. Count the flip-flops yosys
     attributes to each guarded RTL file and require the full complement.
+
+    This covers storage and nothing else. The comparison that decides
+    whether plaintext leaves is combinational, so no census here can see
+    it; hw/sim/run_proto_gate.py replays it on the mapped netlist for
+    that reason.
     """
     floors = NETLIST_FF_FLOOR.get(top)
     if not floors:
         return 0
-    design = json.loads(netlist.read_text())
-    cells = design["modules"][top]["cells"].values()
+    census = live_ff_census(top, netlist)
+    print("\nlive flip-flops by source file:")
+    for src, n in sorted(census.items(), key=lambda kv: -kv[1]):
+        print(f"  {src:<24} {n:>6}")
     rc = 0
     for src, want in sorted(floors.items()):
-        live = sum(
-            1 for c in cells
-            if "FF" in c["type"]
-            and "Q" in c["connections"]
-            and src in c.get("attributes", {}).get("src", "")
-            and c["connections"].get("DI") != c["connections"]["Q"]
-        )
+        live = census.get(src, 0)
         status = "ok" if live >= want else "FAILED"
         print(f"netlist check {src}: {live} live flip-flops "
               f"(>= {want} required) — {status}")
