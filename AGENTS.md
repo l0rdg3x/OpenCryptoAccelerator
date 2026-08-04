@@ -123,7 +123,7 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
-.venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass, + 3 at BYTES=16
 .venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis

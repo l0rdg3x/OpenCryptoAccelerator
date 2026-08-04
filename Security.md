@@ -265,9 +265,17 @@ around a limitation it has not been told about.
 
    The packet buffers are block RAM and cannot be cleared the same way;
    they are walked instead, one word per cycle, and section 6 gives
-   that. What none of it covers: clearing is only as good as the reset.
-   Nothing zeroises on power loss, and a design that stops being
-   clocked keeps whatever it held.
+   that.
+
+   Two things this does not reach. **223 bits of metadata survive**, in
+   registers holding no key material but describing the last message:
+   `aad_len`, `ct_len`, `ctr`, `c_counter`, `out_len`, `cur_len`,
+   `mac_len`, `sub_idx` and four flags in `chacha20_poly1305.sv`, plus
+   `row` and `last_r` in `poly1305.sv`. None is read before it is
+   written, so nothing malfunctions; what they leak after a reset is the
+   exact size of the last AAD and ciphertext. And clearing is only as
+   good as the reset: nothing zeroises on power loss, and a design that
+   stops being clocked keeps whatever it held.
 
 5. **An illegal `in_len` aborts the message.** `in_len` above 64 does
    not fit the 64-byte datapath and cannot be terminated by the MAC

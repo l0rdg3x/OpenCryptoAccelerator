@@ -103,7 +103,10 @@ module oca_pktbuf #(
     output logic [63:0] rd_data,
     output logic [11:0] rd_count,
     output logic        rd_full,
-    // high while the memory is being zeroed: neither side may be used
+    // high while the memory is being zeroed. The write side is inert
+    // while it is; the read side is not gated and answers out of words
+    // the walk has not reached yet, so a reader that cannot wait for
+    // this must not believe what it gets.
     output logic        clr_busy
 );
 
