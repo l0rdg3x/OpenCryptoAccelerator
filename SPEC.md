@@ -43,23 +43,82 @@ Hardware accelerator for:
 # ================================================== PERFORMANCE TARGETS
 
 - MVP (ECP5): aggregate crypto-core throughput in the FPGA fabric high
-  enough to saturate the GbE host link with margin — target >= 2 Gbps
-  aggregate, measured in simulation and on hardware (multiple parallel
-  cores).
+  enough to saturate one GbE host port with margin — target
+  ~1.26 Gbps aggregate from two parallel AEAD engines, measured in
+  simulation and on hardware.
+  This bullet asked for ">= 2 Gbps aggregate (multiple parallel cores)"
+  until 2026-08-04, on the estimate that an LFE5U-45F would hold three
+  engines. The estimate did not survive being placed. The occupancy
+  study of 2026-08-04 built the configurations instead of multiplying
+  one of them (yosys + nextpnr-ecp5, LFE5U-45F, CABGA381, speed 6,
+  `--out-of-context`, four placer seeds each):
+  - one `oca_core`: 11149 of 43848 LUTs (25.4%), 20 of 72 multipliers
+    (27.8%), 50.59 MHz mean;
+  - two `oca_core`: 22313 LUTs (50.9%), 40 multipliers (55.6%),
+    49.28 MHz mean — replication costs 2.6% of the clock, which is
+    inside the seed spread of a single core;
+  - three `oca_core`: 33484 LUTs (76.4%), 60 multipliers (83.3%), and
+    **it does not route**. One seed fails placement; six others were
+    still routing after 55 minutes each with roughly 50000 arcs
+    unrouted, and the same roughly 50000 remain whether the constraint
+    is 100, 45, 40 or 35 MHz. That is congestion, not timing: asking
+    for a slower clock buys nothing.
+  Two engines at 49.28 MHz and 40 cycles per 64-byte block (1.6
+  bytes/cycle each, measured in simulation) are 158 MB/s = **~1.26 Gbps
+  of crypto capacity**, against the 125 MB/s a GbE port carries: one
+  port saturated with **26% margin**. That is what the fabric holds, so
+  that is where the target sits.
+  **Corrected 2026-08-04, then amended the same day: the cycle budget
+  now clears the port in simulation, and what is unmeasured is whether
+  the pair still fits.** The datapath inside `oca_core` was widened from
+  8 to 64 bits that day, taking a 64-byte block from 415 cycles to **64
+  end to end** — 8 to receive at 8 bytes/cycle, 48 through buffer,
+  engine and buffer, 8 to transmit. Those 64 were serialised because
+  `oca_core` was store and forward on a single pair of buffers, and two
+  scheduling reworks removed the serialisation: overlapping feed,
+  compute and drain inside a command took the block to 56 cycles, and
+  overlapping four packet stages across successive commands took it to
+  **40** — the engine's own figure, with the protocol layer no longer
+  adding anything to it. Measured differentially in simulation and
+  exactly linear: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16
+  blocks, marginal 40.00.
+  **What that is worth end to end is a projection, not a result.** At
+  1.6 bytes/cycle and the 48.53 MHz measured for the last 64-bit pair,
+  two cores are 155 MB/s = **~1.24 Gbps**, 24% over a GbE port and
+  within 2% of the ~1.26 Gbps this bullet asks for. But that clock was
+  measured on RTL two rewrites older than this one, in a build whose key
+  store synthesis had silently deleted, and **two cores of the current
+  RTL have never been placed and routed**. One core of it measures 11590
+  LUTs, 12043 FF, 4 DP16KD, 20 multipliers and 48.52 MHz at seed 1,
+  against the 11429 LUTs the two-core figure was scaled from — and that
+  pair was already the tightest configuration in the study: two of its
+  four placer seeds never routed, each stopped after 3 h 22 min still
+  bouncing between 50 and 2300 unrouted arcs rather than descending. The
+  cycle budget is measured; the clock and the fit at two cores are not,
+  and routability rather than the clock is what was already marginal.
+  **The board's second GbE PHY cannot be fed, and this is recorded
+  rather than overlooked.** The Colorlight i9 v7.2 carries two PHYs
+  (`BOM-MVP.md`), so 2 Gbps of wire is present on the board and
+  >= 2 Gbps was the honest thing to aim at; the fabric holds ~1.26 Gbps
+  of crypto. The second port is out of reach on this silicon and stays
+  out of reach until the Artix-7 phase.
+  Both figures are projections from measurement rather than silicon
+  results: the builds are `--out-of-context`, with no IO, no pin
+  constraints and no Ethernet MAC, and the MAC still has to fit
+  alongside. The host datapath is no longer the limit — it costs the
+  engine's 40 cycles per 64-byte block and nothing on top, see
+  `docs/design/2026-08-03-host-protocol.md`. Measurements and method:
+  `oca/hw/syn/README.md`.
 - Phase 3 (Artix-7 + LitePCIe): aggregate crypto-core throughput
   >= 10 Gbps, measured in simulation and on hardware.
   This target was originally set for the MVP. The first ECP5 synthesis
   of the cores (2026-08-03) showed it is out of reach on the LFE5U-45F
   without architectural work well beyond the MVP scope: one AEAD engine
   took 90% of the device multipliers at 26.77 MHz, and even after the
-  datapath reworks the device holds roughly three engines for an
-  estimated ~2 Gbps aggregate. That estimate now rests on the
-  measured Fmax of the reworked engine — 52.58 MHz at 40 cycles per
-  64-byte block, so ~0.67 Gbps each — and no longer, as the first
-  version of it did, on both cores reaching a 100 MHz target they did
-  not reach. It remains an estimate: three engines have not been placed
-  together, and only the multiplier budget is a hard figure. See
-  `oca/hw/syn/README.md` for the measurements and
+  datapath reworks — which brought one engine to 20 multipliers and
+  ~0.67 Gbps — the device holds two engines, not the three earlier
+  versions of this bullet assumed, for the ~1.26 Gbps the MVP bullet
+  above records. See `oca/hw/syn/README.md` for the measurements and
   `docs/design/2026-08-03-poly1305-datapath.md` for the earlier
   projection. On the MVP board the figure would in any case only be
   observable in simulation, the host link being GbE.

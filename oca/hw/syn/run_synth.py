@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,31 @@ DESIGNS = {
     "chacha20": ["chacha20.sv"],
     "poly1305": ["poly1305.sv"],
     "chacha20_poly1305": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"],
+    "oca_core": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+                 "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+                 "oca_core.sv"],
+}
+
+# Minimum live flip-flops a netlist must contain, keyed by the RTL file
+# the cells are attributed to. Simulation cannot see synthesis, so these
+# are the only checks standing between a mapper bug and a silently
+# non-functional bitstream (see README.md, "The cmp2lut trap").
+#
+# oca_keystore.sv: NUM_SLOTS*256 keys + NUM_SLOTS loaded + 256 rd_key
+# + 1 rd_valid = 2313 for the default NUM_SLOTS = 8. Derived, so it is
+# exact and only NUM_SLOTS moves it.
+#
+# oca_proto.sv: measured, not derived. The registers the module declares
+# add up to more than the netlist keeps — yosys folds fields it can prove
+# equal — so a figure computed from the RTL would fail a healthy build.
+# 3645 live at the RTL of this commit with the toolchain in tools/; the
+# floor sits just under that, loose enough to survive the optimiser
+# moving a few registers and tight enough to catch storage vanishing
+# wholesale, which is what the cmp2lut trap did to 89% of the key store.
+# It has to be re-measured whenever oca_proto's state changes, and the
+# census check_netlist prints below is where the new number comes from.
+NETLIST_FF_FLOOR = {
+    "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
@@ -52,6 +78,108 @@ def run(cmd, log_path):
         print(f"FAILED (rc={proc.returncode}), see {log_path}", file=sys.stderr)
         sys.stderr.write(log_path.read_text()[-4000:])
     return proc.returncode
+
+
+def check_cmp2lut():
+    """Refuse to run on a yosys whose cmp2lut.v mis-maps signed comparisons.
+
+    `synth_ecp5` runs `techmap -map +/cmp2lut.v` unconditionally. Stock
+    yosys (still true upstream at 0.67+/41a4b5a03) does not sign-extend
+    the constant operand there, so a signed comparison against a
+    negative constant becomes a constant-false LUT. `$signed(a) >= -8`
+    is a tautology and must map to an all-ones LUT; if it maps to zero
+    the key store silently disappears from the netlist. Apply
+    patches/yosys-cmp2lut-signed-negative-constant.patch.
+    """
+    probe = BUILD / "cmp2lut_probe.il"
+    probe.write_text(
+        "module \\top\n"
+        "  wire width 4 input 1 \\a\n"
+        "  wire output 2 \\y\n"
+        "  cell $ge \\c\n"
+        "    parameter \\A_SIGNED 1\n"
+        "    parameter \\B_SIGNED 1\n"
+        "    parameter \\A_WIDTH 4\n"
+        "    parameter \\B_WIDTH 4\n"
+        "    parameter \\Y_WIDTH 1\n"
+        "    connect \\A \\a\n"
+        "    connect \\B 4'1000\n"
+        "    connect \\Y \\y\n"
+        "  end\n"
+        "end\n"
+    )
+    out = subprocess.run(
+        [YOSYS, "-q", "-p", f"read_rtlil {probe}; "
+                            "techmap -map +/cmp2lut.v -D LUT_WIDTH=4; write_rtlil"],
+        capture_output=True, text=True).stdout
+    lut = re.search(r"parameter \\LUT 16'([01]{16})", out)
+    if lut is None:
+        sys.exit("cmp2lut probe: yosys did not map the comparison; "
+                 "cannot vouch for this toolchain")
+    if lut.group(1) != "1" * 16:
+        sys.exit(
+            f"cmp2lut probe FAILED: $signed(a) >= -8 mapped to LUT 16'b{lut.group(1)}, "
+            "expected all ones.\nThis yosys mis-synthesises signed comparisons against "
+            "negative constants and will delete the key store.\nApply "
+            f"{SYN_DIR / 'patches' / 'yosys-cmp2lut-signed-negative-constant.patch'} "
+            "to tools/src/yosys and copy the result over "
+            "tools/yosys/share/yosys/cmp2lut.v (it is read at run time; no rebuild needed)."
+        )
+
+
+def live_ff_census(top, netlist):
+    """Live flip-flops per RTL file, as yosys attributes them.
+
+    A cell whose DI is its own Q is storage in name only: that is the
+    signature the cmp2lut defect left behind, 2056 of the key store's
+    2313 registers still present and each holding itself.
+    """
+    design = json.loads(netlist.read_text())
+    census = {}
+    for c in design["modules"][top]["cells"].values():
+        if "FF" not in c["type"] or "Q" not in c["connections"]:
+            continue
+        if c["connections"].get("DI") == c["connections"]["Q"]:
+            continue
+        src = c.get("attributes", {}).get("src", "")
+        for f in sorted(set(re.findall(r"([\w.]+\.sv):", src))) or ["(none)"]:
+            census[f] = census.get(f, 0) + 1
+    return census
+
+
+def check_netlist(top, netlist):
+    """Fail if storage the design depends on has vanished from the netlist.
+
+    A mapper bug that folds a memory to a constant leaves a netlist that
+    passes every simulation — Verilator never runs yosys — and answers
+    'bad slot' to every request on hardware. Count the flip-flops yosys
+    attributes to each guarded RTL file and require the full complement.
+
+    This covers storage and nothing else. The comparison that decides
+    whether plaintext leaves is combinational, so no census here can see
+    it; hw/sim/run_proto_gate.py replays it on the mapped netlist for
+    that reason.
+    """
+    floors = NETLIST_FF_FLOOR.get(top)
+    if not floors:
+        return 0
+    census = live_ff_census(top, netlist)
+    print("\nlive flip-flops by source file:")
+    for src, n in sorted(census.items(), key=lambda kv: -kv[1]):
+        print(f"  {src:<24} {n:>6}")
+    rc = 0
+    for src, want in sorted(floors.items()):
+        live = census.get(src, 0)
+        status = "ok" if live >= want else "FAILED"
+        print(f"netlist check {src}: {live} live flip-flops "
+              f"(>= {want} required) — {status}")
+        if live < want:
+            rc = 1
+    if rc:
+        print("\nStorage is missing from the netlist: the design would build "
+              "but not work.\nSee hw/syn/README.md, 'The cmp2lut trap'.",
+              file=sys.stderr)
+    return rc
 
 
 def synth(top, sources, json_out, log):
@@ -141,7 +269,12 @@ def main():
     netlist = BUILD / f"{args.top}.json"
     report = BUILD / f"{args.top}.report.json"
 
+    check_cmp2lut()
+
     rc = synth(args.top, DESIGNS[args.top], netlist, BUILD / f"{args.top}.yosys.log")
+    if rc != 0:
+        return rc
+    rc = check_netlist(args.top, netlist)
     if rc != 0:
         return rc
     rc = pnr(args.top, netlist, args, report, BUILD / f"{args.top}.nextpnr.log")

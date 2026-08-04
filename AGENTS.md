@@ -42,6 +42,20 @@ tools/                      local tool builds — NOT committed
   src/                      upstream sources for the above (shallow clones)
 ```
 
+**The Ethernet MAC is an external dependency, not project RTL.** The
+1G MAC, the RGMII interface and the IP/ARP/UDP stack come from
+`verilog-ethernet` (Alex Forencich, **MIT licence**), which has working
+ECP5 support; it will arrive as a submodule when the board does. Writing
+a MAC from scratch is weeks of work on well-trodden ground where every
+bug presents as "the link does not come up". That choice sets the
+project's RTL boundary: `verilog-ethernet` hands over the UDP payload as
+an 8-bit AXI-Stream, and everything in `hw/rtl/` sits behind that
+interface — which is why `oca_core` can be tested end to end with no
+Ethernet in the simulation at all
+(`docs/design/2026-08-03-host-protocol.md`). Since 2026-08-04 `oca_core`
+itself is **64 bits wide with `tkeep`**, so a width converter belongs
+between the MAC and it; the 8-bit boundary at the MAC is unchanged.
+
 ## Environment rules
 
 - **No system-wide installs without explicit permission.** Everything
@@ -58,7 +72,13 @@ tools/                      local tool builds — NOT committed
   - prjtrellis — cmake on `libtrellis/`; `pytrellis` builds against
     Python 3.14 with the bundled pybind11;
   - yosys — CMake (not the old Makefile), Ninja, submodules included
-    (`abc`, `slang`);
+    (`abc`, `slang`). **Apply
+    `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`**
+    (`git apply` in `tools/src/yosys`) — without it synthesis silently
+    deletes the key store. `techlibs/common/cmp2lut.v` is read at run
+    time from `tools/yosys/share/yosys/cmp2lut.v`, so an already-built
+    yosys is fixed by copying the patched file there, no rebuild
+    needed;
   - nextpnr — `-DARCH=ecp5 -DECP5_DEVICES=45k -DBUILD_PYTHON=OFF
     -DTRELLIS_INSTALL_PREFIX=tools/trellis
     -DEigen3_DIR=tools/eigen/share/eigen3/cmake`. Building only the 45k
@@ -85,6 +105,42 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
+.venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 27/27 pass
+.venv/bin/python hw/sim/run_attack.py             # 16/16 pass
+.venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
+.venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
+```
+
+74 RTL tests, plus 6 on a synthesised netlist.
+
+`run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
+run on a synthesised netlist rather than on the RTL; they exist because
+everything above them is blind to synthesis. The first replays the key
+store's own tests on a mapped `oca_keystore`; the second maps
+`oca_proto` and drops it into an otherwise unmodified `oca_core`, then
+replays a round trip and the sixteen tag bytes — the tag comparison is
+combinational, so the flip-flop floors in `run_synth.py` cannot see it
+and only a simulation of the cells can. The whole core cannot be
+replayed that way: yosys ships no simulation model for `MULT18X18D` or
+`PDPW16KD`, only blackbox declarations, so a netlist carrying
+`poly1305`'s multipliers or the packet buffers' block RAM will not
+elaborate in Verilator. `oca_proto` infers neither.
+
+`run_attack.py` drives the same DUT as `run_oca_core.py` but from the
+other side: its tests are written to break the four-stage overlap
+rather than to confirm it, and several of them watch oca_proto's
+internal registers instead of the wire, because a descriptor field
+moving under a pending hand-off is invisible to any payload assertion
+until the traffic happens to hit the alignment that exposes it.
+
+The protocol model has no DUT, so it runs as plain Python rather than
+through a simulator — pulling Verilator into a pure Python check would
+be noise:
+
+```sh
+cd hw/sim && ../../.venv/bin/python test_proto_model.py   # prints "proto_model: OK"
 ```
 
 `run_dirty_pad.py` is separate from the official-vector suite on
@@ -96,14 +152,20 @@ removed entirely.
 Lint (must stay clean, `-Wall`):
 
 ```sh
-../tools/verilator/bin/verilator --lint-only -Wall hw/rtl/*.sv --top-module chacha20_poly1305
+../tools/verilator/bin/verilator --lint-only -Wall hw/rtl/*.sv --top-module oca_core
 ```
 
 ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
 
 ```sh
 .venv/bin/python hw/syn/run_synth.py chacha20_poly1305   # ~2 min
+.venv/bin/python hw/syn/run_synth.py oca_core            # 4-10 min
 ```
+
+The `oca_core` figure is routing, and it varies: 4 min 14 s for the run
+behind the current numbers, 519 s of `Router1 time` alone for the one
+before it. The "~3 min" this line used to say was measured on the 8-bit
+core and never updated as the design grew by 3000 LUTs.
 
 ## Hard rules
 
@@ -123,6 +185,17 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
   the edge that consumed your stimulus returns the stale value.
+- **An AXI-Stream driver samples the handshake before the transfer
+  edge, not after it**: `await ReadOnly()`, read `tready`, then
+  `await RisingEdge` — and only advance to the next byte if `tready`
+  was high, holding `tdata`/`tvalid`/`tlast` stable until it is.
+  Polling `tready` after the edge reads what the slave offered
+  *before* the transfer, which is the stale read above wearing a
+  different hat, and RTL adapted to such a source grows a `tready`
+  that outlives the state which consumes the byte: against a
+  conforming master that silently drops one byte per packet, with
+  nothing in simulation to show it. Cost the `s_tready` rework of
+  2026-08-03.
 - **Proposals from per-file analysis are not additive.** The area pass
   of 2026-08-03 came out of a workflow that read the three RTL files
   independently, and two of its proposals — an early `blk_ready` in
@@ -141,6 +214,21 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   reverted within the same second keeps executing the mutated bytecode —
   the restore looks broken, or worse, a later run silently keeps the
   mutation. Cost one confusing debug session on 2026-08-03.
+- **A green simulation says nothing about the netlist.** Verilator
+  elaborates the SystemVerilog directly and never runs yosys, so a
+  synthesis bug is invisible to every suite we have. Stock yosys
+  (0.67+, and upstream `main` as of 2026-08-04) mis-maps signed
+  comparisons against negative constants in
+  `techlibs/common/cmp2lut.v`, which `synth_ecp5` runs unconditionally;
+  it deleted the entire key store from `oca_core` — 2048 key bits, 8
+  loaded bits — while all 72 tests stayed green and the build reported
+  success. Fixed by
+  `hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`, which
+  **must be applied to any freshly built yosys**; `run_synth.py` probes
+  for the defect and refuses to run without it. The lesson generalises:
+  whenever correctness depends on something only synthesis decides,
+  assert it against the netlist in `NETLIST_FF_FLOOR`, because no test
+  in `hw/sim/` can. Cost the MVP bitstream; see `hw/syn/README.md`.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
@@ -227,18 +315,164 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   and kept out of the throughput figures. The masking change is covered
   by `hw/sim/test_dirty_pad.py`, without which no test in the project
   could see it (`oca/hw/syn/README.md`).
-- Next: **replicate the engine.** At 20 multipliers and 7358 LUTs each,
-  an LFE5U-45F holds three — 60/72 multipliers (83%), 22074/43848 LUTs
-  (50.3%) — for **1.97-2.07 Gbps** aggregate over four seeds, which
-  straddles the >= 2 Gbps the MVP target is written against, exactly as
-  the previous state did. A fourth is still out of reach on
-  multipliers alone (80 > 72) and the area pass did not change that; on
-  LUTs alone four would now fit (67.1%), so **the multiplier budget is
-  now the binding constraint on engine count**, where before the pass the
-  LUT budget was the likelier one. The 50.3% is out-of-context and still
-  has to absorb the GbE MAC, the host interface and packet buffering, so
-  it is a floor for three engines, not a budget for the board. Note that
+- **Engine replication: two, not three, and the reason is the router.**
+  Placed and routed on 2026-08-04 rather than projected from one core
+  (four seeds each, `--out-of-context`): 1 `oca_core` 11149 LUTs
+  (25.4%), 20 MULT (27.8%), 50.59 MHz; 2 `oca_core` 22313 LUTs (50.9%),
+  40 MULT (55.6%), **49.28 MHz** (-2.6%, inside the seed spread); 3
+  engines + 1 protocol layer 25983 LUTs (59.3%), 60 MULT (83.3%),
+  42.80 MHz; **3 `oca_core` 33484 LUTs (76.4%), 60 MULT (83.3%) — does
+  not route.** One seed fails placement, six more were still routing
+  after 55 minutes each, and roughly 50000 arcs stay unrouted whether
+  the constraint is 100, 45, 40 or 35 MHz: **congestion, not timing**,
+  so a slower clock buys nothing. Neither multipliers nor LUTs are the
+  binding constraint — both fit — **routability is**, which no
+  multiplication of a single-core report could have predicted. With
+  three engines the critical path also leaves `chacha20.sv` for
+  `poly1305.sv:140` (the registered DSP products), routing-dominated
+  because the third engine fills 83% of the DSP columns.
+  **Corrected MVP target: ~1.26 Gbps**, i.e. two engines x 1.6
+  bytes/cycle at 49.28 MHz = 158 MB/s, saturating one GbE port
+  (125 MB/s) with **26% margin**. The board has two PHYs
+  (`BOM-MVP.md`); **the second cannot be fed on this device** — a
+  recorded limit, not an oversight. This supersedes the 1.97-2.07 Gbps
+  three-engine projection and the >= 2 Gbps target (`SPEC.md`,
+  `oca/hw/syn/README.md` "The occupancy study"). Note that
   `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
   same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
-  engine instead of three — while removing the one-cycle `p_blk` bubble
-  is free. Then the streaming/packet interface toward the GbE MVP.
+  engine instead of two — while removing the one-cycle `p_blk` bubble
+  is free.
+- **The host protocol is implemented and verified** (design:
+  `docs/design/2026-08-03-host-protocol.md`). Four new modules behind a
+  64-bit AXI-Stream boundary with `tkeep`: `oca_keystore.sv` (8 key
+  slots, each with a loaded bit, cleared on reset), `oca_pktbuf.sv` (two
+  banks of `BYTES` = 2048, 512 x 64 in one pair of block RAMs, with a
+  1..8 byte count on writes), `oca_proto.sv` (the protocol FSM) and
+  `oca_core.sv` (wiring only). Store and forward throughout: the request
+  is buffered whole before the engine sees it and the response is built
+  whole before a byte leaves, which is what lets a failed tag return no
+  plaintext at all. Suites: keystore 4/4, pktbuf 9/9, oca_core 27/27, attack 16/16,
+  plus `test_proto_model.py` as plain Python. Lint `-Wall` clean with
+  `--top-module oca_core`. **The security property has two tests that
+  can fail**: `test_corrupt_tag_yields_no_plaintext` asserts on the leak
+  rather than on the status code, and `test_every_tag_byte_is_compared`
+  pins the width of the comparison by flipping one bit in each of the
+  sixteen tag bytes — without it, a comparison of 120 bits passes both
+  suites, because every other tag corruption in them touches byte 0 or
+  byte 15. Two more properties the 64-bit datapath introduced are
+  covered the same way: `recv_packet` asserts the bytes past `tkeep` are
+  zero, so every test witnesses the final-beat mask (removing it fails
+  14 of the 27 and 9 of the 16), and
+  `test_partial_keep_mid_packet_fails_closed` sends a short beat before
+  `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
+  error is not a header drop.
+- **`oca_core` as committed: 11590 LUTs (26.4%), 12043 FF (27.5%), 20
+  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 48.52 MHz at seed 1 — the
+  figures `run_synth.py oca_core` reproduces today, on a netlist whose
+  key store is present (see the `cmp2lut` bullet below). Everything in
+  the rest of this bullet is the 64-bit widening step that came before
+  the packet overlap and before that fix, kept because the comparison
+  with the 8-bit core is only meaningful against it: **11429 LUTs
+  (26.1%), 11228 FF (25.6%), 20 MULT18X18D, 4 DP16KD, Fmax 51.71 MHz at
+  seed 1** (50.69 MHz mean over seeds 1-4). Against the 8-bit version
+  (11149 / 10842 / 20 / 2, 50.59 MHz mean) the widening costs **+280
+  LUTs (+2.5%), +386 FF (+3.6%), no multipliers and no clock** — the
+  Fmax means differ by +0.2% with the distributions overlapping. The
+  plan estimated +530 LUTs and +325 FF; the LUT figure came in at about
+  half, which is trap 1 of the plan paying off (every next-state
+  multiplexer in `oca_proto` is a `case` on a registered selector, which
+  the plan measured on a synthetic 64-bit 3:1 mux at 129 LUT4 against
+  771 for an `if / else if` chain — **a factor of six**, and 642 LUTs on
+  that one mux, more than twice this design's whole measured increase;
+  that is the plan's synthetic figure, not a measurement of
+  `oca_proto`). **Both packet buffers still
+  infer block RAM** in pseudo dual-port mode, zero LUT RAM cells in the
+  netlist; **2 -> 4 DP16KD is width, not capacity** — a DP16KD's widest
+  port is 36 bits, so a 64-bit word spans two blocks, and 36-bit mode is
+  512 x 36 where one bank used 256 words. That spare half is what the
+  second bank was later built in, at no extra block RAM; it is **not**
+  room for a larger `BYTES`. 4096 does not fit the 12-bit byte counters
+  the protocol layer carries — `12'(BYTES)` truncates to zero and both
+  full flags jam high — and anything that is not eight times a power of
+  two puts the upper bank off the end of the array. `oca_pktbuf` now
+  refuses both at elaboration; the legal range is 16 to 2048. The
+  protocol layer still adds **no multipliers** (so it does not
+  cost an engine) and was **not on the critical path** of that build:
+  seeds 1, 3 and 4 cite no RTL file but `chacha20.sv`, lines 58-64; seed
+  2, the slowest, lands on `poly1305.sv:140`. **No protocol module
+  appears on any of the four** — but on the committed netlist at seed 1
+  the worst path is `oca_proto`'s `data_off` adder, dominated by one
+  route across the die. First time the protocol layer has shown up
+  there; one seed, so watch it rather than conclude from it
+  (`hw/syn/README.md`, "Where the committed design stands").
+- **End-to-end throughput: 415 cycles per 64-byte block down to 40**,
+  which is the engine's own cost — the protocol layer now adds nothing
+  on top of it. Three steps, each measured differentially in simulation
+  over seal commands of 4/8/12/16 blocks and exactly linear across every
+  span. The 64-bit datapath took 415 to **64**: 8 in (8 bytes/cycle) +
+  48 through buffer/engine/buffer + 8 out, serialised because the core
+  was store and forward on one pair of buffers. Overlapping feed,
+  compute and drain inside a command took it to **56**, and four packet
+  stages overlapping across commands took it to **40** — 231, 391, 551,
+  711 cycles for 4, 8, 12, 16 blocks, marginal 40.00. Of the 48 middle
+  cycles at the 64-cycle stage, 40 were already the engine, which is why
+  40 is the floor and why the remaining work was scheduling rather than
+  datapath.
+- **The MVP target: the cycle budget now clears the port, the fit at two
+  cores is unmeasured.** At 40 cycles per 64-byte block a core moves 1.6
+  bytes/cycle, so two cores at the 48.53 MHz of the last 64-bit pair are
+  155 MB/s = **~1.24 Gbps**: 124% of a bare GbE port (125 MB/s) and
+  within 2% of the ~1.26 Gbps the target asks for — one port saturated
+  *with margin*. **That is a projection and it must not be read as the
+  target being met.** The 48.53 MHz and the 22891 LUTs (52.2%), 22456
+  FF, 40 MULT, 8 DP16KD beside it were measured on RTL from before the
+  packet overlap, in a build whose key store yosys had deleted; **two
+  cores of the current RTL have never been placed and routed.** One core
+  of it is 11590 LUTs against the 11429 that pair was scaled from.
+  **And the pair was already the tightest thing in the study.** Two of
+  its four placer seeds **did not route**: restarted alone after the
+  other two finished, then stopped after 3 h 22 min each with the
+  remaining arc count oscillating rather than descending over their last
+  200 router reports (seed 2 between 53 and 2292, seed 3 between 77 and
+  2180). So the 48.53 MHz mean is over two seeds and is weaker evidence
+  than every other Fmax here — and the two were stopped, not shown to
+  diverge. This is a narrowed routability margin, not the three-core
+  failure mode of the occupancy study (roughly 50000 flat arcs, unmoved
+  by relaxing the constraint), and routability rather than the clock is
+  what has to be re-measured. Two more buffers per core (4 -> 8 DP16KD)
+  went in with the overlap and have not been paid for at two cores
+  either. And **nothing here has run on silicon** — Verilator cycle
+  counts and `--out-of-context` synthesis, with no IO, no pin
+  constraints, no MAC and no PLL.
+- **The key store was missing from every netlist this project ever
+  produced**, and is now present: a mis-mapping in yosys's
+  `cmp2lut.v` folded `oca_keystore.sv`'s index bounds check to constant
+  false, so all 2048 key bits and 8 loaded bits were optimised away and
+  a bitstream would have answered "bad slot" to every seal and open.
+  Not a regression — synthesising `95c81f7` shows the same key store
+  already dead, as 2056 self-holding registers. Fixed by
+  `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
+  (upstream report drafted, not filed); `run_synth.py` now refuses an
+  unpatched toolchain and asserts the key store's storage against the
+  netlist, and `run_keystore_gate.py` replays the key store tests on the
+  synthesised netlist — 2 of its 4 fail without the patch. The same net
+  now covers `oca_proto` as well: a floor of 3600 live flip-flops
+  attributed to it (3645 measured, and `check_netlist` prints the census
+  per file so the number can be re-measured), and `run_proto_gate.py`
+  for the tag comparison, which is combinational and so invisible to any
+  cell count. Cost:
+  8620 -> 11590 TRELLIS_COMB and 8311 -> 12043 TRELLIS_FF, DP16KD and
+  MULT18X18D unchanged at 4 and 20, Fmax 49.31 -> 48.84 MHz mean
+  (-1.0%, inside a 4.8% seed spread over five seeds). This is the price
+  of having a key store at all, not a regression in area — what it does
+  cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
+  "The cmp2lut trap".
+- Next: **the Ethernet integration**, which needs the board (expected
+  ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII wrapper
+  with its ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
+  constraints, plus the **8-to-64-bit width conversion at the MAC
+  boundary** — the 1G MAC hands over an 8-bit AXI-Stream and `oca_core`
+  is now 64 bits, so the conversion belongs there and not inside the
+  buffers. The cheapest measurement that does not need the board is the
+  two-core build of the current RTL: area, clock and above all whether
+  it still routes.

@@ -20,7 +20,10 @@ The full project specification is in [SPEC.md](SPEC.md).
   In [oca/](oca/).
 - **Phase 2 (in progress)** — SystemVerilog cores verified with
   cocotb + Verilator against the same official vectors: ChaCha20,
-  Poly1305, AEAD ChaCha20-Poly1305 (encrypt + decrypt).
+  Poly1305, AEAD ChaCha20-Poly1305 (encrypt + decrypt), plus the host
+  protocol layer (`oca_core`) that turns a UDP payload into an AEAD
+  operation and back. Next is the Ethernet integration, which needs the
+  board.
 
 ## Quick start
 
@@ -43,7 +46,17 @@ cd oca
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 .venv/bin/python hw/sim/run_dirty_pad.py
+.venv/bin/python hw/sim/run_keystore.py
+.venv/bin/python hw/sim/run_pktbuf.py
+.venv/bin/python hw/sim/run_oca_core.py
+.venv/bin/python hw/sim/run_attack.py
+.venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
+.venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 ```
+
+The last two need the project-local yosys as well: they replay tests on
+ECP5 primitives, because every other suite elaborates the SystemVerilog
+and cannot see what synthesis did to it.
 
 ## Documentation
 

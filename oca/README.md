@@ -37,6 +37,31 @@
   block are ignored: they are zeroed on the 16-byte sub-block on its way
   into Poly1305, which is the only place the padding is ever read, rather
   than on the 512-bit buses feeding it.
+- `hw/rtl/oca_keystore.sv` — key slots for the host protocol, `NUM_SLOTS`
+  of them (default 8). The only place key material lives. Each slot
+  carries a loaded bit, so reading a slot that was never written reports
+  `rd_valid = 0` instead of handing back a key of zeros: a host mistake
+  becomes a protocol error rather than a message encrypted under a key
+  an attacker can guess. Keys and loaded bits are cleared on reset.
+- `hw/rtl/oca_pktbuf.sv` — one 64-bit packet buffer (default 2048 bytes,
+  256 words), written sequentially from the stream with a 1..8 byte count
+  and read at random word offsets. Writes past capacity are dropped and
+  `wr_full` is raised, so a truncated packet becomes a length error rather
+  than a silent wrap. The read port is registered and single, and the
+  range check sits on the address rather than the read data, which is what
+  makes the memory infer block RAM in pseudo dual-port mode — confirmed in
+  synthesis, two DP16KD per buffer at 36 bits wide and no LUT RAM.
+- `hw/rtl/oca_proto.sv` — the protocol FSM: parses the fixed 8-byte
+  header, validates it, drives the engine and builds the response. Knows
+  nothing of cryptography beyond driving `chacha20_poly1305` and
+  comparing its tag — a single 128-bit equality, constant-time by
+  construction. Store and forward, so a failed tag returns status `06`
+  and no plaintext at all.
+- `hw/rtl/oca_core.sv` — wiring only: the two packet buffers, the key
+  store, the protocol FSM and the AEAD engine behind a pair of 64-bit
+  AXI-Stream ports with `tkeep`. This is the module the Ethernet
+  integration will instantiate; the conversion to the 8 bits
+  `verilog-ethernet` hands over belongs outside it, at the MAC boundary.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
@@ -63,6 +88,42 @@
   neither the ciphertext nor the tag may move. The suite above cannot
   see this — it zero-pads, so it passes with the engine's input masking
   removed entirely — which is why the masking has a test of its own.
+- `hw/sim/proto_model.py` — builds and parses host-protocol packets in
+  Python, the reference for the wire format. The cryptography comes from
+  `aead_model.py`, so no expected value is written by hand.
+- `hw/sim/test_proto_model.py` — self-consistency checks for the model,
+  run as plain Python: there is no DUT, and pulling a simulator into a
+  pure Python check would be noise.
+- `hw/sim/test_keystore.py` — a slot reads back what was written, an
+  unwritten or out-of-range slot reports invalid, and reset clears both
+  the keys and the loaded bits.
+- `hw/sim/test_pktbuf.py` — bytes come back at the offset they went in,
+  the counter tracks the write position, and the full flag fires at
+  capacity without wrapping over what is already stored. `run_pktbuf.py`
+  also elaborates the module at legal and illegal `BYTES` before it
+  starts the simulator, because a cocotb test only ever sees the one
+  value its build was elaborated with.
+- `hw/sim/test_oca_core.py` — end-to-end: packets in, packets out, with
+  no Ethernet in the simulation. Load-key then seal, a seal/open round
+  trip, an unloaded slot refused, every header failure and every length
+  failure, and 20 randomised round trips judged by the model. The one
+  that matters is `test_corrupt_tag_yields_no_plaintext`, which asserts
+  that a flipped tag bit yields status `06` and **zero bytes of body** —
+  it asserts on the leak, not on the status, and was checked against a
+  deliberately broken tag comparison. Beside it,
+  `test_every_tag_byte_is_compared` flips one bit in each of the sixteen
+  tag bytes: the first test alone passes against a comparison eight bits
+  wide, because the bit it flips is in byte 0. Without the pair, the
+  design's security property would be written down rather than held.
+- `hw/sim/test_attack.py` — the same DUT attacked rather than confirmed:
+  descriptor integrity under overlap, bank ownership, engine ownership,
+  and the timing residual of a failed tag, several of them watching
+  `oca_proto`'s registers because a descriptor moving under a pending
+  hand-off reaches the wire only at the alignments that expose it.
+- `hw/sim/test_proto_gate.py` — a round trip and the sixteen tag bytes,
+  replayed on a synthesised `oca_proto` inside an otherwise unmodified
+  `oca_core`. The tag comparison is combinational, so no flip-flop count
+  in the synthesis flow can tell whether the mapper kept it.
 - `hw/sim/run_*.py` — run the tests under the project-local Verilator
   (`../tools/verilator`, built from source, branch `stable`).
 - `hw/syn/run_synth.py` — ECP5 synthesis and place & route with the
@@ -78,12 +139,32 @@ Python 3.14).
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 .venv/bin/python hw/sim/run_dirty_pad.py
+.venv/bin/python hw/sim/run_keystore.py
+.venv/bin/python hw/sim/run_pktbuf.py
+.venv/bin/python hw/sim/run_oca_core.py
+.venv/bin/python hw/sim/run_attack.py
+.venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
+.venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
+cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
+`run_attack.py` drives the same DUT as `run_oca_core.py` but is written
+to break the packet overlap rather than to confirm it. The two
+`*_gate.py` runners are the only ones that see a synthesised netlist:
+everything else elaborates the SystemVerilog and is blind to what yosys
+does with it, which is how a mis-mapped key store survived every green
+test run this project ever had.
+
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2; `verilator --lint-only -Wall` clean on
-all cores. Five reworks are done. The Poly1305 limb rework took the AEAD
-engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
+7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 9/9, oca_core
+27/27, attack 16/16, and post-synthesis keystore 4/4 and oca_proto 2/2;
+the protocol model checks pass as plain Python;
+`verilator --lint-only -Wall` clean on all cores with `--top-module
+oca_core`. Eight reworks are done — five on the engine, described next,
+and three on the host datapath described below: the 64-bit widening,
+then the overlap inside a command, then the overlap across packets. The
+Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
+multipliers (90% -> 28% of an LFE5U-45F) and
 more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
@@ -114,9 +195,87 @@ headroom for the GbE MAC, packet buffering and top-level glue that do not
 exist yet, none of which is in these out-of-context numbers. Fmax is not
 claimed either: over four placer seeds the engine means 50.72 -> 52.83
 MHz while the standalone core shows no effect at all, and the critical
-path is structurally the same quarter round it was. Next: replicate the
-engine — three fit for 1.97-2.07 Gbps aggregate over those seeds, which
-straddles the >= 2 Gbps MVP target (`hw/syn/README.md`).
+path is structurally the same quarter round it was.
+
+**Three engines do not fit, and the reason is not area.** Placing the
+configurations on 2026-08-04 instead of multiplying one core's report:
+two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
+49.28 MHz, while three take 33484 LUTs (76.4%) and 60 multipliers
+(83.3%) — both under budget — and **never route**, with roughly 50000
+arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
+is congestion, not timing. Two engines at 49.28 MHz are 158 MB/s =
+**~1.26 Gbps of crypto capacity**, saturating one GbE port (125 MB/s)
+with 26% margin; the board's second PHY cannot be fed on this device.
+This supersedes the 1.97-2.07 Gbps three-engine projection, and
+`SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
+occupancy study").
+
+**The host protocol is implemented and verified**
+(`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
+operation, a payload out, with no Ethernet in the simulation. Its
+datapath is **64 bits end to end inside `oca_core`**, which is the sixth
+rework and the one that made the protocol layer stop being the limit.
+
+As committed, `oca_core` synthesises to **11590 LUTs (26.4%), 12043 FF
+(27.5%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)**, 48.52 MHz at seed
+1 — reproducible with `hw/syn/run_synth.py oca_core`. That netlist has a
+working key store in it; the 11429 / 11228 / 51.71 MHz figures below,
+and every earlier area figure in this file, were measured before the
+`cmp2lut` defect was found, when `oca_keystore.sv` was being deleted
+from the netlist by the mapper (`hw/syn/README.md`, "The cmp2lut trap").
+They are the right numbers for the comparison they make and the wrong
+ones for anything else.
+
+At 64 bits `oca_core` measured **11429 LUTs (26.1%), 11228 FF (25.6%),
+20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **51.71 MHz** (seed 1;
+50.69 MHz mean over seeds 1-4). Against the 8-bit version the widening
+costs **+280 LUTs (+2.5%), +386 FF (+3.6%), no multipliers and no clock**
+— the 8-bit mean was 50.59 MHz, so +0.2%, with the distributions on top
+of each other. **Both packet buffers still infer block RAM** in
+pseudo dual-port mode and there is not a single LUT RAM cell in the
+netlist; the 2 -> 4 DP16KD is width, not capacity, because a DP16KD's
+widest port is 36 bits and a 64-bit word spans two blocks. The protocol
+layer still adds no multipliers, so it does not cost an engine, and it
+was not on the critical path of that build: across all four seed
+reports, no entry cites `oca_proto.sv`, `oca_pktbuf.sv`,
+`oca_keystore.sv` or `oca_core.sv`. The path is inside `chacha20.sv` on
+three seeds and inside `poly1305.sv` on the fourth. On the committed
+netlist at seed 1 it is inside `oca_proto` for the first time — the
+`data_off` adder, most of its delay one route across the die — which is
+one seed and a placement result, not a property of the design
+(`hw/syn/README.md`).
+
+**Throughput: 415 cycles per 64-byte block down to 40**, in three steps,
+each measured differentially in simulation and exactly linear. Widening
+the datapath took 415 to **64** — 8 to receive at 8 bytes per cycle, 48
+through buffer, engine and buffer, 8 to transmit, strictly sequential
+because the core was store and forward on one pair of buffers.
+Overlapping feed, compute and drain inside a command took it to **56**,
+and overlapping four packet stages across successive commands took it to
+**40**: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16 blocks. 40 is
+the engine's own cost, so the protocol layer now adds nothing on top of
+it, and that is the floor until the engine changes.
+
+**What that is worth end to end is a projection, not a measurement.** At
+1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit pair,
+two cores are 155 MB/s = **~1.24 Gbps**: 124% of a GbE port's 125 MB/s,
+and within 2% of the ~1.26 Gbps `SPEC.md` asks for — one port saturated
+*with margin*. **Read that as a cycle budget that clears the port, not
+as the target being met.** The 48.53 MHz and the 22891 LUTs (52.2%), 40
+multipliers (55.6%) and 8 DP16KD beside it were measured on RTL from
+before the packet overlap, in a build whose key store the mapper had
+deleted, and **two cores of the current RTL have never been placed and
+routed**. The pair was also the tightest configuration in the study: two
+of its four placer seeds did not route, each stopped after 3 h 22 min
+still bouncing between 50 and 2300 unrouted arcs, so the 48.53 MHz mean
+is over two seeds and not four. Routability rather than the clock is
+what has to be re-measured, and **none of this has run on silicon.**
+
+Next: the Ethernet integration, which needs the board —
+`verilog-ethernet` (MIT) as a submodule, the RGMII wrapper with its ECP5
+DDR primitives, PLL, reset and the Colorlight i9 pin constraints, plus
+the 8-to-64-bit width conversion at the MAC boundary. The cheapest thing
+that does not need the board is the two-core build of the current RTL.
 
 ## Phase 1: abstract API + software backend
 
