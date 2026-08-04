@@ -149,7 +149,6 @@ module oca_proto #(
         S_CHECK,     // compare the tag (open only)
         S_STATS,     // write the counters into the transmit buffer
         S_BUILD,     // size the response
-        S_RESP_FETCH,// one cycle for the registered buffer read
         S_RESPOND    // stream the response out
     } fsm_t;
     fsm_t state;
@@ -200,9 +199,17 @@ module oca_proto #(
     logic [127:0] resp_tag;
     logic         eng_done_seen;
 
+    // Response pipeline, three stages deep: stage 1 walks the word index
+    // and says where that word comes from, stage 2 is the transmit
+    // buffer's registered read with the metadata that travels beside it,
+    // stage 3 is the output register.
     logic [11:0] resp_body_len, resp_left;
     logic [ 8:0] resp_widx, body_start_w;
     logic [ 1:0] resp_sel;
+    logic        resp_v;
+    logic [ 3:0] beat_bytes;
+    logic [ 1:0] beat_sel;
+    logic        beat_last, beat_v;
 
     // Shared sequential reader over the receive buffer. The buffer's read
     // port is registered, so a word lands two edges after its address is
@@ -313,18 +320,22 @@ module oca_proto #(
     logic tag_match;
     always_comb tag_match = (resp_tag == rx_tag);
 
-    // Response word source: the header, then the tag for a successful
-    // seal, then the transmit buffer. Selected by a registered two-bit
-    // code rather than by comparing the word index here — the same 3:1
-    // multiplexer written as an if / else chain over comparators costs
-    // 771 LUT4 at 64 bits against 129 for this, measured 2026-08-04.
-    // The tag is shifted out rather than indexed for the same reason.
+    // Response word source: the header, the two tag words of a
+    // successful seal, then the transmit buffer. Selected by a
+    // registered two-bit code rather than by comparing the word index
+    // here — the same multiplexer written as an if / else chain over
+    // comparators costs 771 LUT4 at 64 bits against 129 for this,
+    // measured 2026-08-04. The tag is indexed rather than shifted out
+    // because a shift register would have to be advanced by the same
+    // enable as the stage reading it, and a second thing to freeze is
+    // what the pipeline below exists to avoid.
     logic [63:0] resp_hdr, resp_word;
     always_comb resp_hdr = {status, slot, req_id, opcode, VERSION, MAGIC};
     always_comb begin
-        case (resp_sel)
+        case (beat_sel)
             2'd0:    resp_word = resp_hdr;
-            2'd1:    resp_word = resp_tag[63:0];
+            2'd1:    resp_word = resp_tag[ 63: 0];
+            2'd2:    resp_word = resp_tag[127:64];
             default: resp_word = tx_rd_data;
         endcase
     end
@@ -333,12 +344,8 @@ module oca_proto #(
     // response length. At 8 bits they could not physically be emitted;
     // at 64 they can, and tkeep alone would leave them on the wire for
     // the downstream MAC to honour or not. Mask them here.
-    logic        resp_last_beat;
-    logic [ 3:0] beat_bytes;
     logic [ 7:0] beat_keep;
     logic [63:0] beat_mask;
-    always_comb resp_last_beat = (resp_left <= 12'd8);
-    always_comb beat_bytes     = resp_last_beat ? resp_left[3:0] : 4'd8;
     always_comb begin
         for (int i = 0; i < 8; i++) begin
             beat_keep[i]        = (4'(i) < beat_bytes);
@@ -348,13 +355,38 @@ module oca_proto #(
 
     // The response body starts at a whole word in both directions — the
     // header is one word and the tag two — so the transmit buffer is
-    // read straight, with no funnel on this side.
-    logic [8:0] nxt_widx, nxt_body;
-    logic [1:0] nx_sel;
-    always_comb nxt_widx = resp_widx + 9'd1;
-    always_comb nxt_body = (nxt_widx >= body_start_w)
-                           ? (nxt_widx - body_start_w) : 9'd0;
-    always_comb nx_sel   = (nxt_widx >= body_start_w) ? 2'd2 : 2'd1;
+    // read straight, with no funnel on this side. Below body_start_w the
+    // word index is its own source code: word 0 is the header, words 1
+    // and 2 are the tag where a successful seal carries one.
+    logic [ 8:0] nxt_widx;
+    logic [ 1:0] nx_sel;
+    logic        resp_last;
+    logic [ 3:0] resp_bytes;
+    logic [11:0] nx_resp_left;
+    always_comb nxt_widx     = resp_widx + 9'd1;
+    always_comb nx_sel       = (nxt_widx >= body_start_w) ? 2'd3
+                                                          : nxt_widx[1:0];
+    always_comb resp_last    = (resp_left <= 12'd8);
+    always_comb resp_bytes   = resp_last ? resp_left[3:0] : 4'd8;
+    always_comb nx_resp_left = resp_last ? 12'd0 : (resp_left - 12'd8);
+
+    // One enable freezes all three stages together, which is what lets a
+    // sink lowering tready cost exactly one cycle with no skid buffer
+    // behind the output register.
+    logic go;
+    always_comb go = !m_tvalid || m_tready;
+
+    // The word address the transmit buffer is shown this cycle. Its read
+    // is unconditional — one word lands on tx_rd_data every edge,
+    // whatever the pipeline is doing — so freezing the stages is not
+    // enough on its own: with the address left at the word stage 1 is
+    // fetching, the edge ending a stalled cycle would overwrite the word
+    // stage 2 still owes the output register. Showing it the stage-2
+    // word instead makes that edge re-read what is already there, and is
+    // the one place go has to reach combinationally. resp_widx counts
+    // stage 1, so stage 2 is the word below it.
+    always_comb tx_rd_addr = (go ? resp_widx : (resp_widx - 9'd1))
+                             - body_start_w;
 
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -373,7 +405,6 @@ module oca_proto #(
             tx_wr_data    <= 64'd0;
             tx_wr_bytes   <= 4'd0;
             tx_wr_clear   <= 1'b0;
-            tx_rd_addr    <= 9'd0;
             ks_wr_en      <= 1'b0;
             ks_wr_slot    <= 8'd0;
             ks_wr_key     <= 256'd0;
@@ -413,6 +444,11 @@ module oca_proto #(
             resp_left     <= 12'd0;
             resp_widx     <= 9'd0;
             resp_sel      <= 2'd0;
+            resp_v        <= 1'b0;
+            beat_bytes    <= 4'd0;
+            beat_sel      <= 2'd0;
+            beat_last     <= 1'b0;
+            beat_v        <= 1'b0;
             resp_body_len <= 12'd0;
             body_start_w  <= 9'd0;
             rd_ptr        <= 9'd0;
@@ -704,9 +740,10 @@ module oca_proto #(
                 // The tag precedes the payload so the host finds it at a
                 // fixed offset without first computing lengths.
                 S_BUILD: begin
-                    resp_widx  <= 9'd0;
-                    resp_sel   <= 2'd0;
-                    tx_rd_addr <= 9'd0;
+                    resp_widx <= 9'd0;
+                    resp_sel  <= 2'd0;
+                    resp_v    <= 1'b1;
+                    beat_v    <= 1'b0;
                     if ((opcode == OP_SEAL) && (status == ST_OK)) begin
                         body_start_w <= 9'((HDR_LEN + 16) / 8);
                         resp_left    <= 12'(HDR_LEN + 16) + resp_body_len;
@@ -715,32 +752,40 @@ module oca_proto #(
                         resp_left    <= 12'(HDR_LEN) + resp_body_len;
                     end
                     if (status == ST_OK) cnt_done <= cnt_done + 32'd1;
-                    state <= S_RESP_FETCH;
+                    state <= S_RESPOND;
                 end
 
-                S_RESP_FETCH: state <= S_RESPOND;
-
+                // One beat per cycle: the three stages step together
+                // under go, so the two cycles the buffer's registered
+                // read costs are paid once at the head of the response
+                // and never again. resp_widx keeps counting after the
+                // last word has been issued because the stalled address
+                // above is derived from it.
                 S_RESPOND: begin
-                    if (!m_tvalid) begin
-                        m_tdata  <= resp_word & beat_mask;
-                        m_tkeep  <= beat_keep;
-                        m_tvalid <= 1'b1;
-                        m_tlast  <= resp_last_beat;
-                    end else if (m_tready) begin
-                        m_tvalid <= 1'b0;
-                        m_tlast  <= 1'b0;
-                        if (resp_last_beat) begin
+                    if (go) begin
+                        if (m_tvalid && m_tlast) begin
+                            m_tvalid    <= 1'b0;
+                            m_tlast     <= 1'b0;
                             rx_wr_clear <= 1'b1;
                             tx_wr_clear <= 1'b1;
                             state       <= S_RX;
                         end else begin
-                            if (resp_sel == 2'd1)
-                                resp_tag <= {64'd0, resp_tag[127:64]};
-                            resp_widx  <= nxt_widx;
-                            resp_sel   <= nx_sel;
-                            resp_left  <= resp_left - 12'd8;
-                            tx_rd_addr <= nxt_body;
-                            state      <= S_RESP_FETCH;
+                            m_tdata  <= resp_word & beat_mask;
+                            m_tkeep  <= beat_keep;
+                            m_tvalid <= beat_v;
+                            m_tlast  <= beat_v && beat_last;
+
+                            beat_v     <= resp_v;
+                            beat_sel   <= resp_sel;
+                            beat_bytes <= resp_bytes;
+                            beat_last  <= resp_last;
+
+                            resp_widx <= nxt_widx;
+                            if (resp_v) begin
+                                resp_sel  <= nx_sel;
+                                resp_left <= nx_resp_left;
+                                resp_v    <= !resp_last;
+                            end
                         end
                     end
                 end
