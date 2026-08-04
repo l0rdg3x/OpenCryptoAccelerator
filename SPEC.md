@@ -68,43 +68,34 @@ Hardware accelerator for:
   of crypto capacity**, against the 125 MB/s a GbE port carries: one
   port saturated with **26% margin**. That is what the fabric holds, so
   that is where the target sits.
-  **Corrected again 2026-08-04: the design does not currently meet this
-  target, and the gap is the host datapath, not the engines.** The
-  datapath inside `oca_core` was widened from 8 to 64 bits that day and
-  a 64-byte block now costs **64 cycles end to end** instead of 415 —
-  8 to receive at 8 bytes/cycle, 48 through buffer, engine and buffer,
-  8 to transmit — measured differentially in simulation and exactly
-  linear. 64 cycles per 64 bytes is **exactly one byte per cycle per
-  core**. Two 64-bit `oca_core` instances place and route at 22891 LUTs
-  (52.2%), 40 multipliers (55.6%), 8 DP16KD and **48.53 MHz**, so they
-  deliver 2 x 48.53 MB/s = 97.1 MB/s = **~0.78 Gbps end to end**. That is
-  78% of a bare GbE port and **62% of the ~1.26 Gbps this bullet asks
-  for**, so the target is **missed by 38%**; the 22% figure that also
-  appears in the measurement notes is only the distance to breaking even
-  with the wire, before any margin. The clock cannot close it —
-  62.5 MHz would be needed even to break even, above anything
-  `chacha20.sv` has reached.
-  **What closes it is that the 64 cycles are serialised**, 8 + 48 + 8 in
-  strict sequence, because `oca_core` is store and forward on a single
-  pair of buffers. Overlapping receive, process and transmit across
-  successive packets takes a block to `max(8, 48, 8) = 48` cycles and
-  two cores to ~1.04 Gbps, which passes 125 MB/s by 2-5% — less than the
-  spread of the Fmax it is computed from, so **necessary but not
-  sufficient**. A real margin only returns when the 8 cycles of feed and
-  drain also leave the loop, leaving the engine's own 40 cycles and
-  ~1.24 Gbps — **24% over the port**, at the 48.53 MHz measured for the
-  64-bit pair. That is the same figure as the ~1.26 Gbps and 26% above,
-  which was computed at the 8-bit pair's 49.28 MHz; the two clocks differ
-  by 1.5% and so do the two margins.
-  The target therefore stands at ~1.26 Gbps and is **not met today**; two
-  further steps of work stand between the two figures, and both are
-  scheduling rather than datapath. Two qualifications: the 48.53 MHz is
-  the mean of the **two** placer seeds that routed — the other two were
-  stopped after 3 h 22 min each, still bouncing between 50 and 2300
-  unrouted arcs rather than descending, so two 64-bit cores fit this
-  device but are no longer comfortable on it — and the 40-cycle engine
-  figure assumes a protocol layer that costs nothing on top of the
-  engine, which is a design that does not exist yet.
+  **Corrected 2026-08-04, then amended the same day: the cycle budget
+  now clears the port in simulation, and what is unmeasured is whether
+  the pair still fits.** The datapath inside `oca_core` was widened from
+  8 to 64 bits that day, taking a 64-byte block from 415 cycles to **64
+  end to end** — 8 to receive at 8 bytes/cycle, 48 through buffer,
+  engine and buffer, 8 to transmit. Those 64 were serialised because
+  `oca_core` was store and forward on a single pair of buffers, and two
+  scheduling reworks removed the serialisation: overlapping feed,
+  compute and drain inside a command took the block to 56 cycles, and
+  overlapping four packet stages across successive commands took it to
+  **40** — the engine's own figure, with the protocol layer no longer
+  adding anything to it. Measured differentially in simulation and
+  exactly linear: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16
+  blocks, marginal 40.00.
+  **What that is worth end to end is a projection, not a result.** At
+  1.6 bytes/cycle and the 48.53 MHz measured for the last 64-bit pair,
+  two cores are 155 MB/s = **~1.24 Gbps**, 24% over a GbE port and
+  within 2% of the ~1.26 Gbps this bullet asks for. But that clock was
+  measured on RTL two rewrites older than this one, in a build whose key
+  store synthesis had silently deleted, and **two cores of the current
+  RTL have never been placed and routed**. One core of it measures 11590
+  LUTs, 12043 FF, 4 DP16KD, 20 multipliers and 48.52 MHz at seed 1,
+  against the 11429 LUTs the two-core figure was scaled from — and that
+  pair was already the tightest configuration in the study: two of its
+  four placer seeds never routed, each stopped after 3 h 22 min still
+  bouncing between 50 and 2300 unrouted arcs rather than descending. The
+  cycle budget is measured; the clock and the fit at two cores are not,
+  and routability rather than the clock is what was already marginal.
   **The board's second GbE PHY cannot be fed, and this is recorded
   rather than overlooked.** The Colorlight i9 v7.2 carries two PHYs
   (`BOM-MVP.md`), so 2 Gbps of wire is present on the board and
@@ -114,10 +105,10 @@ Hardware accelerator for:
   Both figures are projections from measurement rather than silicon
   results: the builds are `--out-of-context`, with no IO, no pin
   constraints and no Ethernet MAC, and the MAC still has to fit
-  alongside. The engines are also not the current end-to-end limit —
-  the host datapath is, at 64 cycles per 64-byte block against the
-  engine's 40, see `docs/design/2026-08-03-host-protocol.md`.
-  Measurements and method: `oca/hw/syn/README.md`.
+  alongside. The host datapath is no longer the limit — it costs the
+  engine's 40 cycles per 64-byte block and nothing on top, see
+  `docs/design/2026-08-03-host-protocol.md`. Measurements and method:
+  `oca/hw/syn/README.md`.
 - Phase 3 (Artix-7 + LitePCIe): aggregate crypto-core throughput
   >= 10 Gbps, measured in simulation and on hardware.
   This target was originally set for the MVP. The first ECP5 synthesis

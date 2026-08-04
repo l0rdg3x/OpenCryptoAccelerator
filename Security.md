@@ -27,12 +27,16 @@ read before putting a board on a network.
   the encrypted traffic rest on the construction, not on anything OCA
   adds.
 - **An active network adversary.** Forgery is caught by the Poly1305
-  tag — provided the caller compares it as section 4 requires, because
-  the RTL does not compare it.
-- **Timing observation of the accelerator.** The time an operation
-  takes reveals message and AAD lengths, and nothing else: latency is
-  independent of key, nonce, plaintext and ciphertext values. See
-  section 3.
+  tag. Traffic through `oca_core` is checked on the FPGA:
+  `oca_proto.sv` compares the received tag against the computed one as a
+  single 128-bit equality and returns status `06` with an empty body on
+  a mismatch. A caller wiring `chacha20_poly1305.sv` directly gets no
+  comparison and must do its own, as section 4 item 1 requires.
+- **Timing observation of the accelerator.** The time an operation takes
+  reveals message and AAD lengths, and — for traffic through
+  `oca_core` — whether a tag verified, which its status byte states in
+  the clear on the same wire. It is independent of key, nonce, plaintext
+  and ciphertext values. See section 3.
 
 ### What it is not meant to defend against
 
@@ -49,9 +53,14 @@ read before putting a board on a network.
   signs nor encrypts the bitstream, and the MVP board loads it from a
   commodity SPI flash (W25Q64, see `BOM-MVP.md`). Anyone who can
   reprogram the device owns it.
-- **Key management.** Keys arrive on a 256-bit input bus in the clear
-  and stay in registers. There is no key store, no key wrapping and no
-  access control.
+- **Key management.** `oca_keystore.sv` holds eight slots, each with a
+  loaded bit, and clears them on reset — but it is storage, not
+  protection. Keys reach it in the clear, in the payload of a load-key
+  packet; there is no key wrapping, no key agreement and no access
+  control, so anyone who can reach the interface can overwrite any slot
+  and use any slot another client loaded. A caller wiring
+  `chacha20_poly1305.sv` directly has no store at all: the key arrives
+  on a 256-bit input bus and stays in registers. See section 6.
 - **Denial of service.** A caller that never completes a handshake
   simply stalls the engine.
 
@@ -111,10 +120,29 @@ modules:
   occupancy flag, and the sub-block counter derived from the block
   length. `dec` selects a multiplexer input, not a path. A 64-byte
   block costs 40 cycles regardless of content.
+- **`oca_proto.sv`** sits above the three and is in scope here too. The
+  tag comparison is one fixed-width equality consumed in a one-cycle
+  state whose two arms both fall through to the same successor, so the
+  check costs the same cycle whether it passes or fails. What the
+  outcome does change is the length of the response — a failed open
+  answers with 8 bytes instead of 8 plus the message — and, because the
+  four stages overlap, the next packet's engine start waits on that
+  response being published. So the packet behind a failed open can be
+  answered earlier than it would have been behind a successful one, by
+  at most the difference in response length. `oca/hw/sim/test_attack.py`
+  measures both ends of that bound in
+  `test_tag_outcome_timing_residual_is_bounded`: exactly the difference
+  for a successor cheap enough to see it, zero for one whose own message
+  hides it. That signal is the pass/fail bit, which status `06` puts on
+  the wire in the clear on the same segment, ahead of the response it
+  shifts: it reveals nothing an observer does not already have, and it
+  is a residual of the overlap, not of the comparison.
 
 An observer who can time operations therefore learns the AAD length,
 the message length and the block boundaries — which are not secret
-under RFC 8439 in any case — and learns nothing else.
+under RFC 8439 in any case — and, through `oca_core`, the pass/fail bit
+that same response states outright. Never a key, a nonce, a plaintext or
+a ciphertext value.
 
 Two caveats on how far this reaches. The property is a **design
 property of the RTL**, verified by inspection and by the simulated
@@ -143,10 +171,20 @@ construction, and the hardware cannot detect or prevent the mistake.
    the caller's discipline. Because the protocol is store and forward,
    the plaintext is complete in the transmit buffer before anything is
    sent, so a failed comparison returns status `06` and **zero bytes of
-   body**. That property is held by a test that can fail:
-   `test_corrupt_tag_yields_no_plaintext` in `oca/hw/sim/test_oca_core.py`
-   asserts on the leak, not merely on the status, and was checked against
-   a deliberately broken comparison.
+   body**.
+
+   Two tests hold that property, and between them they cover what one
+   alone did not. `test_corrupt_tag_yields_no_plaintext` in
+   `oca/hw/sim/test_oca_core.py` asserts on the leak rather than on the
+   status, but it flips a bit in tag byte 0, so it passes against a
+   comparison only eight bits wide. `test_every_tag_byte_is_compared`
+   in the same file flips one bit per tag byte, all sixteen of them, and
+   opens the intact tag afterwards so that a comparison stuck at false
+   is not mistaken for a working one; a 120-bit comparison that drops
+   tag byte 7 passes every other test in both suites and fails this one.
+   `oca/hw/sim/run_proto_gate.py` replays it on the synthesised netlist,
+   because the comparison is combinational and nothing in the synthesis
+   flow can otherwise see whether it survived the mapper.
 
 2. **Never repeat a (key, nonce) pair. The core cannot detect reuse.**
    The engine keeps no history: `key` and `nonce` are latched on
@@ -280,15 +318,16 @@ What the protocol layer does add, against the engine alone:
   are all zeroed on reset.
 
   **The packet buffers are the exception, and it is a real one.**
-  `oca_pktbuf.sv` resets `wr_count` and the output register but
-  **not the memory array**, so after a reset both 2048-byte BRAMs still
-  hold the last packet — plaintext, ciphertext, and for a load-key
-  command the 32 raw key bytes, which necessarily pass through the
-  receive buffer on their way to the slot. Limitation 4 above therefore
-  extends to the protocol layer rather than being resolved by it, and
-  the three engine cores are unchanged: reset restores control state,
-  not confidentiality. Clearing 4096 bytes of BRAM costs a counter and
-  as many cycles as there are addresses; it is not implemented.
+  `oca_pktbuf.sv` resets the byte counts and the output register but
+  **not the memory array**, so after a reset both buffers still hold
+  what was last written to either of their two banks — 4096 bytes each,
+  two packets each: plaintext, ciphertext, and for a load-key command
+  the 32 raw key bytes, which necessarily pass through the receive
+  buffer on their way to the slot. Limitation 4 above therefore extends
+  to the protocol layer rather than being resolved by it, and the three
+  engine cores are unchanged: reset restores control state, not
+  confidentiality. Clearing 8192 bytes of BRAM costs a counter and as
+  many cycles as there are addresses; it is not implemented.
 - **The tag is compared on the FPGA in constant time, and a failure
   emits no plaintext.** See section 4 item 1.
 - **Failures are reported rather than dropped silently.** Every request

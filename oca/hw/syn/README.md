@@ -7,8 +7,14 @@ the Lattice ECP5 on the MVP board (Colorlight i9 v7.2, LFE5U-45F-6BG381C
 ```sh
 .venv/bin/python hw/syn/run_synth.py chacha20_poly1305
 .venv/bin/python hw/syn/run_synth.py --freq 50 poly1305
-.venv/bin/python hw/syn/run_synth.py oca_core          # ~3 min
+.venv/bin/python hw/syn/run_synth.py oca_core          # 4-10 min
 ```
+
+The `oca_core` figure is routing and it varies with the netlist and the
+machine: 4 min 14 s for the run behind the current numbers, 519 s of
+`Router1 time` alone for the one before it. This line said "~3 min"
+until 2026-08-04; that was the 8-bit core's time (3 min 11 s, measured
+below) and it was never updated as the design grew by 3000 LUTs.
 
 Outputs land in `hw/syn/build/` (gitignored): yosys and nextpnr logs,
 the post-synthesis netlist and the nextpnr JSON report.
@@ -1235,11 +1241,26 @@ Seeds are 1 and 2 for the stock row; 1, 2, 4, 5 and 6 for the patched
 row.
 
 **This is not a regression in area; it is the cost of having a key store
-at all.** The 8620/8311 figures every earlier section compares against
-were measured on a netlist with no key material in it. The +3732
-flip-flops are 2313 in `oca_keystore.sv` (2048 key bits, 8 loaded bits,
-256 `rd_key`, 1 `rd_valid`) plus the 256-bit `eng_key` and the status
-and response logic that had folded behind them.
+at all** — but read the two rows as what they are, which is one netlist
+against the other and not against anything published earlier. The
++2970 LUTs and +3732 flip-flops between them are 2313 in
+`oca_keystore.sv` (2048 key bits, 8 loaded bits, 256 `rd_key`, 1
+`rd_valid`) plus the 256-bit `eng_key` and the status and response logic
+that had folded behind them.
+
+**`8620` / `8311` appears nowhere else in this file**, and no earlier
+section compares against it: the last published single-core netlist is
+the 64-bit one at **11429 LUTs / 11228 FF**, which did contain the key
+store's 2313 flip-flops — 2056 of them wired `.DI` to their own `.Q`,
+holding themselves, which is storage in name only but is still cells.
+The stock row above is smaller than that one because at this RTL the
+mapper managed to remove the store outright rather than freeze it.
+**Published netlist to published netlist, the committed design is
+therefore +161 LUTs and +815 flip-flops** over the 64-bit row — the
+packet overlap and a live key store together — not the ~3000 the
+difference between the two rows above suggests. What the patched netlist
+does cost against the stock one is router effort, and that is real:
+see below.
 
 **Fmax is unchanged within the seed spread**: 49.31 MHz mean before,
 48.84 MHz after — **-1.0%**, against a spread of 4.8% across the five
@@ -1262,9 +1283,56 @@ Seed 1 ran alone; 2, 4, 5 and 6 shared the machine with each other, so
 their figures are inflated by contention and are an upper bound rather
 than a clean measurement. Even so the cheapest patched seed is 2.5x the
 stock netlist. This die was already described above as running out of
-routing before it runs out of cells, and this change spends about 3000
-more LUTs against that margin — budget for it before the MAC, the RGMII
-wrapper and the PLL arrive.
+routing before it runs out of cells, and **router effort, not cell
+count, is what this change spends against that margin**: the design is
++161 LUTs on the last published netlist, and it takes several times
+longer to route. Budget for the time before the MAC, the RGMII wrapper
+and the PLL arrive.
 
 DP16KD stays at 4 and MULT18X18D at 20: the key store is flip-flops and
 a decode, so neither the block RAMs nor the DSPs move.
+
+### Where the committed design stands
+
+Same flow, same device, seed 1, 100 MHz constraint. This is what
+`run_synth.py oca_core` reproduces on the RTL as merged, and what the
+netlist checks now cover:
+
+| | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax (seed 1) |
+|---|---|---|---|---|---|
+| `oca_core`, as committed | 11590 | 12043 | 4 | 20 | 48.52 MHz |
+
+Live flip-flops by source file, printed by `check_netlist` on every run:
+`oca_proto.sv` 3645, `chacha20_poly1305.sv` 2479, `oca_keystore.sv`
+2313, `chacha20.sv` 1414, `poly1305.sv` 391, `oca_pktbuf.sv` 48, plus
+1753 yosys attributes to no file. The floors are 2313 for the key store
+(derived: `NUM_SLOTS*256 + NUM_SLOTS + 256 + 1`) and 3600 for
+`oca_proto` (measured, with head-room for the optimiser; re-measure from
+the census when its registers change). `hw/sim/run_proto_gate.py`
+covers what no census can: the tag comparison is combinational, and it
+is replayed on a mapped `oca_proto` inside an otherwise RTL `oca_core`.
+
+**Two things this table is not.** It is not a two-core figure — the
+22891 LUTs and 48.53 MHz above were measured on RTL from before the
+packet overlap and before the key store was restored, and **two cores of
+the committed RTL have never been placed and routed**, so the throughput
+projections in this file that lean on 48.53 MHz stand as projections
+against a clock that has not been re-measured. And one seed is one
+sample: 48.52 MHz here against the 49.76 MHz this file records at seed 1
+for the RTL of one commit earlier is a 2.5% shift, well inside the 4.8%
+spread the five patched seeds above show — on a netlist yosys reports
+cell for cell identical to that one (7768 LUT4, 12043 TRELLIS_FF, 1687
+CCU2C, 4 DP16KD, 20 MULT18X18D; the RTL differs by one gate on the RX
+write enable). Placement and routing are where it moved: at seed 1 the
+worst path here is `oca_proto`'s `data_off` adder, 7.4 ns of which 2.2
+is a single route from (44,29) to (11,27), where the earlier netlist at
+the same seed put it in `chacha20.sv`. **That is the first time the
+protocol layer has appeared on a critical path in this file**, and on
+one seed it is a placement result rather than a property of the design —
+but it is the thing to watch, and it is why the sentences elsewhere
+saying no protocol module appears on any seed are scoped to the 64-bit
+build's four seeds. Router time moved the other way, 529 s to 208 s.
+
+The cycle side is measured and does not depend on any of that: a
+64-byte block costs **40 cycles** end to end through `oca_core`, exactly
+linear (231, 391, 551, 711 cycles for 4, 8, 12, 16 blocks).

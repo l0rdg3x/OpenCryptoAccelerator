@@ -144,6 +144,47 @@ simply not be sent.
 >   in sections 3 to 6 — the module split, the packet format, the status
 >   codes and the security properties — is unchanged by this rework.
 
+> **Amended a third time, 2026-08-04, after the pipelining above was
+> built.** The step the previous amendment called next is done, in two
+> commits: feed, compute and drain overlap inside a command, and four
+> stages — receive, process, drain, transmit — overlap across successive
+> commands.
+>
+> - **A block costs 40 cycles**, measured the same way and exactly
+>   linear: 231, 391, 551, 711 cycles for 4, 8, 12 and 16 blocks,
+>   marginal 40.00. 56 was the intermediate step. 40 is the engine's own
+>   cost, so the protocol layer no longer adds anything to it and this is
+>   the floor until the engine changes.
+> - **What that is worth end to end is still a projection.** Two cores at
+>   1.6 bytes/cycle and the last measured pair clock (48.53 MHz) are
+>   155 MB/s, ~1.24 Gbps, 24% over a GbE port. That clock was measured on
+>   the pre-overlap RTL, in a build whose key store the mapper had
+>   deleted, and **two cores of the current RTL have never been placed
+>   and routed** — the pair was already the configuration where two of
+>   four placer seeds failed to route. Cycle budget: measured. Fit and
+>   clock at two cores: not.
+> - **`oca_pktbuf` now carries two banks**, so it is 512 x 64 in the same
+>   pair of block RAMs — the second bank was free because 36-bit mode is
+>   512 x 36 and one bank used half of it. `BYTES` is constrained to
+>   eight times a power of two, 16 to 2048, and the module refuses
+>   anything else at elaboration: the bank base is `2**ADDR_W` while the
+>   array is `2*WORDS` entries, so a non-power-of-two `WORDS` puts half
+>   the upper bank off the end of the array and the protocol layer
+>   answers status 00 over it, and above 2048 the 12-bit byte counters
+>   truncate.
+> - **Section 6's acceptance criterion needed sharpening, not
+>   relaxing.** "A corrupted tag must produce status 06 and zero bytes of
+>   plaintext ... without that test it is not actually held" was met in
+>   its weakest sense: the test flipped a bit in tag byte 0, so a
+>   comparison of that byte alone satisfied it, and a comparison of 120
+>   bits satisfied every test in both suites. It now takes
+>   `test_every_tag_byte_is_compared` — one flipped bit per tag byte, all
+>   sixteen, and the intact tag opened afterwards so a comparison stuck
+>   at false cannot pass — plus `run_proto_gate.py`, which replays the
+>   same sixteen cases on a synthesised `oca_proto`, because the
+>   comparison is combinational and no flip-flop census in the synthesis
+>   flow can see whether the mapper kept it.
+
 ## 3. Modules
 
 Four modules, one responsibility each, all under `oca/hw/rtl/`:

@@ -49,7 +49,14 @@ cd oca
 .venv/bin/python hw/sim/run_keystore.py
 .venv/bin/python hw/sim/run_pktbuf.py
 .venv/bin/python hw/sim/run_oca_core.py
+.venv/bin/python hw/sim/run_attack.py
+.venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
+.venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 ```
+
+The last two need the project-local yosys as well: they replay tests on
+ECP5 primitives, because every other suite elaborates the SystemVerilog
+and cannot see what synthesis did to it.
 
 ## Documentation
 
