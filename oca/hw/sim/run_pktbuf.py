@@ -63,24 +63,49 @@ def check_bytes_guard() -> int:
     return rc
 
 
-def main() -> int:
-    rc = check_bytes_guard()
-    if rc != 0:
-        return rc
+# A cocotb run only ever sees the BYTES its build was elaborated with, so
+# every assertion above this line speaks for BYTES=2048 alone. The clear
+# derives its counter width from the parameter — CLR_W = ADDR_W + 1, and
+# it stops on the all-ones address — and the tests for it therefore run
+# again at the smallest legal size, where ADDR_W is 1 and the whole array
+# is four words. This is parameter coverage, not a second chance at the
+# same defect: reading every word back would catch a missed one at either
+# size. What only the second run can catch is a width or a bound that
+# happens to work out at 256 words and not at 2.
+CLEAR_TESTS = [
+    "test_reset_zeroises_both_banks",
+    "test_clear_busy_spans_one_cycle_per_word",
+    "test_writes_during_the_clear_do_not_land",
+]
+SMALL_BYTES = 16
 
+
+def run_at(nbytes: int, tag: str, testcase=None) -> None:
+    os.environ["OCA_PKTBUF_BYTES"] = str(nbytes)
     runner = get_runner("verilator")
     runner.build(
         sources=[ROOT / "oca" / "hw" / "rtl" / "oca_pktbuf.sv"],
         hdl_toplevel="oca_pktbuf",
-        build_dir=SIM_DIR / "sim_build_pktbuf",
+        build_dir=SIM_DIR / f"sim_build_pktbuf{tag}",
+        parameters={"BYTES": nbytes},
         always=True,
     )
     runner.test(
         hdl_toplevel="oca_pktbuf",
         test_module="test_pktbuf",
         test_dir=SIM_DIR,
-        build_dir=SIM_DIR / "sim_build_pktbuf",
+        build_dir=SIM_DIR / f"sim_build_pktbuf{tag}",
+        testcase=testcase,
     )
+
+
+def main() -> int:
+    rc = check_bytes_guard()
+    if rc != 0:
+        return rc
+
+    run_at(2048, "")
+    run_at(SMALL_BYTES, "_small", testcase=CLEAR_TESTS)
     return 0
 
 

@@ -9,13 +9,19 @@ at. A clear that reaches the other bank truncates a packet in flight in
 silence, and an out-of-range read that falls back to absolute word zero
 hands back a neighbour's header."""
 
+import os
 import random
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
-BYTES = 2048
+# The build decides BYTES and the tests must agree with it, so the runner
+# passes the same number here that it elaborated the module with. The
+# default is the one oca_core instantiates; the runner also drives the
+# clear tests at the smallest legal size, where the walk's address is two
+# bits wide and an off-by-one at either end of it would be visible.
+BYTES = int(os.environ.get("OCA_PKTBUF_BYTES", "2048"))
 WORDS = BYTES // 8
 
 # The memory is zeroed out of reset one word per cycle, over both banks,
@@ -314,13 +320,18 @@ async def test_writes_during_the_clear_do_not_land(dut):
     is the failure with no symptom -- the packet is answered at its full
     length out of words the buffer never wrote.
     """
+    # One word per cycle against a clear that runs for 2*WORDS of them,
+    # so the offer has to be shorter than the walk or it outlives it and
+    # proves nothing. At the smallest legal BYTES the whole bank is two
+    # words and the walk is four cycles.
+    offered = min(16, WORDS)
     await setup(dut, wait_clear=False)
-    await write_words(dut, [(secret_word(0, a), 8) for a in range(16)])
+    await write_words(dut, [(secret_word(0, a), 8) for a in range(offered)])
     left = await wait_clear_done(dut)
     assert left > 0, "the clear was already over: nothing was offered against it"
     assert int(dut.wr_count.value) == 0, \
         f"wr_count is {int(dut.wr_count.value)}: a write moved it during the clear"
-    for addr in range(16):
+    for addr in range(offered):
         got = await read_word(dut, addr)
         assert got == 0, \
             f"word {addr} holds {got:#018x}: a write landed during the clear"
