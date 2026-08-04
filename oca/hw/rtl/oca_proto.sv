@@ -121,11 +121,11 @@
  * one writer: the first two belong to PROC and the last two to DRAIN,
  * both of which handle packets strictly in arrival order, so a snapshot
  * is a prefix of the command sequence and never a timing-dependent set.
- * PROC's two are sampled when the stats command is parsed and DRAIN's two
- * when it is published, which is the cycle before the increment that
- * would have counted the command itself. Its sixteen bytes travel through
- * the same response field the tag of a seal uses, not through the
- * transmit buffer: the two cannot both be present.
+ * PROC's two are sampled when the stats command's descriptor is handed
+ * on and DRAIN's two when it is published, which is the cycle before the
+ * increment that would have counted the command itself. Its sixteen
+ * bytes travel through the same response field the tag of a seal uses,
+ * not through the transmit buffer: the two cannot both be present.
  *
  * A load-key command whose length is not exactly 40 bytes is refused
  * with status 05. Without that check the 32 key bytes would be read from
@@ -803,11 +803,6 @@ module oca_proto #(
                 P_ARGS: begin
                     if (rd_v_d) args <= {rx_rd_data, args[255:64]};
                     if (rd_got == 4'd4) begin
-                        // Latched out of `args` here, for the packet that
-                        // owns it, and never read from `args` again: the
-                        // parse of the packet behind this one rewrites
-                        // that register long before the tag is compared.
-                        pd_tag <= args[255:128];   // bytes 24..39
                         if (opcode == OP_LOAD_KEY) begin
                             if (slot >= 8'(NUM_SLOTS)) begin
                                 status   <= ST_BAD_SLOT;
@@ -819,12 +814,8 @@ module oca_proto #(
                                 pr_state <= P_LOADKEY;
                             end
                         end else if (opcode == OP_STATS) begin
-                            // PROC's two counters, exact for every packet
-                            // ahead of this one because PROC is in order.
-                            // DRAIN fills in its own two at publication.
-                            pd_tag[63:0] <= {cnt_drop, cnt_rx};
-                            status       <= ST_OK;
-                            pr_state     <= P_ENDREQ;
+                            status   <= ST_OK;
+                            pr_state <= P_ENDREQ;
                         end else if (!ks_rd_valid) begin
                             status   <= ST_BAD_SLOT;
                             pr_state <= P_ENDREQ;
@@ -965,6 +956,20 @@ module oca_proto #(
                         // release has to be paired with the take, or the
                         // next packet waits on a token nobody owns.
                         pd_engine  <= crypto_cmd;
+                        // The received tag of an open, or the two counters
+                        // PROC owns for a stats. Copied here and not where
+                        // it is parsed, for the same reason as every other
+                        // field: `args` is written only by the parse, and
+                        // PROC cannot begin the next packet's parse before
+                        // it leaves this state, so bytes 24..39 are still
+                        // this packet's own — while a copy made in P_ARGS
+                        // is outside the guard and the successor's parse
+                        // rewrites it under a descriptor still waiting for
+                        // DRAIN. cnt_rx and cnt_drop move only in
+                        // P_DISPATCH, which is behind that same wait.
+                        pd_tag     <= args[255:128];   // bytes 24..39
+                        if (opcode == OP_STATS)
+                            pd_tag[63:0] <= {cnt_drop, cnt_rx};
                         pd_put_par <= ~pd_put_par;
 
                         free_par[rx_rd_bank] <= ~free_par[rx_rd_bank];
