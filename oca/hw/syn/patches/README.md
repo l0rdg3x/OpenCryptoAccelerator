@@ -1,9 +1,11 @@
 # yosys patches
 
-Local patches to the project's yosys build (`tools/src/yosys`). Apply
-with `git apply` from that directory. `tools/` is not committed, so a
-freshly built toolchain has none of these — `run_synth.py` probes for
-the ones that matter and refuses to run without them.
+Local patches to the project's yosys build (`tools/src/yosys`).
+`scripts/build-toolchain.sh` applies them as it fetches, and `git apply`
+from that directory does it by hand. `tools/` is not committed, so a
+toolchain built any other way has none of these — both that script and
+`run_synth.py` probe for the ones that matter and refuse to run without
+them.
 
 ## yosys-cmp2lut-signed-negative-constant.patch
 
