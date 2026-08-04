@@ -27,6 +27,74 @@ the post-synthesis netlist and the nextpnr JSON report.
 - `--timing-allow-fail` is deliberate: this is characterisation, a
   missed target must be reported, not turned into a build failure.
 - The placer seed is fixed (`--seed 1`) so runs are comparable.
+- Two checks bracket synthesis, because nothing downstream would catch
+  what they catch: `check_cmp2lut()` probes the toolchain before it is
+  trusted, and `check_netlist()` asserts the netlist still contains the
+  storage the design depends on (`NETLIST_FF_FLOOR`). Both are fatal.
+
+## The cmp2lut trap
+
+**Stock yosys deletes this design's key store. The patch in
+`patches/` is not optional.**
+
+`synth_ecp5` runs `techmap -map +/cmp2lut.v -D LUT_WIDTH=4`
+unconditionally (`techlibs/lattice/synth_lattice.cc:438`) to map narrow
+comparisons against constants into a single LUT. In `gen_lut`, stock
+`cmp2lut.v` sign-interprets the *variable* operand but not the
+*constant* one:
+
+```verilog
+if (sign)
+    i_var = n[width-1:0];   // signed
+else
+    i_var = n;
+i_cst = operand;            // always unsigned  <-- the defect
+```
+
+So a signed comparison against a negative constant is enumerated
+against that constant's unsigned value and the truth table comes out
+wrong. `$signed(a) >= $signed(4'b1000)` is `a >= -8`, a tautology, and
+maps to `16'h0000` — constant false. An exhaustive sweep of every
+`$lt/$le/$gt/$ge` cell the pass accepts gets 480 of 1920 wrong at
+`LUT_WIDTH=4` and 3024 of 12096 at `LUT_WIDTH=6`; every failure is a
+signed comparison against a negative constant. Yosys's own regression
+(`tests/lut/map_cmp.v`) only ever uses `+5` and `0`, so the blind spot
+is exact.
+
+How it reached the key store: `logic [255:0] keys [NUM_SLOTS]` is an
+*ascending* unpacked array (`[0:7]`), and `read_slang` packs element
+`i` at the reversed position. The index bounds check for
+`keys[wr_slot[SLOT_W-1:0]]` therefore comes out as a signed comparison
+of `{1'b1, ~slot}` against `4'b1000` — that is, against `-8` — which
+is a tautology and mapped to constant false. The per-slot write mask
+became constant 0, `opt_expr` collapsed the write mux to `D = Q`, and
+`opt_dff` correctly deleted a register that can never change. Exactly
+two cells in all of `oca_core` were hit, both in `oca_keystore.sv`
+(the write decode and the read of `loaded`); everything downstream —
+`rd_valid`, `eng_key`, `u_aead.key_r` folding to constants — followed
+correctly from that one false premise.
+
+**This was never a regression.** Synthesising `95c81f7`, the commit
+before the packet-overlap rework, gives 2313 key-store flip-flops of
+which 2056 have `.DI` tied to their own `.Q`: dead registers that were
+simply not yet garbage-collected. The higher flip-flop count that made
+the older build look healthy *was* the corpses. Every bitstream this
+project could ever have produced had a non-functional key store.
+
+Why no test caught it: Verilator elaborates the RTL and never runs
+yosys, so all 72 simulation tests are consistent with a netlist in
+which the key store does not exist. Hence `check_netlist()`, and hence
+`hw/sim/run_keystore_gate.py`, which synthesises `oca_keystore` and
+replays its four cocotb tests on the ECP5 netlist. That runner is the
+non-vacuity proof for this whole section: against a netlist built with
+the unpatched mapper, `test_write_then_read` and `test_reset_clears`
+fail; against a patched one, all four pass.
+
+The RTL is not at fault and has not been changed. Declaring the arrays
+`[NUM_SLOTS-1:0]` instead also dodges the bug, but only by avoiding the
+index inversion by coincidence — it fixes nothing for the next array,
+and the mapper would still be wrong. The patch is upstreamable and is
+the actual fix; see `patches/README.md`.
 
 ## Results
 
@@ -1149,3 +1217,54 @@ thousands of iterations (773, 591, 534, 321, 217, 97, 98) before dropping
 to zero — but a seed that has been bouncing between 50 and 2300 arcs for
 three hours, as seeds 2 and 3 were, is giving a different signal from one
 that is still coming down.
+
+### After restoring the key store (the cmp2lut fix)
+
+Measured 2026-08-04, same device, package and speed grade as everything
+above (LFE5U-45F, CABGA381, speed 6), 100 MHz constraint,
+`--out-of-context`. **The RTL is identical in both rows** — the only
+difference is whether yosys's `cmp2lut.v` carries the patch in
+`patches/`. See "The cmp2lut trap" above for what the defect is.
+
+| build | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax mean | seeds |
+|---|---|---|---|---|---|---|
+| stock yosys — key store deleted | 8620 | 8311 | 4 | 20 | 49.31 | 48.66, 49.96 |
+| patched — key store present | 11590 | 12043 | 4 | 20 | 48.84 | 49.76, 47.48, 48.45, 48.84, 49.67 |
+
+Seeds are 1 and 2 for the stock row; 1, 2, 4, 5 and 6 for the patched
+row.
+
+**This is not a regression in area; it is the cost of having a key store
+at all.** The 8620/8311 figures every earlier section compares against
+were measured on a netlist with no key material in it. The +3732
+flip-flops are 2313 in `oca_keystore.sv` (2048 key bits, 8 loaded bits,
+256 `rd_key`, 1 `rd_valid`) plus the 256-bit `eng_key` and the status
+and response logic that had folded behind them.
+
+**Fmax is unchanged within the seed spread**: 49.31 MHz mean before,
+48.84 MHz after — **-1.0%**, against a spread of 4.8% across the five
+patched seeds alone (47.48 to 49.76). That is the expected result — the
+critical path lives in `poly1305.sv`'s DSP products and `chacha20.sv`,
+not in a register file read through a mux — but it had to be measured
+rather than assumed. The stock row is only two seeds, so treat its mean
+as the weaker of the two.
+
+**Router effort is the real cost, and it is not small.** Every seed
+routed — none oscillated, none had to be abandoned — but the larger
+netlist takes much longer to get there. `Router1 time`, against 196 s
+for the stock netlist:
+
+| seed | 1 | 2 | 4 | 5 | 6 |
+|---|---|---|---|---|---|
+| router time (s) | 519 | 2140 | 482 | 1041 | 1498 |
+
+Seed 1 ran alone; 2, 4, 5 and 6 shared the machine with each other, so
+their figures are inflated by contention and are an upper bound rather
+than a clean measurement. Even so the cheapest patched seed is 2.5x the
+stock netlist. This die was already described above as running out of
+routing before it runs out of cells, and this change spends about 3000
+more LUTs against that margin — budget for it before the MAC, the RGMII
+wrapper and the PLL arrive.
+
+DP16KD stays at 4 and MULT18X18D at 20: the key store is flip-flops and
+a decode, so neither the block RAMs nor the DSPs move.

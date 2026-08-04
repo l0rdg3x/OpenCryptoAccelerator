@@ -72,7 +72,13 @@ between the MAC and it; the 8-bit boundary at the MAC is unchanged.
   - prjtrellis — cmake on `libtrellis/`; `pytrellis` builds against
     Python 3.14 with the bundled pybind11;
   - yosys — CMake (not the old Makefile), Ninja, submodules included
-    (`abc`, `slang`);
+    (`abc`, `slang`). **Apply
+    `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`**
+    (`git apply` in `tools/src/yosys`) — without it synthesis silently
+    deletes the key store. `techlibs/common/cmp2lut.v` is read at run
+    time from `tools/yosys/share/yosys/cmp2lut.v`, so an already-built
+    yosys is fixed by copying the patched file there, no rebuild
+    needed;
   - nextpnr — `-DARCH=ecp5 -DECP5_DEVICES=45k -DBUILD_PYTHON=OFF
     -DTRELLIS_INSTALL_PREFIX=tools/trellis
     -DEigen3_DIR=tools/eigen/share/eigen3/cmake`. Building only the 45k
@@ -103,7 +109,12 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
 .venv/bin/python hw/sim/run_oca_core.py           # 26/26 pass
 .venv/bin/python hw/sim/run_attack.py             # 15/15 pass
+.venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 ```
+
+`run_keystore_gate.py` is the only suite that runs on a synthesised
+netlist rather than on the RTL; it exists because everything above it
+is blind to synthesis.
 
 `run_attack.py` drives the same DUT as `run_oca_core.py` but from the
 other side: its tests are written to break the four-stage overlap
@@ -186,6 +197,21 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   reverted within the same second keeps executing the mutated bytecode —
   the restore looks broken, or worse, a later run silently keeps the
   mutation. Cost one confusing debug session on 2026-08-03.
+- **A green simulation says nothing about the netlist.** Verilator
+  elaborates the SystemVerilog directly and never runs yosys, so a
+  synthesis bug is invisible to every suite we have. Stock yosys
+  (0.67+, and upstream `main` as of 2026-08-04) mis-maps signed
+  comparisons against negative constants in
+  `techlibs/common/cmp2lut.v`, which `synth_ecp5` runs unconditionally;
+  it deleted the entire key store from `oca_core` — 2048 key bits, 8
+  loaded bits — while all 72 tests stayed green and the build reported
+  success. Fixed by
+  `hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`, which
+  **must be applied to any freshly built yosys**; `run_synth.py` probes
+  for the defect and refuses to run without it. The lesson generalises:
+  whenever correctness depends on something only synthesis decides,
+  assert it against the netlist in `NETLIST_FF_FLOOR`, because no test
+  in `hw/sim/` can. Cost the MVP bitstream; see `hw/syn/README.md`.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
@@ -392,6 +418,24 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   by relaxing the constraint). And **nothing here has run
   on silicon** — Verilator cycle counts and `--out-of-context` synthesis,
   with no IO, no pin constraints, no MAC and no PLL.
+- **The key store was missing from every netlist this project ever
+  produced**, and is now present: a mis-mapping in yosys's
+  `cmp2lut.v` folded `oca_keystore.sv`'s index bounds check to constant
+  false, so all 2048 key bits and 8 loaded bits were optimised away and
+  a bitstream would have answered "bad slot" to every seal and open.
+  Not a regression — synthesising `95c81f7` shows the same key store
+  already dead, as 2056 self-holding registers. Fixed by
+  `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
+  (upstream report drafted, not filed); `run_synth.py` now refuses an
+  unpatched toolchain and asserts the key store's storage against the
+  netlist, and `run_keystore_gate.py` replays the key store tests on the
+  synthesised netlist — 2 of its 4 fail without the patch. Cost:
+  8620 -> 11590 TRELLIS_COMB and 8311 -> 12043 TRELLIS_FF, DP16KD and
+  MULT18X18D unchanged at 4 and 20, Fmax 49.31 -> 48.84 MHz mean
+  (-1.0%, inside a 4.8% seed spread over five seeds). This is the price
+  of having a key store at all, not a regression in area — what it does
+  cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
+  "The cmp2lut trap".
 - Next: **the Ethernet integration**, which needs the board (expected
   ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII wrapper
   with its ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
