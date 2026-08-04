@@ -76,11 +76,19 @@ async def watch_descriptor(dut, g: Guard, stats=None):
 
 
 async def watch_pd_tag_margin(dut, margin: dict):
-    """Record how many cycles of slack the pd_tag hazard actually has.
+    """Record how many cycles of slack the pd_tag hand-off actually has.
 
-    Slack = (cycle PROC rewrites pd_tag) - (cycle DRAIN copied it). The
-    design is safe only while this stays positive; nothing in the RTL
-    enforces it.
+    Slack = (cycle PROC writes pd_tag again) - (cycle DRAIN copied the
+    descriptor before it). pd_tag is written in P_ENDREQ under the same
+    !pd_valid guard as the rest of the descriptor, so every write of it
+    lands on the cycle a descriptor is published, and the copy DRAIN
+    makes of the descriptor before it is necessarily earlier.
+
+    That is why the change is measured against the *previous* copy and
+    not against the one happening in the same cycle: the write landing
+    on the take cycle is the arrival of the descriptor being taken, not
+    a rewrite of it. This is a measurement, not the check --
+    watch_descriptor is what fails if a write escapes the guard.
     """
     p = dut.u_proto
     cycle = 0
@@ -95,12 +103,12 @@ async def watch_pd_tag_margin(dut, margin: dict):
                 and not int(dut.u_aead.out_valid.value)
                 and str(p.dr_state.value) == "000")   # D_IDLE
         tag = int(p.pd_tag.value)
-        if took:
-            taken_at = cycle
         if last_tag is not None and tag != last_tag and taken_at is not None:
             margin["min"] = min(margin.get("min", 1 << 30), cycle - taken_at)
             margin["n"] = margin.get("n", 0) + 1
             taken_at = None
+        if took:
+            taken_at = cycle
         last_tag = tag
         await RisingEdge(dut.clk)
         cycle += 1
@@ -694,29 +702,53 @@ async def test_tag_outcome_timing_residual_is_bounded(dut):
     explained entirely by the response being shorter: if the *check
     itself* took a different number of cycles, an observer would learn
     the outcome before the status byte arrives.
+
+    So the residual is bounded, not fixed. D_FIN reaches D_PUBLISH
+    through D_CHECK for either outcome and D_CHECK is one cycle either
+    way, which is what makes the upper bound the response length
+    difference and nothing more. The lower bound is what a successor
+    that is busy computing gets: it hides the shorter stream entirely
+    and the residual collapses to zero. Both ends are measured here,
+    because a bound only one end of which is ever reached says nothing
+    about the other.
     """
     await setup(dut, monitor=False)
     await command(dut, build_load_key(0x60, 0, KEY))
 
-    probe = build_seal(0x91, 0, NONCE2, b"", b"probe" * 12)
     msg = bytes((i * 5) & 0xFF for i in range(256))
     ct, tag = aead_encrypt(KEY, NONCE, b"", msg)
     bad = tag[:15] + bytes([tag[15] ^ 0x01])
+    beat_delta = (8 + len(msg) + 7) // 8 - 1
 
-    d_ok, r_ok = await timed_pair(dut, build_open(0x90, 0, NONCE, b"", ct, tag),
-                                  probe)
-    d_no, r_no = await timed_pair(dut, build_open(0x90, 0, NONCE, b"", ct, bad),
-                                  probe)
-    assert r_ok[0]["status"] == ST_OK and r_no[0]["status"] == ST_AUTH_FAIL
-    beats_ok = (8 + len(msg) + 7) // 8
-    beats_no = 1
-    dut._log.info(f"TAG_RESIDUAL ok={d_ok} fail={d_no} delta={d_ok - d_no} "
-                  f"beats_ok={beats_ok} beats_fail={beats_no} "
-                  f"beat_delta={beats_ok - beats_no}")
-    assert d_ok - d_no == beats_ok - beats_no, (
-        "the timing difference between a passing and a failing tag is not "
-        f"explained by the response length alone: {d_ok - d_no} cycles vs "
-        f"{beats_ok - beats_no} beats")
+    probes = {
+        # a successor whose own message keeps the engine busy for far
+        # longer than the shorter response takes to stream
+        "seal": build_seal(0x91, 0, NONCE2, b"", b"probe" * 12),
+        # a successor that costs nothing, so the whole shift shows
+        "stats": build_stats(0x92),
+    }
+    residual = {}
+    for name, probe in probes.items():
+        d_ok, r_ok = await timed_pair(
+            dut, build_open(0x90, 0, NONCE, b"", ct, tag), probe)
+        d_no, r_no = await timed_pair(
+            dut, build_open(0x90, 0, NONCE, b"", ct, bad), probe)
+        assert r_ok[0]["status"] == ST_OK and r_no[0]["status"] == ST_AUTH_FAIL
+        residual[name] = (d_ok, d_no, d_ok - d_no)
+    dut._log.info(f"TAG_RESIDUAL {residual} beat_delta={beat_delta}")
+
+    for name, (d_ok, d_no, delta) in residual.items():
+        assert 0 <= delta <= beat_delta, (
+            f"the {name} behind a failing tag moved by {delta} cycles, "
+            f"which the {beat_delta}-beat response length difference does "
+            "not explain: the check itself is not constant time")
+    assert residual["stats"][2] == beat_delta, (
+        "a successor that computes nothing did not see the whole response "
+        f"length difference ({residual['stats'][2]} of {beat_delta}): the "
+        "bound above is not being reached and proves nothing")
+    assert residual["seal"][2] == 0, (
+        "a successor whose own message outlasts the shorter response still "
+        f"moved by {residual['seal'][2]} cycles")
 
 
 # ===========================================================================

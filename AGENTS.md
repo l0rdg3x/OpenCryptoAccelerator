@@ -100,9 +100,17 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
-.venv/bin/python hw/sim/run_pktbuf.py             # 3/3 pass
-.venv/bin/python hw/sim/run_oca_core.py           # 10/10 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 26/26 pass
+.venv/bin/python hw/sim/run_attack.py             # 15/15 pass
 ```
+
+`run_attack.py` drives the same DUT as `run_oca_core.py` but from the
+other side: its tests are written to break the four-stage overlap
+rather than to confirm it, and several of them watch oca_proto's
+internal registers instead of the wire, because a descriptor field
+moving under a pending hand-off is invisible to any payload assertion
+until the traffic happens to hit the alignment that exposes it.
 
 The protocol model has no DUT, so it runs as plain Python rather than
 through a simulator — pulling Verilator into a pure Python check would
