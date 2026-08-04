@@ -46,6 +46,37 @@ Store-and-forward also buys the security property in section 5: the
 plaintext is entirely in memory before anything is sent, so it can
 simply not be sent.
 
+> **Amended 2026-08-04, after the datapath was measured. The 8-bit
+> boundary is settled outside `oca_core` and is being abandoned inside
+> it.** Sections 1 and 2 above read as if one width served both, which
+> is how the whole protocol path came to be a byte wide. It cannot feed
+> the engine.
+>
+> - **At 8 bits the buffer needs 66 cycles to assemble a 64-byte block
+>   the engine consumes in 40** — 64 bytes at one byte per cycle behind
+>   the two-deep valid pipeline of the reader in `oca_proto.sv`. Even
+>   with everything else free, the feed sets the pace and an engine
+>   could be busy at most 40/66 of the time. It is not free: measured
+>   end to end, a block costs **415 cycles**, ~0.062 Gbps per core,
+>   because store and forward serialises receive, process and transmit
+>   (`oca/hw/syn/README.md`, "The host protocol layer: oca_core").
+> - **So the datapath moves to 64 bits inside `oca_core`.** Eight bytes
+>   per cycle put a block in the buffer in 8 cycles plus the pipeline —
+>   an estimate, roughly 10 against the engine's 40, comfortably clear
+>   of it. What section 1 fixes is the *external* boundary: the 1G MAC
+>   in `verilog-ethernet` hands over an 8-bit AXI-Stream and that is not
+>   in question. The width conversion belongs at that boundary, not
+>   carried through the buffers and the protocol FSM.
+> - **Section 2's "about twice what the wire can carry" is no longer
+>   true.** The device holds two engines, not three: ~1.26 Gbps of
+>   crypto against 1 Gbps of wire, 1.26x rather than 2x, and only once
+>   the engines can be fed. Three `oca_core` instances do not route at
+>   all — see `oca/hw/syn/README.md`, "The occupancy study", and the
+>   corrected MVP target in `SPEC.md`. The rest of section 2 stands
+>   unchanged: the CRC argument, the engine's inability to abandon a
+>   message and the security property all hold at any width, and none
+>   of them depends on that comparison.
+
 ## 3. Modules
 
 Four modules, one responsibility each, all under `oca/hw/rtl/`:

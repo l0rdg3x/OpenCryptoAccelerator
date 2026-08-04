@@ -164,9 +164,20 @@ headroom for the GbE MAC, packet buffering and top-level glue that do not
 exist yet, none of which is in these out-of-context numbers. Fmax is not
 claimed either: over four placer seeds the engine means 50.72 -> 52.83
 MHz while the standalone core shows no effect at all, and the critical
-path is structurally the same quarter round it was. Three engines fit,
-for 1.97-2.07 Gbps aggregate over those seeds, which straddles the
->= 2 Gbps MVP target (`hw/syn/README.md`).
+path is structurally the same quarter round it was.
+
+**Three engines do not fit, and the reason is not area.** Placing the
+configurations on 2026-08-04 instead of multiplying one core's report:
+two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
+49.28 MHz, while three take 33484 LUTs (76.4%) and 60 multipliers
+(83.3%) — both under budget — and **never route**, with roughly 50000
+arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
+is congestion, not timing. Two engines at 49.28 MHz are 158 MB/s =
+**~1.26 Gbps of crypto capacity**, saturating one GbE port (125 MB/s)
+with 26% margin; the board's second PHY cannot be fed on this device.
+This supersedes the 1.97-2.07 Gbps three-engine projection, and
+`SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
+occupancy study").
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
@@ -191,9 +202,12 @@ transfers. The response path is the largest single cost and is a
 handshake rather than a bandwidth limit, so it is also the cheapest
 thing to fix: holding `m_tvalid` up and pipelining the buffer read, as
 the receive side already does, would take a block to 287 cycles and
-throughput to ~0.090 Gbps. Widening the buffers to 32 bits and
-overlapping the phases is the structural fix. **None of this has run on
-silicon.**
+throughput to ~0.090 Gbps. Widening the internal datapath to 64 bits
+and overlapping the phases is the structural fix, and the width is now
+decided: at 8 bits the buffer needs 66 cycles to assemble a block the
+engine consumes in 40, so it cannot feed even one engine
+(`../docs/design/2026-08-03-host-protocol.md`). **None of this has run
+on silicon.**
 
 Next: the Ethernet integration, which needs the board —
 `verilog-ethernet` (MIT) as a submodule, the RGMII wrapper with its ECP5

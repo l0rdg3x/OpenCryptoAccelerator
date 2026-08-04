@@ -262,19 +262,33 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   and kept out of the throughput figures. The masking change is covered
   by `hw/sim/test_dirty_pad.py`, without which no test in the project
   could see it (`oca/hw/syn/README.md`).
-- **Engine replication** is characterised but not built. At 20
-  multipliers and 7358 LUTs each, an LFE5U-45F holds three — 60/72
-  multipliers (83%), 22074/43848 LUTs (50.3%) — for **1.97-2.07 Gbps**
-  aggregate over four seeds, which straddles the >= 2 Gbps the MVP
-  target is written against. A fourth is out of reach on multipliers
-  alone (80 > 72); on LUTs alone four would fit (67.1%), so **the
-  multiplier budget is the binding constraint on engine count**. The
-  50.3% is out-of-context and still has to absorb the GbE MAC, the host
-  interface and packet buffering, so it is a floor for three engines,
-  not a budget for the board. Note that `ROWS_PER_CYCLE` in
-  `poly1305.sv` competes with replication for the same 72 multipliers —
-  2 rows per cycle costs 40 per engine, so one engine instead of three —
-  while removing the one-cycle `p_blk` bubble is free.
+- **Engine replication: two, not three, and the reason is the router.**
+  Placed and routed on 2026-08-04 rather than projected from one core
+  (four seeds each, `--out-of-context`): 1 `oca_core` 11149 LUTs
+  (25.4%), 20 MULT (27.8%), 50.59 MHz; 2 `oca_core` 22313 LUTs (50.9%),
+  40 MULT (55.6%), **49.28 MHz** (-2.6%, inside the seed spread); 3
+  engines + 1 protocol layer 25983 LUTs (59.3%), 60 MULT (83.3%),
+  42.80 MHz; **3 `oca_core` 33484 LUTs (76.4%), 60 MULT (83.3%) — does
+  not route.** One seed fails placement, six more were still routing
+  after 55 minutes each, and roughly 50000 arcs stay unrouted whether
+  the constraint is 100, 45, 40 or 35 MHz: **congestion, not timing**,
+  so a slower clock buys nothing. Neither multipliers nor LUTs are the
+  binding constraint — both fit — **routability is**, which no
+  multiplication of a single-core report could have predicted. With
+  three engines the critical path also leaves `chacha20.sv` for
+  `poly1305.sv:140` (the registered DSP products), routing-dominated
+  because the third engine fills 83% of the DSP columns.
+  **Corrected MVP target: ~1.26 Gbps**, i.e. two engines x 1.6
+  bytes/cycle at 49.28 MHz = 158 MB/s, saturating one GbE port
+  (125 MB/s) with **26% margin**. The board has two PHYs
+  (`BOM-MVP.md`); **the second cannot be fed on this device** — a
+  recorded limit, not an oversight. This supersedes the 1.97-2.07 Gbps
+  three-engine projection and the >= 2 Gbps target (`SPEC.md`,
+  `oca/hw/syn/README.md` "The occupancy study"). Note that
+  `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
+  same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
+  engine instead of two — while removing the one-cycle `p_blk` bubble
+  is free.
 - **The host protocol is implemented and verified** (design:
   `docs/design/2026-08-03-host-protocol.md`). Four new modules behind an
   8-bit AXI-Stream boundary: `oca_keystore.sv` (8 key slots, each with a
@@ -320,3 +334,8 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   handshake — holding `m_tvalid` up and pipelining the buffer read, as
   the receive feed already does, takes a block from 415 cycles to 287
   and throughput to ~0.090 Gbps (+45%) for a rewrite of one state.
+  **The 8-bit datapath inside `oca_core` is moving to 64 bits**: at 8
+  bits the buffer needs 66 cycles to assemble a block the engine
+  consumes in 40, so it cannot feed even one engine (amendment of
+  2026-08-04 in `docs/design/2026-08-03-host-protocol.md`). The 8-bit
+  AXI-Stream at the MAC boundary is unaffected.

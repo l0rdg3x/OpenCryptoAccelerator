@@ -731,8 +731,11 @@ cheap one and needs no design change**: holding `m_tvalid` up and
 pipelining the buffer read, exactly as the receive feed already does,
 takes the response from 192 cycles to 64 and the block from 415 to 287
 — **~90 Mbps, +45%** — for a rewrite of one state. Widening the buffers
-to 32 bits and overlapping the phases is the structural fix and the
-larger one; it needs a board to measure honestly.
+and overlapping the phases is the structural fix and the larger one.
+(The width was settled on 2026-08-04 and is **64 bits**, not the 32 the
+implementation plan floated: at 8 bits the buffer needs 66 cycles to
+assemble a block the engine consumes in 40 — see
+`docs/design/2026-08-03-host-protocol.md`.)
 
 **None of this has run on silicon.** Every cycle count here comes from
 Verilator, every area and Fmax figure from yosys and nextpnr on an
@@ -742,15 +745,144 @@ these numbers and have to share the fabric and the clock with them. This
 is a simulation-derived estimate of a design that has never been
 programmed into a device.
 
-**One stale figure is knowingly left in the RTL.** The header comment of
-`oca_pktbuf.sv` still carries the plan's pre-measurement estimate — "the
-whole path runs at roughly 0.16 Gbps ... about 16% of the GbE link" —
-which the 415-cycle measurement above supersedes. It was left because
-this pass changed no RTL; it should be corrected to ~0.062 Gbps by
-whoever next edits that file. Recorded here rather than fixed silently,
-so the comment is not mistaken for a second, independent source.
+**One stale figure was left in the RTL by this pass and has since been
+corrected.** The header comment of `oca_pktbuf.sv` carried the plan's
+pre-measurement estimate — "the whole path runs at roughly 0.16 Gbps
+... about 16% of the GbE link" — which the 415-cycle measurement above
+supersedes. It was left because this pass changed no RTL, and was
+corrected to ~0.062 Gbps in the following commit. Recorded here rather
+than fixed silently, so the comment is not mistaken for a second,
+independent source.
 
 Build time: **3 min 11 s** for the full `oca_core` build (yosys 8.1 s +
 nextpnr), on the same machine at seed 1. The three extra seeds were run
 against the same netlist, since yosys output does not depend on the
 placer seed.
+
+### The occupancy study: how many engines fit — and what the router says
+
+Measured 2026-08-04, same device, package and speed grade as everything
+above (LFE5U-45F, CABGA381, speed 6), `--out-of-context`, four placer
+seeds per configuration that routes — seven were tried on the one that
+does not. This is the measurement that decides the MVP's shape, and it
+overturns the answer every section above assumed.
+
+Every earlier section projected three engines by multiplying one
+engine's area by three. This one instantiates them and runs place &
+route. The multi-engine top levels are throwaway wrappers that
+instantiate N units and are **not** in `run_synth.py`'s `DESIGNS`; the
+single-core row is the committed `oca_core` build, whose report is
+reproducible with the documented command.
+
+| configuration | TRELLIS_COMB | of 43848 | MULT18X18D | of 72 | routed Fmax (mean of 4 seeds) |
+|---|---|---|---|---|---|
+| 1 `oca_core` | 11149 | 25.4% | 20 | 27.8% | 50.59 MHz |
+| 2 `oca_core` | 22313 | 50.9% | 40 | 55.6% | 49.28 MHz |
+| 3 engines + 1 protocol layer | 25983 | 59.3% | 60 | 83.3% | 42.80 MHz |
+| **3 `oca_core`** | **33484** | **76.4%** | **60** | **83.3%** | **does not route** |
+
+#### The finding: three engines do not fail on area. They fail to route.
+
+The three-core configuration fits the device on every budget anyone had
+been watching — 76.4% of the LUTs, 83.3% of the multipliers, both below
+100% — and **nextpnr never produces a routed design from it**:
+
+- **one seed fails placement outright**;
+- **six further seeds were still routing after 55 minutes each** and
+  were stopped;
+- in every one of those attempts roughly **50000 arcs remain unrouted**;
+- and that count does not move when the design is constrained at
+  **100, 45, 40 or 35 MHz**. Four constraints spanning a factor of
+  nearly three, the same roughly 50000 arcs left over each time.
+
+That last line is the evidence, and it is what makes this a hard result
+rather than a slow build. If the router were failing to *close timing*,
+relaxing the constraint would let it finish and report a lower Fmax —
+that is exactly what `--timing-allow-fail` exists to produce. Instead
+the routing resource itself runs out, identically, regardless of what
+clock is asked for. **It is congestion, not timing. A slower clock buys
+nothing, and neither would a faster device speed grade.**
+
+So the constraint on engine count is neither of the two this file has
+argued about. It is not multipliers (60 of 72 fit), it is not LUTs
+(76.4% fit), it is **routability** — a budget nothing in the earlier
+sections was tracking, and the only one that cannot be predicted by
+multiplying a single-core report.
+
+#### What the intermediate configurations say
+
+- **Two `oca_core` are comfortable.** 22313 LUTs against 2 x 11149 =
+  22298 — replication is linear to +15 LUTs of glue — and 49.28 MHz
+  against the single core's 50.59, **-2.6%**, well inside the 3.9%
+  spread the single core shows across its own four seeds (50.95 / 50.02
+  / 49.70 / 51.67 in the section above). Two engines cost essentially
+  nothing in clock.
+- **Three engines sharing one protocol layer do route**, at 25983 LUTs
+  (59.3%) and 42.80 MHz. The gap to the failing configuration is the
+  two extra protocol layers: 33484 - 25983 = 7501 LUTs, close to the
+  2 x 3791 the protocol layer costs by difference, and 17.1 points of
+  occupancy. So it is not the third engine's arithmetic that breaks the
+  router — it is the last 17 points of a die that also has to carry
+  three DSP-hungry datapaths.
+- **That configuration is a probe, not a design.** No RTL feeds three
+  engines from one protocol layer — `oca_core` is one engine and one
+  protocol layer, and there is no arbiter — and at 8 bits one protocol
+  layer cannot feed even *one* engine (66 cycles to assemble a block
+  the engine consumes in 40). Its 42.80 MHz would be ~1.64 Gbps if such
+  a design existed and could be fed; **neither is true today**, and the
+  figure is recorded as occupancy and timing data, not as capacity.
+- **Where the critical path went.** With three engines it leaves
+  `chacha20.sv`, which has owned it since the per-byte mask rework, and
+  lands in **`poly1305.sv` line 140** — the registered DSP products,
+  `prod[sl][i] <= mul_a[sl][i] * mul_b[sl][i]`. It is routing-dominated:
+  the third engine fills **83% of the DSP columns**, so the datapath has
+  to cross the die to reach the multipliers it was given. The 42.80 MHz
+  is therefore -15.4% on the single core (and -13.1% on two cores),
+  which is far outside the seed spread — unlike the two-core reading,
+  this one is a real effect, and it is placement pressure rather than
+  logic.
+
+#### What this device delivers
+
+Two engines, at the two-core mean of 49.28 MHz and the 40 cycles per
+64-byte block measured in simulation (1.6 bytes/cycle each):
+
+| | figure |
+|---|---|
+| per engine | 49.28e6 x 1.6 = 78.8 MB/s = ~0.63 Gbps |
+| **two engines** | **158 MB/s = ~1.26 Gbps of crypto capacity** |
+| one GbE port | 125 MB/s = 1 Gbps |
+| margin over one port | **26%** |
+
+**One GbE port saturated with 26% margin is the ceiling of this
+silicon.** The MVP board carries two GbE PHYs (`BOM-MVP.md`), so
+2 Gbps of wire is present and >= 2 Gbps was the honest target to aim
+at; **the second port cannot be fed on an LFE5U-45F**, and that is a
+recorded limit rather than something the design overlooked. `SPEC.md`'s
+performance target has been corrected to ~1.26 Gbps accordingly.
+
+Three qualifications, none of them in the project's favour:
+
+- **This supersedes every "three engines" projection above**, including
+  the 1.97-2.07 Gbps of the area-pass section and the "multipliers, not
+  LUTs, cap engine count" reading of the two sections before it. Both
+  were arithmetic on a single-core report; this is place & route.
+- **1.26 Gbps is crypto capacity, not throughput.** What comes out of
+  `oca_core` today is 415 cycles per 64-byte block, so two cores at
+  49.28 MHz deliver ~0.12 Gbps end to end — a tenth of the engines'
+  capacity. The 8-bit host datapath is what stands between the two
+  numbers, and moving it to 64 bits is the amendment recorded in
+  `docs/design/2026-08-03-host-protocol.md`.
+- **Still no silicon.** Out-of-context builds: no IO buffers, no pin
+  constraints, no Ethernet MAC, no PLL. The MAC and the RGMII wrapper
+  have yet to be placed alongside two engines *and* routed, and the
+  three-core result is the reason not to assume that will be
+  comfortable: this die runs out of routing before it runs out of
+  cells.
+
+Cost of the study, for whoever repeats it: the six three-core routing
+attempts alone are over five hours of wall clock (6 x 55 min), most of
+it spent in a router that was never going to converge; the seventh seed
+never got that far, failing in placement. The 100 MHz run is the one
+worth doing first — if roughly 50000 arcs are still unrouted after an
+hour, relaxing the constraint is not the experiment to run next.
