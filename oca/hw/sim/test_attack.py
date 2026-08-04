@@ -177,6 +177,25 @@ async def watch_tx_bank(dut, g: Guard):
         cycle += 1
 
 
+async def watch_rx_write_width(dut, g: Guard):
+    """Every write RX issues must carry 1..8 bytes.
+
+    oca_pktbuf's header states that as a promise its writer keeps, and
+    the buffer leans on it: a write with no bytes leaves the count where
+    it is and lands a word past the packet's own bytes. The keep of a
+    beat is the source's, not ours, so the only thing that can hold the
+    promise is RX itself.
+    """
+    p = dut.u_proto
+    cycle = 0
+    while True:
+        await ReadOnly()
+        if int(p.rx_wr_en.value) and int(p.rx_wr_bytes.value) == 0:
+            g.fail(cycle, "RX issued a write with wr_bytes = 0")
+        await RisingEdge(dut.clk)
+        cycle += 1
+
+
 async def watch_rx_bank(dut, g: Guard):
     """The bank PROC is parsing must never be written or cleared by RX."""
     p = dut.u_proto
@@ -832,6 +851,68 @@ async def test_stats_counters_are_not_corrupted_by_the_descriptor_race(dut):
         assert b["done"] >= a["done"], f"done went backwards at gap {gap}"
         assert a["drop"] == base["drop"], f"spurious drop at gap {gap}: {a}"
         assert b["auth"] == base["auth"], f"spurious auth fail at gap {gap}: {b}"
+
+
+@cocotb.test()
+async def test_an_empty_beat_is_never_written(dut):
+    """A beat with tkeep = 0 must not become a write.
+
+    verilog-axis's axis_adapter can close an aligned frame with an empty
+    tail beat, and a zero-length frame is that beat on its own. Both are
+    legal on the wire and neither carries a byte, so oca_pktbuf must not
+    be handed a write for them: its header states wr_bytes is 1..8 and
+    the count would not move for one that was zero, leaving the word
+    written past the packet's own bytes.
+
+    The monitor is the point of the test — the effect at the wire is
+    nothing, which is exactly why the invariant needs watching rather
+    than inferring. The payload assertions are here to show that holding
+    it costs the frame nothing: the aligned seal is still answered, and
+    the empty frame is still counted and dropped without an answer.
+    """
+    g = Guard()
+    cocotb.start_soon(watch_rx_write_width(dut, g))
+    await setup(dut)
+    await command(dut, build_load_key(0xF0, 0, KEY))
+    before = counters(await command(dut, build_stats(0xF1)))
+
+    # An 8-byte-aligned request, so every data beat is full and the empty
+    # one is the only partial keep in the frame.
+    msg = next(bytes((i * 7) & 0xFF for i in range(n))
+               for n in range(64)
+               if len(build_seal(0xF2, 0, NONCE, b"", bytes(n))) % 8 == 0)
+    want_ct, want_tag = aead_encrypt(KEY, NONCE, b"", msg)
+    pkt = build_seal(0xF2, 0, NONCE, b"", msg)
+    assert len(pkt) % 8 == 0
+
+    for data, keep in words_of(pkt):
+        await send_word(dut, data, keep, False)
+    await send_word(dut, 0, 0, True)
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    rsp = parse_response(await recv_packet(dut))
+    assert rsp["status"] == ST_OK, \
+        f"an empty tail beat failed the frame: status {rsp['status']}"
+    assert rsp["body"] == want_tag + want_ct, "body mismatch after an empty beat"
+    g.check("empty tail beat")
+
+    # The same beat as a frame of its own: shorter than a header, so it is
+    # counted, dropped and never answered, and its neighbour is untouched.
+    await send_word(dut, 0, 0, True)
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    rsp = await command(dut, build_seal(0xF3, 0, NONCE2, b"", msg))
+    ct2, tag2 = aead_encrypt(KEY, NONCE2, b"", msg)
+    assert rsp["status"] == ST_OK, f"neighbour status {rsp['status']}"
+    assert rsp["body"] == tag2 + ct2, "the empty frame disturbed its neighbour"
+
+    after = counters(await command(dut, build_stats(0xF4)))
+    # The two seals, the empty frame and the second stats itself.
+    assert after["rx"] == before["rx"] + 4, \
+        f"cnt_rx {before['rx']} -> {after['rx']}, want +4"
+    assert after["drop"] == before["drop"] + 1, \
+        f"cnt_drop {before['drop']} -> {after['drop']}, want +1"
+    g.check("empty frame")
 
 
 @cocotb.test()

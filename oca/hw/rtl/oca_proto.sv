@@ -98,6 +98,14 @@
  * partial keep in the packet still arriving must not fail the packet
  * being processed.
  *
+ * A beat with no bytes set at all is the one partial keep that is not an
+ * error: an adapter can close an aligned frame with an empty tail beat,
+ * and a zero-length frame is that beat on its own. It is accepted, and
+ * not written — oca_pktbuf's writer promises it 1..8 valid bytes, and a
+ * write of none lands a word past the packet's own byte count. Failing
+ * such a frame instead would answer 05 to traffic the adapter is
+ * entitled to produce.
+ *
  * Every fixed field is word-aligned, so the header is one read and the
  * arguments four. The single misaligned boundary in the protocol is the
  * one between the AAD and the message, whose distance apart is
@@ -626,7 +634,11 @@ module oca_proto #(
 
                 R_ACCEPT: begin
                     if (s_tvalid && s_tready) begin
-                        rx_wr_en    <= 1'b1;
+                        // A beat carrying no bytes is accepted and not
+                        // written: oca_pktbuf's writer owes it 1..8 valid
+                        // bytes, and a write of none would land a word
+                        // past the packet's own byte count.
+                        rx_wr_en    <= (keep_bytes != 4'd0);
                         rx_wr_data  <= s_tdata;
                         rx_wr_bytes <= keep_bytes;
                         if (!s_tlast && (s_tkeep != 8'hFF))
