@@ -434,11 +434,11 @@ async def test_every_tag_byte_is_compared(dut):
 
     Every other tag corruption in both suites flips byte 0 or byte 15, so
     a comparison of eight bits passes all of test_oca_core and a
-    comparison of 120 bits — one that ignores tag byte 7 — passes all 41
-    tests in the two suites while handing back the whole plaintext to a
-    forgery that differs in that one byte. Sixteen opens, one flipped bit
-    per byte and the bit position rotating with it, each of which must
-    answer 06 with no body.
+    comparison of 120 bits — one that ignores tag byte 7 — passed every
+    test in both suites before this one existed, while handing back the
+    whole plaintext to a forgery that differs in that one byte. Sixteen
+    opens, one flipped bit per byte and the bit position rotating with
+    it, each of which must answer 06 with no body.
 
     The intact tag is opened again at the end: without it a comparison
     wired to constant false would satisfy all sixteen negative cases.
@@ -457,7 +457,6 @@ async def test_every_tag_byte_is_compared(dut):
             dut, build_open(0x60 + i, 5, NONCE, b"", ct, bytes(forged)))
         assert rsp["body"] == b"", \
             f"tag byte {i}, bit {i % 8}: plaintext leaked: {rsp['body']!r}"
-        assert msg not in rsp["body"], f"tag byte {i}: plaintext present"
         assert rsp["status"] == ST_AUTH_FAIL, \
             (f"tag byte {i}, bit {i % 8} flipped and the open still "
              f"answered {rsp['status']}: that byte is not compared")
