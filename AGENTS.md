@@ -130,7 +130,8 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-81 RTL tests, plus 6 on a synthesised netlist.
+81 RTL tests, three of them run a second time at the smallest BYTES
+oca_pktbuf accepts, plus 6 on a synthesised netlist.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because
