@@ -33,16 +33,16 @@ module oca_core #(
     output logic        m_axis_tlast
 );
 
-    logic        rx_wr_en, rx_wr_clear, rx_wr_full;
+    logic        rx_wr_bank, rx_wr_en, rx_wr_clear, rx_rd_bank, rx_rd_full;
     logic [63:0] rx_wr_data, rx_rd_data;
     logic [ 3:0] rx_wr_bytes;
-    logic [11:0] rx_wr_count;
+    logic [11:0] rx_wr_count, rx_rd_count;
     logic [ 8:0] rx_rd_addr;
 
-    logic        tx_wr_en, tx_wr_clear, tx_wr_full;
+    logic        tx_wr_bank, tx_wr_en, tx_wr_clear, tx_rd_bank, tx_rd_full;
     logic [63:0] tx_wr_data, tx_rd_data;
     logic [ 3:0] tx_wr_bytes;
-    logic [11:0] tx_wr_count;
+    logic [11:0] tx_wr_count, tx_rd_count;
     logic [ 8:0] tx_rd_addr;
 
     logic         ks_wr_en, ks_rd_valid;
@@ -58,33 +58,42 @@ module oca_core #(
     logic         eng_out_valid, eng_done, eng_err;
     logic [127:0] eng_tag;
 
+    // The receive buffer's writer needs no count (oca_pktbuf drops past
+    // capacity on its own) and nothing reads the transmit buffer's byte
+    // count or full flag on the read side.
     logic unused_ok;
-    assign unused_ok = tx_wr_full | eng_busy;
+    assign unused_ok = (|rx_wr_count) | (|tx_rd_count) | tx_rd_full | eng_busy;
 
     oca_pktbuf #(.BYTES(BYTES)) u_rxbuf (
         .clk,
         .rst_n,
+        .wr_bank (rx_wr_bank),
         .wr_en   (rx_wr_en),
         .wr_data (rx_wr_data),
         .wr_bytes(rx_wr_bytes),
         .wr_clear(rx_wr_clear),
         .wr_count(rx_wr_count),
-        .wr_full (rx_wr_full),
+        .rd_bank (rx_rd_bank),
         .rd_addr (rx_rd_addr),
-        .rd_data (rx_rd_data)
+        .rd_data (rx_rd_data),
+        .rd_count(rx_rd_count),
+        .rd_full (rx_rd_full)
     );
 
     oca_pktbuf #(.BYTES(BYTES)) u_txbuf (
         .clk,
         .rst_n,
+        .wr_bank (tx_wr_bank),
         .wr_en   (tx_wr_en),
         .wr_data (tx_wr_data),
         .wr_bytes(tx_wr_bytes),
         .wr_clear(tx_wr_clear),
         .wr_count(tx_wr_count),
-        .wr_full (tx_wr_full),
+        .rd_bank (tx_rd_bank),
         .rd_addr (tx_rd_addr),
-        .rd_data (tx_rd_data)
+        .rd_data (tx_rd_data),
+        .rd_count(tx_rd_count),
+        .rd_full (tx_rd_full)
     );
 
     oca_keystore #(.NUM_SLOTS(NUM_SLOTS)) u_keystore (
@@ -133,19 +142,23 @@ module oca_core #(
         .m_tvalid    (m_axis_tvalid),
         .m_tready    (m_axis_tready),
         .m_tlast     (m_axis_tlast),
+        .rx_wr_bank  (rx_wr_bank),
         .rx_wr_en    (rx_wr_en),
         .rx_wr_data  (rx_wr_data),
         .rx_wr_bytes (rx_wr_bytes),
         .rx_wr_clear (rx_wr_clear),
-        .rx_wr_count (rx_wr_count),
-        .rx_wr_full  (rx_wr_full),
+        .rx_rd_bank  (rx_rd_bank),
         .rx_rd_addr  (rx_rd_addr),
         .rx_rd_data  (rx_rd_data),
+        .rx_rd_count (rx_rd_count),
+        .rx_rd_full  (rx_rd_full),
+        .tx_wr_bank  (tx_wr_bank),
         .tx_wr_en    (tx_wr_en),
         .tx_wr_data  (tx_wr_data),
         .tx_wr_bytes (tx_wr_bytes),
         .tx_wr_clear (tx_wr_clear),
         .tx_wr_count (tx_wr_count),
+        .tx_rd_bank  (tx_rd_bank),
         .tx_rd_addr  (tx_rd_addr),
         .tx_rd_data  (tx_rd_data),
         .ks_wr_en    (ks_wr_en),

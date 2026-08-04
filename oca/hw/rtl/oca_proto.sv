@@ -87,20 +87,24 @@ module oca_proto #(
     input  logic         m_tready,
     output logic         m_tlast,
     // receive buffer
+    output logic         rx_wr_bank,
     output logic         rx_wr_en,
     output logic [ 63:0] rx_wr_data,
     output logic [  3:0] rx_wr_bytes,
     output logic         rx_wr_clear,
-    input  logic [ 11:0] rx_wr_count,
-    input  logic         rx_wr_full,
+    output logic         rx_rd_bank,
     output logic [  8:0] rx_rd_addr,
     input  logic [ 63:0] rx_rd_data,
+    input  logic [ 11:0] rx_rd_count,
+    input  logic         rx_rd_full,
     // transmit buffer
+    output logic         tx_wr_bank,
     output logic         tx_wr_en,
     output logic [ 63:0] tx_wr_data,
     output logic [  3:0] tx_wr_bytes,
     output logic         tx_wr_clear,
     input  logic [ 11:0] tx_wr_count,
+    output logic         tx_rd_bank,
     output logic [  8:0] tx_rd_addr,
     input  logic [ 63:0] tx_rd_data,
     // key store
@@ -182,6 +186,15 @@ module oca_proto #(
     // path and the accepting cycle is the state that stores the beat.
     always_comb s_tready = rst_n && (state == S_RX);
 
+    // One command at a time still, so one bank of each buffer is in use
+    // and the second stays idle. The banks exist for the packet-level
+    // overlap that follows; wiring them now keeps that change inside this
+    // module.
+    always_comb rx_wr_bank = 1'b0;
+    always_comb rx_rd_bank = 1'b0;
+    always_comb tx_wr_bank = 1'b0;
+    always_comb tx_rd_bank = 1'b0;
+
     // tkeep semantics are not documented upstream; verilog-axis's
     // axis_adapter produces a right-justified contiguous keep, and this
     // priority encoder reads the highest bit set. A keep that is neither
@@ -262,7 +275,7 @@ module oca_proto #(
                            + {2'd0, aad_len} + {2'd0, msg_len};
 
     logic len_bad;
-    always_comb len_bad = rx_wr_full || (want_len > 18'(BYTES))
+    always_comb len_bad = rx_rd_full || (want_len > 18'(BYTES))
                           || (want_len != {6'd0, rx_len});
 
     // Offset of the first payload byte: the open command carries the
@@ -545,10 +558,10 @@ module oca_proto #(
                     req_id        <= hdr[47:32];
                     slot          <= hdr[55:48];
                     ks_rd_slot    <= hdr[55:48];
-                    rx_len        <= rx_wr_count;
+                    rx_len        <= rx_rd_count;
                     resp_body_len <= 12'd0;
                     rx_keep_bad   <= 1'b0;
-                    if (rx_wr_count < 12'(HDR_LEN)) begin
+                    if (rx_rd_count < 12'(HDR_LEN)) begin
                         // not even a header: the only packet that gets no
                         // answer, because there is nothing to answer to
                         cnt_drop    <= cnt_drop + 32'd1;
