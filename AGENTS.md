@@ -99,7 +99,7 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
 .venv/bin/python hw/sim/run_pktbuf.py             # 3/3 pass
-.venv/bin/python hw/sim/run_oca_core.py           # 9/9 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 10/10 pass
 ```
 
 The protocol model has no DUT, so it runs as plain Python rather than
@@ -297,12 +297,18 @@ ECP5 synthesis (Phase 2, from `oca/`), see `hw/syn/README.md`:
   only). Store and forward throughout: the request is buffered whole
   before the engine sees it and the response is built whole before a
   byte leaves, which is what lets a failed tag return no plaintext at
-  all. Suites: keystore 4/4, pktbuf 3/3, oca_core 9/9, plus
+  all. Suites: keystore 4/4, pktbuf 3/3, oca_core 10/10, plus
   `test_proto_model.py` as plain Python. Lint `-Wall` clean with
   `--top-module oca_core`. **The security property has a test that can
   fail**: `test_corrupt_tag_yields_no_plaintext` asserts on the leak
   rather than on the status code, and was checked against a deliberately
-  broken tag comparison.
+  broken tag comparison. Two more properties the 64-bit datapath
+  introduced are covered the same way: `recv_packet` asserts the bytes
+  past `tkeep` are zero, so every test witnesses the final-beat mask
+  (removing it fails 6 of the 10), and
+  `test_partial_keep_mid_packet_fails_closed` sends a short beat before
+  `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
+  error is not a header drop.
 - **`oca_core` synthesised: 11149 LUTs (25.4%), 10842 FF (24.7%), 20
   MULT18X18D (27.8%), 2 DP16KD (1.9%), Fmax 50.95 MHz at seed 1**
   (50.59 MHz mean over seeds 1-4). **Both packet buffers infer block

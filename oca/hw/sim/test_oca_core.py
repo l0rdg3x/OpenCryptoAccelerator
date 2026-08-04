@@ -9,6 +9,7 @@ of beats it takes to carry it.
 """
 
 import random
+import struct
 
 import cocotb
 from cocotb.clock import Clock
@@ -18,10 +19,16 @@ from aead_model import aead_encrypt
 from proto_model import (HDR_LEN, OP_LOAD_KEY, OP_OPEN, OP_SEAL, ST_AUTH_FAIL,
                          ST_BAD_LENGTH, ST_BAD_MAGIC, ST_BAD_OPCODE,
                          ST_BAD_SLOT, ST_BAD_VERSION, ST_OK, build_load_key,
-                         build_open, build_seal, parse_response)
+                         build_open, build_seal, build_stats, parse_response)
 
 KEY = bytes(range(32))
 NONCE = bytes(range(12))
+
+
+def counters(rsp: dict) -> dict:
+    """Unpack a stats response: four little-endian 32-bit counters."""
+    rx, drop, done, auth = struct.unpack("<4I", rsp["body"])
+    return {"rx": rx, "drop": drop, "done": done, "auth": auth}
 
 
 def words_of(pkt: bytes):
@@ -98,6 +105,14 @@ async def recv_packet(dut, budget: int = 20000,
     A beat is taken only where tvalid and tready are both high in the
     read-only phase, which is the cycle the transfer edge ends; tkeep
     says how many of its bytes are response and not padding.
+
+    The bytes past tkeep are checked before being discarded, which is
+    what makes every test using this a witness that the final beat is
+    masked. Reading the response *through* tkeep alone cannot see it:
+    the bytes a partial last beat carries past the response length are
+    AEAD engine output — keystream over the tail of a partial block —
+    and dropping them here silently would leave nothing but the
+    downstream MAC honouring tkeep between them and the wire.
     """
     out = bytearray()
     for _ in range(budget):
@@ -109,8 +124,12 @@ async def recv_packet(dut, budget: int = 20000,
         last = taken and dut.m_axis_tlast.value == 1
         if taken:
             keep = int(dut.m_axis_tkeep.value)
-            out += int(dut.m_axis_tdata.value).to_bytes(
-                8, "little")[:keep.bit_count()]
+            raw = int(dut.m_axis_tdata.value).to_bytes(8, "little")
+            nbytes = keep.bit_count()
+            assert raw[nbytes:] == bytes(8 - nbytes), (
+                f"beat leaks {8 - nbytes} unmasked bytes past tkeep: "
+                f"tdata {int(dut.m_axis_tdata.value):#018x}, keep {keep:#04x}")
+            out += raw[:nbytes]
         await RisingEdge(dut.clk)
         if last:
             dut.m_axis_tready.value = 1
@@ -285,6 +304,45 @@ async def test_inconsistent_lengths(dut):
     pkt[23] = 0x00
     rsp = await command(dut, bytes(pkt))
     assert rsp["status"] == ST_BAD_LENGTH, f"status {rsp['status']}"
+
+
+@cocotb.test()
+async def test_partial_keep_mid_packet_fails_closed(dut):
+    """A short beat before tlast is a length error, not a header drop.
+
+    Only the final beat of a packet may be partial. A short beat
+    mid-stream leaves the receive buffer's byte count off a word
+    boundary and the next beat lands back on the word just written, so
+    nothing read out of the buffer afterwards is what arrived — the
+    magic included. oca_proto fails such a packet closed on the keep
+    itself, before the header is looked at, which is why the answer is
+    05: without that check the magic is read out of a word the packet
+    never wrote and the answer is 01 instead.
+
+    The counters say the same thing from the other side. cnt_drop
+    counts packets dropped for an *invalid header*, and this packet's
+    header was never judged, so it must not move; cnt_rx counts the
+    packet like any other, which is also what keeps the assertion on
+    cnt_drop from passing merely because the counters stopped moving
+    altogether.
+    """
+    await setup(dut)
+    before = counters(await command(dut, build_stats(0x40)))
+
+    pkt = build_seal(0x41, 0, NONCE, b"", b"x")
+    beats = [(int.from_bytes(pkt[:4], "little"), 0x0F)] + words_of(pkt[4:])
+    for i, (data, keep) in enumerate(beats):
+        await send_word(dut, data, keep, i == len(beats) - 1)
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    rsp = parse_response(await recv_packet(dut))
+    assert rsp["status"] == ST_BAD_LENGTH, f"status {rsp['status']}"
+
+    after = counters(await command(dut, build_stats(0x42)))
+    assert after["rx"] == before["rx"] + 2, \
+        f"cnt_rx {before['rx']} -> {after['rx']}, want +2"
+    assert after["drop"] == before["drop"], \
+        f"cnt_drop moved {before['drop']} -> {after['drop']} on a length error"
 
 
 @cocotb.test()
