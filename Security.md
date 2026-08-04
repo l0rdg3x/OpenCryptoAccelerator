@@ -235,8 +235,9 @@ around a limitation it has not been told about.
 
 2. **There is no `tag_valid`, and `done` is a single-cycle pulse.** The
    `tag` output is a register that holds the *previous* message's tag
-   until a new one completes; it is not cleared on reset, nor when a
-   new message starts, nor when a message is aborted. Callers must
+   until a new one completes. Reset clears it (limitation 4), but
+   nothing else does: not a new message starting, not a message being
+   aborted. Callers must
    latch `tag` on the cycle `done` pulses. Polling `tag` and assuming
    it belongs to the message in flight will return a stale tag from an
    earlier message — which is both a correctness bug and a way to
@@ -262,10 +263,10 @@ around a limitation it has not been told about.
    secret *before* the reset and zero after, because a test that only
    looked after the reset would pass on a core that was never loaded.
 
-   Two things this does not cover. **The packet buffers are block RAM
-   and are not cleared** — 8192 bytes per core, the larger half of the
-   problem; see section 6. And clearing is only as good as the reset:
-   nothing zeroises on power loss, and a design that stops being
+   The packet buffers are block RAM and cannot be cleared the same way;
+   they are walked instead, one word per cycle, and section 6 gives
+   that. What none of it covers: clearing is only as good as the reset.
+   Nothing zeroises on power loss, and a design that stops being
    clocked keeps whatever it held.
 
 5. **An illegal `in_len` aborts the message.** `in_len` above 64 does
@@ -324,21 +325,26 @@ What the protocol layer does add, against the engine alone:
   the block draining back, the parsed arguments and the received tag
   are all zeroed on reset.
 
-  **The packet buffers are the exception, and it is a real one.**
-  `oca_pktbuf.sv` resets the byte counts and the output register but
-  **not the memory array**, so after a reset both buffers still hold
-  what was last written to either of their two banks — 4096 bytes each,
-  two packets each: plaintext, ciphertext, and for a load-key command
-  the 32 raw key bytes, which necessarily pass through the receive
-  buffer on their way to the slot. The three engine cores now clear
-  their own secret registers on reset (limitation 4), so this is the
-  whole of what survives one: 8192 bytes of block RAM against 5866 bits
-  of flip-flops, which is to say 91.8% of it. Clearing the memory costs
-  a counter and as many cycles as there are addresses, plus back
-  pressure while it runs — a reset-branch loop would be a 512-way
-  simultaneous write that no memory primitive can express, so yosys
-  would fail RAM inference and lower both buffers to 65536 flip-flops.
-  It is not implemented.
+  **The packet buffers are walked, not reset.** `oca_pktbuf.sv` holds
+  4096 bytes each — two packets each, in two banks: plaintext,
+  ciphertext, and for a load-key command the 32 raw key bytes, which
+  necessarily pass through the receive buffer on their way to the slot.
+  Block RAM has no reset on its contents, so the array is zeroed one
+  word per cycle out of reset: 512 words, 512 cycles, about 10 µs at
+  50 MHz, once. A loop over the array in the reset branch would be a
+  512-way simultaneous write that no memory primitive expresses, and
+  yosys would answer it by lowering both buffers to 65536 flip-flops —
+  which is why the clear and the writer meet in a multiplexer and the
+  array keeps its single write port.
+
+  While the walk runs the buffer's writer is inert and `clr_busy` is
+  high, and `oca_core` masks **both halves** of the request handshake on
+  it. Masking only the outgoing `tready` is not enough and the suite
+  proves it: AXI-Stream forbids a master from waiting for `tready`
+  before asserting `tvalid`, so a request can sit on the bus from the
+  cycle reset ends, and `oca_proto`'s receive stage — which reaches its
+  accepting state one cycle after reset — consumes beats the master
+  never saw taken. With only `tready` gated, 24 of 29 core tests fail.
 - **The tag is compared on the FPGA in constant time, and a failure
   emits no plaintext.** See section 4 item 1.
 - **Failures are reported rather than dropped silently.** Every request

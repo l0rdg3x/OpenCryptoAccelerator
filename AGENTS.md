@@ -123,14 +123,14 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
-.venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
-.venv/bin/python hw/sim/run_oca_core.py           # 27/27 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-76 RTL tests, plus 6 on a synthesised netlist.
+81 RTL tests, plus 6 on a synthesised netlist.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because
@@ -383,10 +383,25 @@ core and never updated as the design grew by 3000 LUTs.
   `test_partial_keep_mid_packet_fails_closed` sends a short beat before
   `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
   error is not a header drop.
-- **`oca_core` as committed: 11590 LUTs (26.4%), 12043 FF (27.5%), 20
-  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 48.52 MHz at seed 1 — the
+- **`oca_core` as committed: 12308 LUTs (28.1%), 12033 FF (27.4%), 20
+  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 47.93 MHz at seed 1 — the
   figures `run_synth.py oca_core` reproduces today, on a netlist whose
-  key store is present (see the `cmp2lut` bullet below). Everything in
+  key store is present (see the `cmp2lut` bullet below).
+
+  **What secret zeroisation cost**, measured seed 1 against the same
+  toolchain, one step at a time from 11590 / 12043 / 48.52 MHz:
+  clearing the engines' secret registers is **+670 LUTs (+5.8%)**, −30
+  FF, 49.65 MHz; walking the packet memory adds **+48 LUTs (+0.4%)**,
+  +20 FF, 47.93 MHz. Together **+718 LUTs (+6.2%)** and no change in
+  multipliers or block RAM. On this device it costs no DSP — synth_ecp5
+  maps through `dsp_map_18x18.v`, which connects no clock or reset, so
+  those registers were already in fabric — but the LUT bill is real and
+  it is logic, not routing. Fmax moves in both directions across the
+  three points and stays inside the 4.8% seed spread documented below,
+  so there is no clock signal in it either way; a multi-seed sweep would
+  be needed to claim otherwise.
+
+  Everything in
   the rest of this bullet is the 64-bit widening step that came before
   the packet overlap and before that fix, kept because the comparison
   with the 8-bit core is only meaningful against it: **11429 LUTs

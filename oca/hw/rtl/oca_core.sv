@@ -2,16 +2,32 @@
 /*
  * OCA host-protocol core: one UDP payload in, one UDP payload out.
  *
- * Wiring only. The two packet buffers, the key store, the protocol FSM
- * and the AEAD engine each keep their own responsibility; this module
- * holds no logic of its own so that the boundary the Ethernet
- * integration attaches to is a plain AXI-Stream pair
- * (docs/design/2026-08-03-host-protocol.md).
+ * Wiring, and one gate. The two packet buffers, the key store, the
+ * protocol FSM and the AEAD engine each keep their own responsibility,
+ * so that the boundary the Ethernet integration attaches to is a plain
+ * AXI-Stream pair (docs/design/2026-08-03-host-protocol.md).
  *
  * That pair is 64 bits wide with a byte-enable, and the width conversion
  * to the 8 bits verilog-ethernet hands over belongs outside this module
  * (amendment of 2026-08-04 in the same document): inside it, 8 bits
  * could not feed one engine.
+ *
+ * The gate is the request stream, held off while either packet buffer
+ * zeroes itself out of reset. It sits here rather than in oca_proto
+ * because it is a property of the buffers, and because oca_proto's four
+ * interacting stages have no state that means "not yet": the receive
+ * stage would have to learn one, and every other stage would have to
+ * agree with it.
+ *
+ * Both halves of the handshake are masked, not just the tready leaving
+ * the core. AXI-Stream forbids a master from waiting for tready before
+ * it asserts tvalid, so a request can be sitting on the bus from the
+ * cycle reset ends; oca_proto's receive stage reaches its accepting
+ * state one cycle after reset and would consume beats out of it that
+ * the master never saw taken — dropped by the buffer's clear, and
+ * offered again by the master, which is a packet corrupted in both
+ * directions at once. With s_tvalid masked as well, nothing of the
+ * request exists for oca_proto until the buffers are usable.
  */
 module oca_core #(
     parameter int NUM_SLOTS = 8,
@@ -32,6 +48,13 @@ module oca_core #(
     input  logic        m_axis_tready,
     output logic        m_axis_tlast
 );
+
+    logic        rx_clr_busy, tx_clr_busy, buf_ready;
+    logic        proto_s_tready, proto_s_tvalid;
+
+    always_comb buf_ready      = !rx_clr_busy && !tx_clr_busy;
+    always_comb s_axis_tready  = proto_s_tready && buf_ready;
+    always_comb proto_s_tvalid = s_axis_tvalid && buf_ready;
 
     logic        rx_wr_bank, rx_wr_en, rx_wr_clear, rx_rd_bank, rx_rd_full;
     logic [63:0] rx_wr_data, rx_rd_data;
@@ -77,7 +100,8 @@ module oca_core #(
         .rd_addr (rx_rd_addr),
         .rd_data (rx_rd_data),
         .rd_count(rx_rd_count),
-        .rd_full (rx_rd_full)
+        .rd_full (rx_rd_full),
+        .clr_busy(rx_clr_busy)
     );
 
     oca_pktbuf #(.BYTES(BYTES)) u_txbuf (
@@ -93,7 +117,8 @@ module oca_core #(
         .rd_addr (tx_rd_addr),
         .rd_data (tx_rd_data),
         .rd_count(tx_rd_count),
-        .rd_full (tx_rd_full)
+        .rd_full (tx_rd_full),
+        .clr_busy(tx_clr_busy)
     );
 
     oca_keystore #(.NUM_SLOTS(NUM_SLOTS)) u_keystore (
@@ -134,8 +159,8 @@ module oca_core #(
         .rst_n,
         .s_tdata     (s_axis_tdata),
         .s_tkeep     (s_axis_tkeep),
-        .s_tvalid    (s_axis_tvalid),
-        .s_tready    (s_axis_tready),
+        .s_tvalid    (proto_s_tvalid),
+        .s_tready    (proto_s_tready),
         .s_tlast     (s_axis_tlast),
         .m_tdata     (m_axis_tdata),
         .m_tkeep     (m_axis_tkeep),
