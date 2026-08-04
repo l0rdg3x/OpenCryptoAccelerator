@@ -43,13 +43,14 @@
   `rd_valid = 0` instead of handing back a key of zeros: a host mistake
   becomes a protocol error rather than a message encrypted under a key
   an attacker can guess. Keys and loaded bits are cleared on reset.
-- `hw/rtl/oca_pktbuf.sv` — one byte-wide packet buffer (default 2048
-  bytes), written sequentially from the stream and read at random
-  offsets. Writes past capacity are dropped and `wr_full` is raised, so a
-  truncated packet becomes a length error rather than a silent wrap. The
-  read port is registered and the range check sits on the address rather
-  than the read data, which is what makes the memory infer block RAM —
-  confirmed in synthesis, one DP16KD per buffer and no LUT RAM.
+- `hw/rtl/oca_pktbuf.sv` — one 64-bit packet buffer (default 2048 bytes,
+  256 words), written sequentially from the stream with a 1..8 byte count
+  and read at random word offsets. Writes past capacity are dropped and
+  `wr_full` is raised, so a truncated packet becomes a length error rather
+  than a silent wrap. The read port is registered and single, and the
+  range check sits on the address rather than the read data, which is what
+  makes the memory infer block RAM in pseudo dual-port mode — confirmed in
+  synthesis, two DP16KD per buffer at 36 bits wide and no LUT RAM.
 - `hw/rtl/oca_proto.sv` — the protocol FSM: parses the fixed 8-byte
   header, validates it, drives the engine and builds the response. Knows
   nothing of cryptography beyond driving `chacha20_poly1305` and
@@ -57,9 +58,10 @@
   construction. Store and forward, so a failed tag returns status `06`
   and no plaintext at all.
 - `hw/rtl/oca_core.sv` — wiring only: the two packet buffers, the key
-  store, the protocol FSM and the AEAD engine behind a pair of 8-bit
-  AXI-Stream ports. This is the module the Ethernet integration will
-  instantiate.
+  store, the protocol FSM and the AEAD engine behind a pair of 64-bit
+  AXI-Stream ports with `tkeep`. This is the module the Ethernet
+  integration will instantiate; the conversion to the 8 bits
+  `verilog-ethernet` hands over belongs outside it, at the MAC boundary.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
@@ -129,10 +131,11 @@ cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 3/3, oca_core
-9/9, and the protocol model checks pass as plain Python;
+7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 5/5, oca_core
+10/10, and the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
-oca_core`. Five reworks are done. The Poly1305 limb rework took the AEAD
+oca_core`. Six reworks are done — five on the engine, described next, and
+the 64-bit host datapath described below. The Poly1305 limb rework took the AEAD
 engine from 65 to 20 ECP5 multipliers (90% -> 28% of an LFE5U-45F) and
 more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
@@ -181,37 +184,63 @@ occupancy study").
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
-operation, a payload out, with no Ethernet in the simulation. `oca_core`
-synthesises to **11149 LUTs (25.4%), 10842 FF (24.7%), 20 MULT18X18D
-(27.8%) and 2 DP16KD (1.9%)** at **50.95 MHz** (seed 1; 50.59 MHz mean
-over seeds 1-4). **Both packet buffers infer block RAM** — one DP16KD
-each, and not a single LUT RAM cell in the netlist — which was the open
-question, because 4096 bytes in LUTs would have been a serious area
-regression. The protocol layer adds no multipliers at all, so it does
-not cost an engine, and it is not on the critical path: every entry in
-nextpnr's report still cites `chacha20.sv`.
+operation, a payload out, with no Ethernet in the simulation. Its
+datapath is **64 bits end to end inside `oca_core`**, which is the sixth
+rework and the one that made the protocol layer stop being the limit.
+`oca_core` synthesises to **11429 LUTs (26.1%), 11228 FF (25.6%), 20
+MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **51.71 MHz** (seed 1;
+50.69 MHz mean over seeds 1-4). Against the 8-bit version the widening
+costs **+280 LUTs (+2.5%), +386 FF (+3.6%), no multipliers and no clock**
+— the 8-bit mean was 50.59 MHz, so +0.2%, with the distributions on top
+of each other. **Both packet buffers still infer block RAM** in
+pseudo dual-port mode and there is not a single LUT RAM cell in the
+netlist; the 2 -> 4 DP16KD is width, not capacity, because a DP16KD's
+widest port is 36 bits and a 64-bit word spans two blocks. The protocol
+layer still adds no multipliers, so it does not cost an engine, and it is
+still not on the critical path: across all four seed reports, no entry
+cites `oca_proto.sv`, `oca_pktbuf.sv`, `oca_keystore.sv` or
+`oca_core.sv`. The path is inside `chacha20.sv` on three seeds and inside
+`poly1305.sv` on the fourth.
 
-Throughput is the honest disappointment. Measured differentially in
-simulation, a 64-byte block costs **415 cycles end to end** — 64 to
-receive at a byte per cycle, 159 through buffer, engine and buffer, and
-**192 to transmit at three cycles per byte** — which at the measured
-clock is **~0.062 Gbps: 9% of the engine's own ~0.68 Gbps and 6% of the
-GbE link**. The implementation plan predicted 168 cycles and was 2.5x
-optimistic, having modelled only the middle term and omitted both stream
-transfers. The response path is the largest single cost and is a
-handshake rather than a bandwidth limit, so it is also the cheapest
-thing to fix: holding `m_tvalid` up and pipelining the buffer read, as
-the receive side already does, would take a block to 287 cycles and
-throughput to ~0.090 Gbps. Widening the internal datapath to 64 bits
-and overlapping the phases is the structural fix, and the width is now
-decided: at 8 bits the buffer needs 66 cycles to assemble a block the
-engine consumes in 40, so it cannot feed even one engine
-(`../docs/design/2026-08-03-host-protocol.md`). **None of this has run
-on silicon.**
+**Throughput: 415 cycles per 64-byte block down to 64** — 8 to receive
+at 8 bytes per cycle, 48 through buffer, engine and buffer, 8 to
+transmit. Measured differentially in simulation, exactly linear. The
+overall factor is 6.5x and it falls **short** of 8x for a reason no width
+could fix: **40 of the 64 remaining cycles are the engine**, whose cost
+never scaled with the host datapath. The phases themselves did better —
+the request path scaled exactly 8x (64 -> 8) and the response path beat
+it (192 -> 8, where width alone gives 24), because the three-cycle
+handshake was replaced by a clock-enabled pipeline at the same time.
+
+**And the MVP target is still not met.** Two `oca_core` instances
+synthesise to 22891 LUTs (52.2%), 40 multipliers (55.6%) and 8 DP16KD, at
+**48.53 MHz** — where the 8-bit pair measured 49.28, so replication costs
+nothing in clock at 64 bits either. But at 64 cycles per block a core
+moves exactly **one byte per cycle**, so two cores are 97.1 MB/s =
+**~0.78 Gbps against a GbE port's 125 MB/s: 78% of one port**, and
+against the target as `SPEC.md` states it — one port saturated *with
+margin*, ~1.26 Gbps — **62%, missing it by 38%**. The clock cannot close
+that — two cores would need
+62.5 MHz, above anything `chacha20.sv` has ever reached. What closes it
+is that the 64 cycles are **serialised** by store and forward: 8 + 48 + 8
+in strict sequence. Overlapping receive, process and transmit across
+successive packets makes a block cost `max(8, 48, 8) = 48` and two cores
+~1.04 Gbps — which clears the port by 2 to 5%, i.e. by less than the
+noise band of the Fmax it is computed from. The margin only arrives when
+the 8 cycles of feed and drain also come off the loop, leaving the
+engine's own 40 cycles and ~1.24 Gbps. **Packet-level pipelining is
+therefore the next step and it is necessary but not sufficient**; the
+measurements and the seed data are in `hw/syn/README.md`, and `SPEC.md`'s
+MVP bullet is corrected to match. Two caveats: two of the four placer
+seeds for the two-core build did not route (stopped after 3 h 22 min
+each, still bouncing between 50 and 2300 unrouted arcs, so the 48.53 MHz
+mean is over two seeds and not four), and **none of this has run on
+silicon.**
 
 Next: the Ethernet integration, which needs the board —
 `verilog-ethernet` (MIT) as a submodule, the RGMII wrapper with its ECP5
-DDR primitives, PLL, reset and the Colorlight i9 pin constraints.
+DDR primitives, PLL, reset and the Colorlight i9 pin constraints, plus
+the 8-to-64-bit width conversion at the MAC boundary.
 
 ## Phase 1: abstract API + software backend
 

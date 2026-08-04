@@ -282,13 +282,53 @@ frozen by a single enable:
     always_comb go = !m_tvalid || m_tready;
 ```
 
-Freezing everything means the buffer address holds, the BRAM re-reads the
-same address, and no data is lost: no skid buffer, and a low `tready`
-costs exactly one cycle. The enable lands on the flip-flops' CE inputs,
-so it is free in LUTs.
+Freezing everything means a low `tready` costs exactly one cycle and
+needs no skid buffer, and the enable lands on the flip-flops' CE inputs,
+so it is nearly free in LUTs.
+
+> **Corrected 2026-08-04, against the implementation.** The paragraph
+> above originally continued "the buffer address holds, the BRAM
+> re-reads the same address, and no data is lost". The first two clauses
+> are true and the third does not follow from them, so freezing the
+> three stages is **not** sufficient on its own.
+>
+> `oca_pktbuf`'s read port is unconditional: one word lands on
+> `tx_rd_data` on every edge, whatever the pipeline is doing. There is no
+> read enable to freeze. What the flip-flops hold while stalled is the
+> **stage-1** word index — the word stage 2 is fetching — not the word
+> stage 2 still owes the output register. So the edge that ends a stalled
+> cycle re-reads stage 1's address and overwrites the word stage 2 was
+> holding: the response loses a word instead of losing none.
+>
+> The implementation therefore drives the address combinationally from
+> the enable, showing the **stage-2** word while stalled:
+>
+> ```systemverilog
+>     always_comb tx_rd_addr = (go ? resp_widx : (resp_widx - 9'd1))
+>                              - body_start_w;
+> ```
+>
+> `resp_widx` counts stage 1, so stage 2 is the word below it. That makes
+> the unconditional read re-fetch what is already there, and it is the
+> one place `go` has to reach combinationally rather than as a clock
+> enable — which is why "free in LUTs" is now "nearly free". The
+> reasoning lives in the comment on that line in `oca_proto.sv`.
+>
+> `test_backpressure_is_transparent` is what closes this, and it was
+> checked against **this** defect specifically, not only against the
+> mutation step 3 prescribes. Replacing the line above with the frozen
+> form `tx_rd_addr = resp_widx - body_start_w` and running the suite
+> gives **9 passes and exactly one failure** —
+> `test_backpressure_is_transparent`, on "ciphertext mismatch under
+> backpressure". Two different mutations, then: step 3's `go = 1'b1`
+> removes the stall altogether, this one keeps the stall and corrupts the
+> data it was meant to preserve. The same single test catches both — the
+> `go = 1'b1` half is recorded in the Task 4 commit, which also swept
+> stall lengths 0 to 9 across every beat position of twelve response
+> sizes.
 
 `tx_rd_addr = idx - body_start_w` is a 9-bit subtraction, about 5 LUTs —
-count it.
+count it, and count the address multiplexer above with it.
 
 - [ ] **Step 2: Measure the improvement**
 

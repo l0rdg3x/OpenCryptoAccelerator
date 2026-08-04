@@ -77,6 +77,73 @@ simply not be sent.
 >   message and the security property all hold at any width, and none
 >   of them depends on that comparison.
 
+> **Amended again 2026-08-04, after the 64-bit datapath was built and
+> measured.** The amendment above said what would be done; this says what
+> was done and what it cost. Plan:
+> `docs/design/2026-08-04-datapath64-plan.md`; measurements:
+> `oca/hw/syn/README.md`, "After the 64-bit host datapath".
+>
+> - **Built.** `oca_pktbuf` is 256 x 64 with a 1..8 byte count on writes
+>   and a 9-bit word read address; `oca_proto` reads the header as one
+>   word and the arguments as four, aligns the one misaligned boundary
+>   (AAD to message) with a single 128-to-64 funnel shifter, and streams
+>   the response through three stages under one clock enable instead of
+>   the fetch-then-present pair of states; `oca_core` exposes a 64-bit
+>   AXI-Stream pair with `tkeep`. `proto_model.py` was **not** modified
+>   and the wire format is unchanged, as the plan required.
+> - **A block costs 64 cycles end to end, not 415.** Measured
+>   differentially in simulation and exactly linear: **8 in + 48 through
+>   + 8 out**. The estimate above — "roughly 10 against the engine's 40"
+>   for the buffer feed — was close: the middle term is 48, of which the
+>   engine is 40. Both stream phases now run at the full 8 bytes per
+>   cycle. The overall factor is 6.5x, **below** the 8x of the width,
+>   because the engine's 40 cycles never scaled with the host datapath —
+>   only 24 of the 64 that remain are protocol. The response path is the
+>   one phase that beat the width, 192 cycles to 8 where width alone
+>   gives 24, because its three-cycle handshake was replaced by the
+>   clock-enabled pipeline at the same time.
+> - **It cost no clock and almost no area.** `oca_core` is +280 LUTs
+>   (+2.5%) and +386 flip-flops (+3.6%), with multipliers unchanged at 20
+>   and Fmax unchanged (50.59 -> 50.69 MHz over four seeds, +0.2%, the
+>   distributions overlapping). Block RAM went 2 -> 4 DP16KD per core,
+>   which is width and not capacity: a DP16KD's widest port is 36 bits,
+>   so a 64-bit word spans two blocks.
+> - **The engine can now be fed, and the host port still cannot be
+>   filled.** That was the point of the exercise and it is only half
+>   done. At 64 cycles per 64-byte block a core moves exactly one byte
+>   per cycle, so two cores at the measured 48.53 MHz (two of four placer
+>   seeds; see below) are 97.1 MB/s, **~0.78 Gbps — 78% of a bare GbE
+>   port's 125 MB/s, and 62% of the ~1.26 Gbps `SPEC.md` asks for, which
+>   is one port saturated *with margin*. The target is missed by 38%.**
+>   The remaining factor is not width and not clock: it is that the three
+>   phases are **serialised** by store and forward, one packet at a time
+>   through one pair of buffers.
+> - **So the next step is packet-level pipelining**, and section 2's
+>   store-and-forward argument does not stand in its way. That argument
+>   is about *one packet* — the response is built whole before a byte
+>   leaves, so a failed tag returns no plaintext — and it is untouched by
+>   receiving packet N+1 while N is processed and N-1 transmitted. Each
+>   packet is still received whole, then processed whole, then
+>   transmitted. What it needs is a second buffer in each direction per
+>   core (4 -> 8 DP16KD, 16 of 108 for the MVP pair). It takes a block
+>   from 64 cycles to `max(8, 48, 8) = 48` and two cores to ~1.04 Gbps —
+>   **enough to pass the port by 2-5% and not enough to call it margin.**
+>   The margin needs the 8 cycles of feed and drain off the loop as well,
+>   leaving the engine's 40 and ~1.24 Gbps. Both are recorded in
+>   `SPEC.md`, whose MVP bullet has been corrected again.
+> - **Two placer seeds of the two-core build did not route**: stopped
+>   after 3 h 22 min each, still bouncing between 50 and 2300 unrouted
+>   arcs rather than descending. Two cores fit this device; they are no
+>   longer comfortable on it, and adding buffers for the pipelining above
+>   has to be measured rather than assumed.
+> - **Section 3 below is superseded on one point** and is left as written
+>   for the record: `oca_pktbuf.sv` no longer converts "between single
+>   bytes and the 64-byte blocks the engine consumes". It is 256 x 64
+>   with a 1..8 byte count on writes and a word read address, and the
+>   byte-to-word conversion belongs at the MAC boundary. Everything else
+>   in sections 3 to 6 — the module split, the packet format, the status
+>   codes and the security properties — is unchanged by this rework.
+
 ## 3. Modules
 
 Four modules, one responsibility each, all under `oca/hw/rtl/`:

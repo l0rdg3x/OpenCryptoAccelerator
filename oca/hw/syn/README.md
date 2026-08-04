@@ -867,12 +867,14 @@ Three qualifications, none of them in the project's favour:
   the 1.97-2.07 Gbps of the area-pass section and the "multipliers, not
   LUTs, cap engine count" reading of the two sections before it. Both
   were arithmetic on a single-core report; this is place & route.
-- **1.26 Gbps is crypto capacity, not throughput.** What comes out of
-  `oca_core` today is 415 cycles per 64-byte block, so two cores at
-  49.28 MHz deliver ~0.12 Gbps end to end — a tenth of the engines'
-  capacity. The 8-bit host datapath is what stands between the two
-  numbers, and moving it to 64 bits is the amendment recorded in
-  `docs/design/2026-08-03-host-protocol.md`.
+- **1.26 Gbps is crypto capacity, not throughput.** What came out of
+  `oca_core` at the time of this study was 415 cycles per 64-byte block,
+  so two cores at 49.28 MHz delivered ~0.12 Gbps end to end — a tenth of
+  the engines' capacity. The 8-bit host datapath is what stood between
+  the two numbers, and moving it to 64 bits is the amendment recorded in
+  `docs/design/2026-08-03-host-protocol.md`. **That was done the same
+  day: the 415 became 64 and the end-to-end figure ~0.78 Gbps — see the
+  next section, which supersedes the two sentences above.**
 - **Still no silicon.** Out-of-context builds: no IO buffers, no pin
   constraints, no Ethernet MAC, no PLL. The MAC and the RGMII wrapper
   have yet to be placed alongside two engines *and* routed, and the
@@ -886,3 +888,264 @@ it spent in a router that was never going to converge; the seventh seed
 never got that far, failing in placement. The 100 MHz run is the one
 worth doing first — if roughly 50000 arcs are still unrouted after an
 hour, relaxing the constraint is not the experiment to run next.
+
+### After the 64-bit host datapath
+
+Measured 2026-08-04, same device, package and speed grade as everything
+above (LFE5U-45F, CABGA381, speed 6), 100 MHz constraint,
+`--out-of-context`. Only the host protocol layer changed:
+`oca_pktbuf.sv` is 256 x 64 with a byte count on writes, `oca_proto.sv`
+reads header and arguments as whole words through a funnel shifter and
+streams the response through a clock-enabled three-stage pipeline, and
+`oca_core.sv` exposes a 64-bit AXI-Stream pair with `tkeep`.
+`chacha20.sv`, `poly1305.sv` and `chacha20_poly1305.sv` are untouched —
+the engine in these numbers is bit for bit the one characterised above.
+
+The width conversion to the 8 bits `verilog-ethernet` hands over stays
+*outside* `oca_core`, at the MAC boundary; the wire format is unchanged
+and `hw/sim/proto_model.py` was not modified.
+
+| design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | DP16KD | Fmax (seed 1) |
+|--------|--------------|------------|------------|--------|------|
+| oca_core (8-bit datapath) | 11149 | 10842 | 20 | 2 | 50.95 MHz |
+| **oca_core (64-bit datapath)** | **11429** | **11228** | **20** | **4** | **51.71 MHz** |
+| *cost of the widening* | *+280 (+2.5%)* | *+386 (+3.6%)* | *0* | *+2* | *—* |
+
+Device occupancy: 26.1% of the LUTs, 25.6% of the flip-flops, 27.8% of
+the multipliers and 3.7% of the block RAM (4 of 108 DP16KD).
+
+- **Multipliers did not move: 20, exactly the engine's.** This is the
+  check the implementation plan asked for, because the protocol layer
+  wants no arithmetic and any change here would have meant something had
+  gone wrong in the widening. Since multipliers are what capped engine
+  replication in the occupancy study, **the wider datapath still does
+  not cost an engine.**
+- **The area cost is about half what the plan estimated on LUTs and a
+  fifth over on flip-flops.** It predicted roughly +530 COMB and +325 FF;
+  the measurement is +280 and +386. A 64-bit datapath costing 2.5% of the
+  LUTs of a design this size is the point trap 1 of the plan was written
+  to protect: every next-state multiplexer in `oca_proto` is a `case` on
+  a registered selector rather than an `if / else if` chain over
+  comparators. The plan measured that choice on a synthetic 64-bit 3:1
+  multiplexer at 771 LUT4 against 129 — **a factor of six**, and 642 LUTs
+  on that one mux alone, which is more than twice this design's entire
+  measured increase. That is the plan's own figure for a synthetic case,
+  not a measurement of `oca_proto`; what is measured here is only the
+  +280 total.
+- **The buffers went from 2 DP16KD to 4, and it is a width consequence,
+  not a capacity one.** Each buffer still holds 2048 bytes. From the
+  netlist, each is two DP16KD with `DATA_WIDTH_A = DATA_WIDTH_B = 36`
+  (`u_rxbuf.mem.0.0` and `.0.1`, likewise `u_txbuf`): a DP16KD's widest
+  port is 36 bits, so a 64-bit word spans two blocks side by side. Both
+  buffers still map through `$__PDPW16KD_` — pseudo dual-port, which is
+  what trap 2 of the plan required — and the netlist contains **zero LUT
+  RAM cells**: no `TRELLIS_DPR16X4`, no `DPR16X4C`, no `TRELLIS_RAM16X2`.
+  Since 36-bit mode is 512 x 36 and only 256 words are used, `BYTES`
+  could go from 2048 to 4096 at no further block-RAM cost.
+- **Fmax: unchanged, and the seed spread says so.** Seed 1 reads
+  50.95 -> 51.71 MHz, which on its own means nothing; over four seeds,
+  same netlist, area identical on every one as it must be:
+
+  | design | seed 1 | seed 2 | seed 3 | seed 4 | mean | spread |
+  |--------|--------|--------|--------|--------|------|--------|
+  | oca_core (8-bit) | 50.95 | 50.02 | 49.70 | 51.67 | 50.59 | 3.9% |
+  | oca_core (64-bit) | 51.71 | 48.75 | 51.50 | 50.79 | **50.69** | 5.8% |
+
+  Mean +0.10 MHz, **+0.2%** — the distributions sit on top of each other,
+  and no clock was bought or paid. **The widening is free in time and
+  cheap in area.** The critical path is where it has been since the
+  per-byte mask rework: 19.34 ns at seed 1 (7.64 ns logic, 11.70 ns
+  routing) from `u_aead.u_chacha.st` back into `u_chacha.st`, through the
+  CCU2C carry chains of the four adders of one quarter round, and every
+  entry in nextpnr's report cites `chacha20.sv` lines 58, 60, 62 and 64.
+  **Not one cites `oca_proto.sv`, `oca_pktbuf.sv`, `oca_keystore.sv` or
+  `oca_core.sv`** — checked on all four seed reports, and true on every
+  one of them; the protocol layer is no more on the critical path at
+  64 bits than it was at 8. Seed 2, the slowest of the four, is the one
+  that does not cite `chacha20.sv`, and it is not a protocol path either:
+  it lands on `poly1305.sv:140`, the registered DSP products, at
+  20.51 ns. Which of the two engine paths comes out longest is placement
+  — but note that these are two different seeds, and each nextpnr report
+  carries only its own worst path, so the *second* longest path within a
+  seed is not in these reports and the two cannot be compared directly.
+
+#### Throughput: 415 cycles per block to 64
+
+Measured the same differential way as every point in this file — a seal
+command at 4, 8, 12 and 16 blocks, the difference over the block delta,
+so the header, the key schedule, the tag and every fixed cost cancel. A
+64-byte block costs **64.0 cycles end to end**, and the figure is exactly
+linear: the three consecutive pairs (4->8, 8->12, 12->16) and the 4->16
+span all return 64.0.
+
+| phase | 8-bit | 64-bit | rate now |
+|-------|-------|--------|----------|
+| request in (`s_axis`) | 64 | **8** | 8.00 B/cycle |
+| buffer -> engine -> buffer | 159 | **48** | — |
+| response out (`m_axis`) | 192 | **8** | 8.00 B/cycle |
+| **total per 64 B** | **415** | **64** | **1.00 B/cycle** |
+
+**6.5x, and it is less than 8x because 40 of the remaining 64 cycles
+are not a datapath at all.** Eight times the width can only scale what
+the width gates. The engine's own cost does not scale with the host
+datapath, and it is now most of what is left: measured the same
+differential way on this same RTL while writing this section, the AEAD
+engine alone is **40.0 cycles per 64-byte block** (227 cycles for a
+4-block message, 387 for 8). Against that floor the three phases did
+this:
+
+| phase | 8-bit | pure width would give | measured | why |
+|---|---|---|---|---|
+| request in | 64 | 8 | **8** | already 1 B/cycle at 8 bits, so exactly 8x |
+| middle | 159 | — | **48** | 40 of it is the engine and never scaled |
+| response out | 192 | 24 | **8** | **better than 8x**: the handshake went too |
+
+Of the 351 cycles saved, the response path is the largest single term
+(184), the middle row second (111) and the request path third (56). The
+response is the only phase that beat the width, and it did so because the
+three-cycle-per-beat handshake — a cycle fetching, a cycle asserting
+`m_tvalid`, a cycle completing — was replaced by three stages under one
+clock enable, which is a scheduling fix and not a width one.
+
+So the protocol layer now costs **8 cycles of feed and drain** on top of
+the engine's 40, plus **16 more receiving and transmitting the block**.
+Those 16 are pure serialisation, not bandwidth: at 8 bytes per cycle the
+stream ports are eight times faster than the wire they will be attached
+to.
+
+#### What two cores deliver, and whether that meets the MVP target
+
+The MVP configuration is two `oca_core` instances. Synthesised as a
+throwaway two-instance top level in the scratchpad — **not** in
+`run_synth.py`'s `DESIGNS`, same wrapper shape as the 8-bit occupancy
+study, each core's AXI-Stream pair wired straight to top-level ports so
+the instances cannot be merged and nothing can be optimised away:
+
+| configuration | TRELLIS_COMB | of 43848 | TRELLIS_FF | MULT18X18D | of 72 | DP16KD | routed Fmax |
+|---|---|---|---|---|---|---|---|
+| 1 `oca_core`, 8-bit | 11149 | 25.4% | 10842 | 20 | 27.8% | 2 | 50.59 (4 seeds) |
+| 2 `oca_core`, 8-bit | 22313 | 50.9% | — | 40 | 55.6% | — | 49.28 (4 seeds) |
+| 1 `oca_core`, 64-bit | 11429 | 26.1% | 11228 | 20 | 27.8% | 4 | 50.69 (4 seeds) |
+| **2 `oca_core`, 64-bit** | **22891** | **52.2%** | **22456** | **40** | **55.6%** | **8** | **48.53 (2 of 4 seeds)** |
+
+- **Replication is still linear.** 2 x 11429 = 22858 against 22891
+  measured: **+33 LUTs of glue**, the same result the 8-bit study got
+  (+15). Multipliers and block RAM are exactly double.
+- **The clock is where two 8-bit cores were.** 47.85 MHz at seed 1 and
+  49.21 at seed 4, mean **48.53 MHz** against the 8-bit pair's 49.28 —
+  **-1.5%**, inside the 5.8% spread the single core shows across its own
+  four seeds. Replication costs essentially nothing in clock at 64 bits
+  either.
+- **With two cores the critical path leaves `chacha20.sv`.** Both routed
+  seeds put it on **`poly1305.sv:140`** — the registered DSP products,
+  `prod[sl][i] <= mul_a[sl][i] * mul_b[sl][i]` — 20.90 ns at seed 1
+  (8.29 logic, 12.60 routing) and 20.32 ns at seed 4. This is the same
+  place the 8-bit study's *three*-engine configuration moved it to, and
+  for the same reason: the DSP columns are 56% full, so the datapath
+  crosses the die to reach the multipliers it was given. Routing, not
+  logic. No entry cites a protocol module on either seed.
+- **Two of the four seeds did not route, and that is new.** Seeds 1 and 4
+  completed, in 2714 s and 1405 s, sharing the machine with the other
+  two. Seeds 2 and 3 did not, and were **restarted alone** when the
+  others finished; each then ran **3 h 22 min** without converging and
+  was stopped there. (The restart matters for reading the wall times: the
+  3 h 22 min is exclusive-machine time, not the same window as the
+  2714 s.) Over their last 200 router reports the remaining arc count
+  oscillates rather than descends — seed 2 between 53 and 2292 (median
+  926.5), seed 3 between 77 and 2180 (median 866) — dipping close enough
+  to finish repeatedly without ever closing. That is not the three-core failure mode of the occupancy study:
+  there it was roughly 50000 arcs, flat, and unmoved by relaxing the
+  constraint from 100 to 35 MHz. Here it is one to two orders of
+  magnitude fewer arcs and the design does route on half the seeds it was
+  given. **Recorded as a routability margin that has narrowed, not as a
+  failure**: two 64-bit cores fit this device where two 8-bit cores were
+  called "comfortable", and are no longer comfortable. It also means
+  **the mean above is over two seeds, not four**, and is weaker evidence
+  than every other Fmax in this file. Whether the other two would close
+  with more time is not known — they were stopped, not shown to
+  diverge.
+
+**The arithmetic, and it does not reach the target.** Two cores, 64.0
+cycles per 64-byte block, at the mean of the seeds that routed:
+
+| | cycles / 64 B | bytes / cycle | throughput | vs one GbE port |
+|---|---|---|---|---|
+| one core | 64 | 1.00 | 48.5 MB/s = ~0.39 Gbps | 39% |
+| **two cores, as built** | **64** | **2.00** | **97.1 MB/s = ~0.78 Gbps** | **78%** |
+| one GbE port | | | 125 MB/s = 1 Gbps | 100% |
+
+Across the two routed seeds the figure is 95.7 to 98.4 MB/s, ~0.77 to
+~0.79 Gbps. **The MVP target is missed, and by how much depends on which
+of its two clauses is measured against:**
+
+| against | figure | shortfall |
+|---|---|---|
+| a bare GbE port, 125 MB/s | 97.1 of 125 MB/s = 78% | **22%** |
+| the target as `SPEC.md` states it, ~1.26 Gbps *with margin* | 0.78 of 1.26 Gbps = 62% | **38%** |
+
+The second row is the one the target actually asks for — "saturate one
+GbE host port **with margin**" — so **38% is the honest headline** and
+22% is only the distance to breaking even with the wire. To reach even
+125 MB/s at 64 cycles per block, two cores would need **62.5 MHz**, 29%
+above what this device gives them and above the 52-53 MHz the standalone
+`chacha20` core has never beaten. **The clock is not where this comes
+from.** `SPEC.md`'s MVP bullet has been corrected accordingly.
+
+**Where it does come from: the 64 cycles are serialised, and they need
+not be.** The three phases — 8 in, 48 through, 8 out — are strictly
+sequential because `oca_core` is store and forward on a single pair of
+buffers: the request must be received whole before processing starts and
+the response transmitted whole afterwards, and neither overlaps anything.
+Overlapping them *across successive packets* would make a core's cost
+`max(8, 48, 8) = 48` cycles per block instead of their sum:
+
+| | cycles / 64 B | two cores | vs one GbE port |
+|---|---|---|---|
+| as built | 64 | 97.1 MB/s = ~0.78 Gbps | 78% |
+| **packet-level pipelining** | **48** | **129.4 MB/s = ~1.04 Gbps** | **104%** |
+| *and feed/drain hidden behind the engine* | *40* | *155.3 MB/s = ~1.24 Gbps* | *124%* |
+
+**Pipelining is necessary and it is not sufficient.** It clears the port
+by 2 to 5% across the two routed seeds — which is not margin, it is the
+noise band of the Fmax it is computed from. The margin only appears when
+the 8 cycles of feed and drain come off the critical loop too, leaving
+the engine's own 40, at which point two cores reach ~1.24 Gbps and 24% of
+headroom. That figure is not a coincidence: it is the ~1.26 Gbps of
+crypto capacity `SPEC.md` already records for two engines, recomputed at
+this pair's 48.53 MHz instead of the 8-bit pair's 49.28 — same figure,
+1.5% apart, and 24% of margin rather than 26%. **The target is reachable
+on this silicon, and reaching it means the protocol layer must cost
+nothing on top of the engine — not merely little.**
+
+The cost of pipelining is buffers, and it is affordable: a second receive
+and a second transmit buffer per core takes block RAM from 4 DP16KD per
+core to 8, so 16 of 108 (14.8%) for the pair. The security property
+survives it — "a failed tag returns no plaintext at all" is a statement
+about one packet, and each packet is still received whole before it is
+processed and processed whole before it is transmitted. What changes is
+only that three *different* packets may be in the three phases at once.
+Whether the routability margin above survives two more buffers per core
+is a separate question, and it has to be measured rather than assumed.
+
+**Still no silicon.** Every cycle count here is Verilator; every area and
+Fmax figure is yosys and nextpnr on an `--out-of-context` build with no
+IO buffers, no pin constraints, no Ethernet MAC and no PLL — and the MAC,
+the RGMII wrapper and the PLL still have to share this fabric and this
+clock. Nothing in this section has been programmed into a device.
+
+Suites behind these numbers, all re-run while writing this section:
+`oca_core` 10/10, `oca_pktbuf` 5/5, `oca_keystore` 4/4, `chacha20` 5/5,
+`poly1305` 4/4, `chacha20_poly1305` 7/7, `test_dirty_pad` 2/2.
+
+Cost of this round, for whoever repeats it: the single-core build timed
+7 min 1 s here (yosys 7.7 s + nextpnr) against the 3 min 11 s the 8-bit
+core took, but that run shared the machine with four other nextpnr
+processes and the comparison is not clean — the same netlist at the same
+seed took 557 s in the sweep. The two-core seeds are the expensive part:
+2714 s and 1405 s for the two that routed, 3 h 22 min each for the two
+that did not. Unlike the three-core case, a stalled seed here is worth
+waiting on for a while — seed 1 descended steadily through its last
+thousands of iterations (773, 591, 534, 321, 217, 97, 98) before dropping
+to zero — but a seed that has been bouncing between 50 and 2300 arcs for
+three hours, as seeds 2 and 3 were, is giving a different signal from one
+that is still coming down.
