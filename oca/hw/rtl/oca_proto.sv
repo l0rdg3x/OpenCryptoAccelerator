@@ -10,10 +10,34 @@
  * sees any of it, and the whole response is built before a byte leaves.
  * That is what lets a failed tag return no plaintext at all.
  *
+ * The stream is 64 bits wide with a byte-enable, because at 8 bits the
+ * buffer needed 66 cycles to assemble a block the engine consumes in 40
+ * and so could not feed even one engine (amendment of 2026-08-04 in
+ * docs/design/2026-08-03-host-protocol.md). The 8-bit AXI-Stream that
+ * verilog-ethernet hands over is unchanged; the width conversion belongs
+ * at that boundary, not inside here.
+ *
+ * tkeep is decoded by a priority encoder, and a non-last beat carrying a
+ * partial keep fails the packet closed with status 05. Only the final
+ * write of a packet may be partial (oca_pktbuf): a partial write
+ * mid-stream leaves the byte count off a word boundary and the next
+ * write lands back on the word just issued, so the buffer would hold
+ * something other than what arrived while every length check still
+ * agreed. Nothing read out of it past that beat can be trusted,
+ * including the magic, which is why the check precedes the header ones.
+ *
+ * Every fixed field is word-aligned, so the header is one read and the
+ * arguments four. The single misaligned boundary in the protocol is the
+ * one between the AAD and the message, whose distance apart is
+ * aad_len bytes: a funnel shifter over two consecutive buffer words
+ * carries it, with feed_addr kept as a byte address so that the word
+ * address and the shift both fall out of it and the section logic needs
+ * no knowledge of either.
+ *
  * One command is processed to completion before the next is accepted, so
  * the engine is never busy when a command arrives. The request stream is
  * plain AXI-Stream for that: s_tready is high exactly while the engine
- * is in S_RX, the one state that stores what it accepts, so a byte is
+ * is in S_RX, the one state that stores what it accepts, so a beat is
  * never taken and discarded. A source with the next packet ready one
  * cycle after tlast simply waits.
  *
@@ -38,30 +62,34 @@ module oca_proto #(
     input  logic         clk,
     input  logic         rst_n,
     // stream in
-    input  logic [  7:0] s_tdata,
+    input  logic [ 63:0] s_tdata,
+    input  logic [  7:0] s_tkeep,
     input  logic         s_tvalid,
     output logic         s_tready,
     input  logic         s_tlast,
     // stream out
-    output logic [  7:0] m_tdata,
+    output logic [ 63:0] m_tdata,
+    output logic [  7:0] m_tkeep,
     output logic         m_tvalid,
     input  logic         m_tready,
     output logic         m_tlast,
     // receive buffer
     output logic         rx_wr_en,
-    output logic [  7:0] rx_wr_data,
+    output logic [ 63:0] rx_wr_data,
+    output logic [  3:0] rx_wr_bytes,
     output logic         rx_wr_clear,
     input  logic [ 11:0] rx_wr_count,
     input  logic         rx_wr_full,
-    output logic [ 11:0] rx_rd_addr,
-    input  logic [  7:0] rx_rd_data,
+    output logic [  8:0] rx_rd_addr,
+    input  logic [ 63:0] rx_rd_data,
     // transmit buffer
     output logic         tx_wr_en,
-    output logic [  7:0] tx_wr_data,
+    output logic [ 63:0] tx_wr_data,
+    output logic [  3:0] tx_wr_bytes,
     output logic         tx_wr_clear,
     input  logic [ 11:0] tx_wr_count,
-    output logic [ 11:0] tx_rd_addr,
-    input  logic [  7:0] tx_rd_data,
+    output logic [  8:0] tx_rd_addr,
+    input  logic [ 63:0] tx_rd_data,
     // key store
     output logic         ks_wr_en,
     output logic [  7:0] ks_wr_slot,
@@ -107,8 +135,8 @@ module oca_proto #(
     localparam logic [7:0] ST_ENGINE_ERR  = 8'h07;
 
     typedef enum logic [3:0] {
-        S_RX,        // accept bytes into the receive buffer
-        S_PARSE,     // read header bytes 0..7
+        S_RX,        // accept beats into the receive buffer
+        S_PARSE,     // read the header word
         S_DISPATCH,  // decide, or fail with a status
         S_LOADKEY,   // write the slot
         S_ARGS,      // read nonce, lengths and tag, validate them
@@ -128,21 +156,43 @@ module oca_proto #(
 
     // Combinational, but only on the state register: nothing of the
     // source's own handshake reaches it, so there is no tvalid-to-tready
-    // path and the accepting cycle is the state that stores the byte.
+    // path and the accepting cycle is the state that stores the beat.
     always_comb s_tready = rst_n && (state == S_RX);
+
+    // tkeep semantics are not documented upstream; verilog-axis's
+    // axis_adapter produces a right-justified contiguous keep, and this
+    // priority encoder reads the highest bit set. A keep that is neither
+    // right-justified nor contiguous cannot be honoured by a buffer
+    // written sequentially, so the only safe reading of a partial keep
+    // before the last beat is that the packet is malformed.
+    logic [3:0] keep_bytes;
+    always_comb begin
+        keep_bytes = 4'd0;
+        for (int i = 0; i < 8; i++)
+            if (s_tkeep[i]) keep_bytes = 4'(i) + 4'd1;
+    end
 
     logic [ 7:0] opcode, slot, status;
     logic [15:0] req_id;
     logic [11:0] rx_len;          // bytes of request received
+    logic        rx_keep_bad;     // a non-last beat carried a partial keep
     logic [31:0] cnt_rx, cnt_drop, cnt_done, cnt_auth_fail;
 
-    logic [ 63:0] hdr;            // header bytes 0..7, byte 0 in [7:0]
-    logic [255:0] args;           // request bytes 8..39, byte 8 in [7:0]
+    // Request bytes 8..39, byte 8 in [7:0], filled a word at a time. The
+    // header word arrives through the same register and is read out of
+    // the top of it, then leaves as the four argument words shift in, so
+    // it needs no register of its own. Only bytes 0..6 are aliased: byte
+    // 7 is the status field, which a request does not carry.
+    logic [255:0] args;
+    logic [ 55:0] hdr;
+    always_comb hdr = args[247:192];
 
     logic [511:0] blk;            // block being assembled for the engine
-    logic [511:0] outbuf;         // block coming back, drained byte by byte
+    logic [511:0] outbuf;         // block coming back, drained a word at a time
     logic [  6:0] out_left;
-    logic [ 11:0] feed_addr;      // offset of the block being read
+    logic [ 11:0] feed_addr;      // byte offset of the block being read
+    logic [  2:0] feed_shift;     // feed_addr within its word
+    logic [ 63:0] feed_prev;      // the word before the one on rx_rd_data
     logic [ 15:0] sec_left;       // bytes left in the section being fed
     logic         sec_aad;        // that section is the AAD
     logic [  6:0] blk_len;
@@ -150,16 +200,18 @@ module oca_proto #(
     logic [127:0] resp_tag;
     logic         eng_done_seen;
 
-    logic [11:0] resp_len, resp_idx, resp_body_len, body_start;
+    logic [11:0] resp_body_len, resp_left;
+    logic [ 8:0] resp_widx, body_start_w;
+    logic [ 1:0] resp_sel;
 
     // Shared sequential reader over the receive buffer. The buffer's read
-    // port is registered, so a byte lands two edges after its address is
-    // driven; issuing one address per cycle and consuming one byte per
-    // cycle behind a two-deep valid pipeline keeps that at one byte per
-    // cycle instead of the three a per-byte handshake would cost.
-    logic [11:0] rd_ptr;
-    logic [ 6:0] rd_left, rd_got;
-    logic        rd_v, rd_v_d;
+    // port is registered, so a word lands two edges after its address is
+    // driven; issuing one address per cycle and consuming one word per
+    // cycle behind a two-deep valid pipeline keeps that at one word per
+    // cycle instead of the three a per-word handshake would cost.
+    logic [8:0] rd_ptr;
+    logic [3:0] rd_left, rd_got;
+    logic       rd_v, rd_v_d;
 
     // Request fields, sliced out of the two shift registers above.
     logic [15:0] aad_len, msg_len;
@@ -218,6 +270,38 @@ module oca_proto #(
     logic blk_is_msg;
     always_comb blk_is_msg = !sec_aad && (blk_len != 7'd0);
 
+    // Where the next block starts, as a byte offset. Only the last block
+    // of the AAD advances it by something other than a whole number of
+    // words, which is the one boundary the funnel below exists for.
+    logic [11:0] nx_feed;
+    always_comb nx_feed = feed_addr + {5'd0, blk_len};
+
+    // The funnel: one word of payload out of the two the block spans,
+    // written as a case over the registered shift rather than a variable
+    // shift, because a barrel shifter built out of comparators on
+    // feed_addr costs six times the LUTs of this at 64 bits.
+    logic [63:0] feed_word;
+    always_comb begin
+        case (feed_shift)
+            3'd0: feed_word = feed_prev;
+            3'd1: feed_word = {rx_rd_data[ 7:0], feed_prev[63: 8]};
+            3'd2: feed_word = {rx_rd_data[15:0], feed_prev[63:16]};
+            3'd3: feed_word = {rx_rd_data[23:0], feed_prev[63:24]};
+            3'd4: feed_word = {rx_rd_data[31:0], feed_prev[63:32]};
+            3'd5: feed_word = {rx_rd_data[39:0], feed_prev[63:40]};
+            3'd6: feed_word = {rx_rd_data[47:0], feed_prev[63:48]};
+            default: feed_word = {rx_rd_data[55:0], feed_prev[63:56]};
+        endcase
+    end
+
+    // Draining a block into the transmit buffer. Only the last word of
+    // the last block of the message can be partial, which is the
+    // invariant oca_pktbuf requires of its writer.
+    logic [3:0] out_bytes;
+    logic [6:0] nx_out_left;
+    always_comb out_bytes   = (out_left >= 7'd8) ? 4'd8 : {1'b0, out_left[2:0]};
+    always_comb nx_out_left = (out_left >= 7'd8) ? (out_left - 7'd8) : 7'd0;
+
     // The security property of the whole design. One 128-bit equality
     // between the tag the engine computed and the sixteen bytes the host
     // sent: fixed-width combinational logic, so it is constant-time by
@@ -229,49 +313,67 @@ module oca_proto #(
     logic tag_match;
     always_comb tag_match = (resp_tag == rx_tag);
 
-    // Response byte source: header from registers, then the tag for a
-    // successful seal, then the transmit buffer. The tag is shifted out
-    // rather than indexed so no byte select depends on resp_idx.
-    logic [7:0] resp_byte;
+    // Response word source: the header, then the tag for a successful
+    // seal, then the transmit buffer. Selected by a registered two-bit
+    // code rather than by comparing the word index here — the same 3:1
+    // multiplexer written as an if / else chain over comparators costs
+    // 771 LUT4 at 64 bits against 129 for this, measured 2026-08-04.
+    // The tag is shifted out rather than indexed for the same reason.
+    logic [63:0] resp_hdr, resp_word;
+    always_comb resp_hdr = {status, slot, req_id, opcode, VERSION, MAGIC};
     always_comb begin
-        if (resp_idx < 12'(HDR_LEN)) begin
-            case (resp_idx[2:0])
-                3'd0: resp_byte = MAGIC[ 7:0];
-                3'd1: resp_byte = MAGIC[15:8];
-                3'd2: resp_byte = VERSION;
-                3'd3: resp_byte = opcode;
-                3'd4: resp_byte = req_id[ 7:0];
-                3'd5: resp_byte = req_id[15:8];
-                3'd6: resp_byte = slot;
-                default: resp_byte = status;
-            endcase
-        end else if (resp_idx < body_start) begin
-            resp_byte = resp_tag[7:0];
-        end else begin
-            resp_byte = tx_rd_data;
+        case (resp_sel)
+            2'd0:    resp_word = resp_hdr;
+            2'd1:    resp_word = resp_tag[63:0];
+            default: resp_word = tx_rd_data;
+        endcase
+    end
+
+    // The last beat carries up to seven bytes of engine output past the
+    // response length. At 8 bits they could not physically be emitted;
+    // at 64 they can, and tkeep alone would leave them on the wire for
+    // the downstream MAC to honour or not. Mask them here.
+    logic        resp_last_beat;
+    logic [ 3:0] beat_bytes;
+    logic [ 7:0] beat_keep;
+    logic [63:0] beat_mask;
+    always_comb resp_last_beat = (resp_left <= 12'd8);
+    always_comb beat_bytes     = resp_last_beat ? resp_left[3:0] : 4'd8;
+    always_comb begin
+        for (int i = 0; i < 8; i++) begin
+            beat_keep[i]        = (4'(i) < beat_bytes);
+            beat_mask[8*i +: 8] = {8{4'(i) < beat_bytes}};
         end
     end
 
-    logic [11:0] nxt_idx, nxt_body;
-    always_comb nxt_idx  = resp_idx + 12'd1;
-    always_comb nxt_body = (nxt_idx >= body_start) ? (nxt_idx - body_start)
-                                                   : 12'd0;
+    // The response body starts at a whole word in both directions — the
+    // header is one word and the tag two — so the transmit buffer is
+    // read straight, with no funnel on this side.
+    logic [8:0] nxt_widx, nxt_body;
+    logic [1:0] nx_sel;
+    always_comb nxt_widx = resp_widx + 9'd1;
+    always_comb nxt_body = (nxt_widx >= body_start_w)
+                           ? (nxt_widx - body_start_w) : 9'd0;
+    always_comb nx_sel   = (nxt_widx >= body_start_w) ? 2'd2 : 2'd1;
 
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state         <= S_RX;
-            m_tdata       <= 8'd0;
+            m_tdata       <= 64'd0;
+            m_tkeep       <= 8'd0;
             m_tvalid      <= 1'b0;
             m_tlast       <= 1'b0;
             rx_wr_en      <= 1'b0;
-            rx_wr_data    <= 8'd0;
+            rx_wr_data    <= 64'd0;
+            rx_wr_bytes   <= 4'd0;
             rx_wr_clear   <= 1'b0;
-            rx_rd_addr    <= 12'd0;
+            rx_rd_addr    <= 9'd0;
             tx_wr_en      <= 1'b0;
-            tx_wr_data    <= 8'd0;
+            tx_wr_data    <= 64'd0;
+            tx_wr_bytes   <= 4'd0;
             tx_wr_clear   <= 1'b0;
-            tx_rd_addr    <= 12'd0;
+            tx_rd_addr    <= 9'd0;
             ks_wr_en      <= 1'b0;
             ks_wr_slot    <= 8'd0;
             ks_wr_key     <= 256'd0;
@@ -290,29 +392,32 @@ module oca_proto #(
             status        <= ST_OK;
             req_id        <= 16'd0;
             rx_len        <= 12'd0;
+            rx_keep_bad   <= 1'b0;
             cnt_rx        <= 32'd0;
             cnt_drop      <= 32'd0;
             cnt_done      <= 32'd0;
             cnt_auth_fail <= 32'd0;
-            hdr           <= 64'd0;
             args          <= 256'd0;
             blk           <= 512'd0;
             outbuf        <= 512'd0;
             out_left      <= 7'd0;
             feed_addr     <= 12'd0;
+            feed_shift    <= 3'd0;
+            feed_prev     <= 64'd0;
             sec_left      <= 16'd0;
             sec_aad       <= 1'b0;
             blk_len       <= 7'd0;
             blk_last      <= 1'b0;
             resp_tag      <= 128'd0;
             eng_done_seen <= 1'b0;
-            resp_len      <= 12'd0;
-            resp_idx      <= 12'd0;
+            resp_left     <= 12'd0;
+            resp_widx     <= 9'd0;
+            resp_sel      <= 2'd0;
             resp_body_len <= 12'd0;
-            body_start    <= 12'd0;
-            rd_ptr        <= 12'd0;
-            rd_left       <= 7'd0;
-            rd_got        <= 7'd0;
+            body_start_w  <= 9'd0;
+            rd_ptr        <= 9'd0;
+            rd_left       <= 4'd0;
+            rd_got        <= 4'd0;
             rd_v          <= 1'b0;
             rd_v_d        <= 1'b0;
         end else begin
@@ -325,16 +430,16 @@ module oca_proto #(
             eng_in_valid <= 1'b0;
 
             // shared sequential reader
-            if (rd_left != 7'd0) begin
+            if (rd_left != 4'd0) begin
                 rx_rd_addr <= rd_ptr;
-                rd_ptr     <= rd_ptr  + 12'd1;
-                rd_left    <= rd_left - 7'd1;
+                rd_ptr     <= rd_ptr  + 9'd1;
+                rd_left    <= rd_left - 4'd1;
                 rd_v       <= 1'b1;
             end else begin
                 rd_v <= 1'b0;
             end
             rd_v_d <= rd_v;
-            if (rd_v_d) rd_got <= rd_got + 7'd1;
+            if (rd_v_d) rd_got <= rd_got + 4'd1;
 
             // `done` is one cycle wide and the MAC of the last block
             // finishes while its ciphertext is still being drained into
@@ -352,21 +457,24 @@ module oca_proto #(
             case (state)
                 S_RX: begin
                     if (s_tvalid && s_tready) begin
-                        rx_wr_en   <= 1'b1;
-                        rx_wr_data <= s_tdata;
+                        rx_wr_en    <= 1'b1;
+                        rx_wr_data  <= s_tdata;
+                        rx_wr_bytes <= keep_bytes;
+                        if (!s_tlast && (s_tkeep != 8'hFF))
+                            rx_keep_bad <= 1'b1;
                         if (s_tlast) begin
                             cnt_rx  <= cnt_rx + 32'd1;
-                            rd_ptr  <= 12'd0;
-                            rd_left <= 7'(HDR_LEN);
-                            rd_got  <= 7'd0;
+                            rd_ptr  <= 9'd0;
+                            rd_left <= 4'd1;
+                            rd_got  <= 4'd0;
                             state   <= S_PARSE;
                         end
                     end
                 end
 
                 S_PARSE: begin
-                    if (rd_v_d) hdr <= {rx_rd_data, hdr[63:8]};
-                    if (rd_got == 7'(HDR_LEN)) state <= S_DISPATCH;
+                    if (rd_v_d) args <= {rx_rd_data, args[255:64]};
+                    if (rd_got == 4'd1) state <= S_DISPATCH;
                 end
 
                 S_DISPATCH: begin
@@ -376,12 +484,19 @@ module oca_proto #(
                     ks_rd_slot    <= hdr[55:48];
                     rx_len        <= rx_wr_count;
                     resp_body_len <= 12'd0;
+                    rx_keep_bad   <= 1'b0;
                     if (rx_wr_count < 12'(HDR_LEN)) begin
                         // not even a header: the only packet that gets no
                         // answer, because there is nothing to answer to
                         cnt_drop    <= cnt_drop + 32'd1;
                         rx_wr_clear <= 1'b1;
                         state       <= S_RX;
+                    end else if (rx_keep_bad) begin
+                        // the write pointer is not where the byte count
+                        // says it is, so the magic below would be read
+                        // out of a word the packet never filled
+                        status <= ST_BAD_LENGTH;
+                        state  <= S_BUILD;
                     end else if (hdr[15:0] != MAGIC) begin
                         status   <= ST_BAD_MAGIC;
                         cnt_drop <= cnt_drop + 32'd1;
@@ -398,16 +513,16 @@ module oca_proto #(
                         cnt_drop <= cnt_drop + 32'd1;
                         state    <= S_BUILD;
                     end else begin
-                        rd_ptr  <= 12'(HDR_LEN);
-                        rd_left <= 7'd32;
-                        rd_got  <= 7'd0;
+                        rd_ptr  <= 9'(HDR_LEN / 8);
+                        rd_left <= 4'd4;
+                        rd_got  <= 4'd0;
                         state   <= S_ARGS;
                     end
                 end
 
                 S_ARGS: begin
-                    if (rd_v_d) args <= {rx_rd_data, args[255:8]};
-                    if (rd_got == 7'd32) begin
+                    if (rd_v_d) args <= {rx_rd_data, args[255:64]};
+                    if (rd_got == 4'd4) begin
                         if (opcode == OP_LOAD_KEY) begin
                             if (slot >= 8'(NUM_SLOTS)) begin
                                 status <= ST_BAD_SLOT;
@@ -444,9 +559,10 @@ module oca_proto #(
                             blk_len       <= first_len;
                             blk_last      <= first_last;
                             feed_addr     <= data_off;
-                            rd_ptr        <= data_off;
-                            rd_left       <= 7'd64;
-                            rd_got        <= 7'd0;
+                            feed_shift    <= data_off[2:0];
+                            rd_ptr        <= data_off[11:3];
+                            rd_left       <= 4'd9;
+                            rd_got        <= 4'd0;
                             state         <= S_FEED;
                         end
                     end
@@ -457,9 +573,17 @@ module oca_proto #(
                 // way into Poly1305, so the trailing bytes are free, and
                 // a fixed 64-byte shift keeps every byte at a constant
                 // position instead of one that depends on the length.
+                //
+                // Nine reads for eight words: the first only primes the
+                // funnel. Keeping that uniform costs one cycle a block
+                // and spares the control a special case at shift zero,
+                // where the ninth word is read and discarded.
                 S_FEED: begin
-                    if (rd_v_d) blk <= {rx_rd_data, blk[511:8]};
-                    if (rd_got == 7'd64) state <= S_PRESENT;
+                    if (rd_v_d) begin
+                        feed_prev <= rx_rd_data;
+                        if (rd_got != 4'd0) blk <= {feed_word, blk[511:64]};
+                    end
+                    if (rd_got == 4'd9) state <= S_PRESENT;
                 end
 
                 S_PRESENT: begin
@@ -495,10 +619,11 @@ module oca_proto #(
 
                 S_DRAIN: begin
                     if (out_left != 7'd0) begin
-                        tx_wr_en   <= 1'b1;
-                        tx_wr_data <= outbuf[7:0];
-                        outbuf     <= {8'd0, outbuf[511:8]};
-                        out_left   <= out_left - 7'd1;
+                        tx_wr_en    <= 1'b1;
+                        tx_wr_data  <= outbuf[63:0];
+                        tx_wr_bytes <= out_bytes;
+                        outbuf      <= {64'd0, outbuf[511:64]};
+                        out_left    <= nx_out_left;
                     end else begin
                         state <= S_NEXTBLK;
                     end
@@ -508,15 +633,16 @@ module oca_proto #(
                     if (blk_last) begin
                         state <= S_WAIT_DONE;
                     end else begin
-                        sec_aad   <= nx_aad;
-                        sec_left  <= nx_left;
-                        blk_len   <= nx_blk_len;
-                        blk_last  <= nx_blk_last;
-                        feed_addr <= feed_addr + {5'd0, blk_len};
-                        rd_ptr    <= feed_addr + {5'd0, blk_len};
-                        rd_left   <= 7'd64;
-                        rd_got    <= 7'd0;
-                        state     <= S_FEED;
+                        sec_aad    <= nx_aad;
+                        sec_left   <= nx_left;
+                        blk_len    <= nx_blk_len;
+                        blk_last   <= nx_blk_last;
+                        feed_addr  <= nx_feed;
+                        feed_shift <= nx_feed[2:0];
+                        rd_ptr     <= nx_feed[11:3];
+                        rd_left    <= 4'd9;
+                        rd_got     <= 4'd0;
+                        state      <= S_FEED;
                     end
                 end
 
@@ -555,10 +681,11 @@ module oca_proto #(
 
                 S_STATS: begin
                     if (out_left != 7'd0) begin
-                        tx_wr_en   <= 1'b1;
-                        tx_wr_data <= outbuf[7:0];
-                        outbuf     <= {8'd0, outbuf[511:8]};
-                        out_left   <= out_left - 7'd1;
+                        tx_wr_en    <= 1'b1;
+                        tx_wr_data  <= outbuf[63:0];
+                        tx_wr_bytes <= out_bytes;
+                        outbuf      <= {64'd0, outbuf[511:64]};
+                        out_left    <= nx_out_left;
                     end else begin
                         status        <= ST_OK;
                         resp_body_len <= 12'd16;
@@ -577,14 +704,15 @@ module oca_proto #(
                 // The tag precedes the payload so the host finds it at a
                 // fixed offset without first computing lengths.
                 S_BUILD: begin
-                    resp_idx   <= 12'd0;
-                    tx_rd_addr <= 12'd0;
+                    resp_widx  <= 9'd0;
+                    resp_sel   <= 2'd0;
+                    tx_rd_addr <= 9'd0;
                     if ((opcode == OP_SEAL) && (status == ST_OK)) begin
-                        body_start <= 12'(HDR_LEN + 16);
-                        resp_len   <= 12'(HDR_LEN + 16) + resp_body_len;
+                        body_start_w <= 9'((HDR_LEN + 16) / 8);
+                        resp_left    <= 12'(HDR_LEN + 16) + resp_body_len;
                     end else begin
-                        body_start <= 12'(HDR_LEN);
-                        resp_len   <= 12'(HDR_LEN) + resp_body_len;
+                        body_start_w <= 9'(HDR_LEN / 8);
+                        resp_left    <= 12'(HDR_LEN) + resp_body_len;
                     end
                     if (status == ST_OK) cnt_done <= cnt_done + 32'd1;
                     state <= S_RESP_FETCH;
@@ -594,21 +722,23 @@ module oca_proto #(
 
                 S_RESPOND: begin
                     if (!m_tvalid) begin
-                        m_tdata  <= resp_byte;
+                        m_tdata  <= resp_word & beat_mask;
+                        m_tkeep  <= beat_keep;
                         m_tvalid <= 1'b1;
-                        m_tlast  <= (resp_idx == resp_len - 12'd1);
+                        m_tlast  <= resp_last_beat;
                     end else if (m_tready) begin
                         m_tvalid <= 1'b0;
                         m_tlast  <= 1'b0;
-                        if (resp_idx == resp_len - 12'd1) begin
+                        if (resp_last_beat) begin
                             rx_wr_clear <= 1'b1;
                             tx_wr_clear <= 1'b1;
                             state       <= S_RX;
                         end else begin
-                            if ((resp_idx >= 12'(HDR_LEN))
-                                && (resp_idx < body_start))
-                                resp_tag <= {8'd0, resp_tag[127:8]};
-                            resp_idx   <= nxt_idx;
+                            if (resp_sel == 2'd1)
+                                resp_tag <= {64'd0, resp_tag[127:64]};
+                            resp_widx  <= nxt_widx;
+                            resp_sel   <= nx_sel;
+                            resp_left  <= resp_left - 12'd8;
                             tx_rd_addr <= nxt_body;
                             state      <= S_RESP_FETCH;
                         end

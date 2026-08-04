@@ -5,34 +5,45 @@
  * Wiring only. The two packet buffers, the key store, the protocol FSM
  * and the AEAD engine each keep their own responsibility; this module
  * holds no logic of its own so that the boundary the Ethernet
- * integration attaches to is a plain 8-bit AXI-Stream pair
+ * integration attaches to is a plain AXI-Stream pair
  * (docs/design/2026-08-03-host-protocol.md).
+ *
+ * That pair is 64 bits wide with a byte-enable, and the width conversion
+ * to the 8 bits verilog-ethernet hands over belongs outside this module
+ * (amendment of 2026-08-04 in the same document): inside it, 8 bits
+ * could not feed one engine.
  */
 module oca_core #(
     parameter int NUM_SLOTS = 8,
     parameter int BYTES     = 2048
 ) (
-    input  logic       clk,
-    input  logic       rst_n,
+    input  logic        clk,
+    input  logic        rst_n,
     // request payload in
-    input  logic [7:0] s_axis_tdata,
-    input  logic       s_axis_tvalid,
-    output logic       s_axis_tready,
-    input  logic       s_axis_tlast,
+    input  logic [63:0] s_axis_tdata,
+    input  logic [ 7:0] s_axis_tkeep,
+    input  logic        s_axis_tvalid,
+    output logic        s_axis_tready,
+    input  logic        s_axis_tlast,
     // response payload out
-    output logic [7:0] m_axis_tdata,
-    output logic       m_axis_tvalid,
-    input  logic       m_axis_tready,
-    output logic       m_axis_tlast
+    output logic [63:0] m_axis_tdata,
+    output logic [ 7:0] m_axis_tkeep,
+    output logic        m_axis_tvalid,
+    input  logic        m_axis_tready,
+    output logic        m_axis_tlast
 );
 
     logic        rx_wr_en, rx_wr_clear, rx_wr_full;
-    logic [ 7:0] rx_wr_data, rx_rd_data;
-    logic [11:0] rx_wr_count, rx_rd_addr;
+    logic [63:0] rx_wr_data, rx_rd_data;
+    logic [ 3:0] rx_wr_bytes;
+    logic [11:0] rx_wr_count;
+    logic [ 8:0] rx_rd_addr;
 
     logic        tx_wr_en, tx_wr_clear, tx_wr_full;
-    logic [ 7:0] tx_wr_data, tx_rd_data;
-    logic [11:0] tx_wr_count, tx_rd_addr;
+    logic [63:0] tx_wr_data, tx_rd_data;
+    logic [ 3:0] tx_wr_bytes;
+    logic [11:0] tx_wr_count;
+    logic [ 8:0] tx_rd_addr;
 
     logic         ks_wr_en, ks_rd_valid;
     logic [  7:0] ks_wr_slot, ks_rd_slot;
@@ -55,6 +66,7 @@ module oca_core #(
         .rst_n,
         .wr_en   (rx_wr_en),
         .wr_data (rx_wr_data),
+        .wr_bytes(rx_wr_bytes),
         .wr_clear(rx_wr_clear),
         .wr_count(rx_wr_count),
         .wr_full (rx_wr_full),
@@ -67,6 +79,7 @@ module oca_core #(
         .rst_n,
         .wr_en   (tx_wr_en),
         .wr_data (tx_wr_data),
+        .wr_bytes(tx_wr_bytes),
         .wr_clear(tx_wr_clear),
         .wr_count(tx_wr_count),
         .wr_full (tx_wr_full),
@@ -111,15 +124,18 @@ module oca_core #(
         .clk,
         .rst_n,
         .s_tdata     (s_axis_tdata),
+        .s_tkeep     (s_axis_tkeep),
         .s_tvalid    (s_axis_tvalid),
         .s_tready    (s_axis_tready),
         .s_tlast     (s_axis_tlast),
         .m_tdata     (m_axis_tdata),
+        .m_tkeep     (m_axis_tkeep),
         .m_tvalid    (m_axis_tvalid),
         .m_tready    (m_axis_tready),
         .m_tlast     (m_axis_tlast),
         .rx_wr_en    (rx_wr_en),
         .rx_wr_data  (rx_wr_data),
+        .rx_wr_bytes (rx_wr_bytes),
         .rx_wr_clear (rx_wr_clear),
         .rx_wr_count (rx_wr_count),
         .rx_wr_full  (rx_wr_full),
@@ -127,6 +143,7 @@ module oca_core #(
         .rx_rd_data  (rx_rd_data),
         .tx_wr_en    (tx_wr_en),
         .tx_wr_data  (tx_wr_data),
+        .tx_wr_bytes (tx_wr_bytes),
         .tx_wr_clear (tx_wr_clear),
         .tx_wr_count (tx_wr_count),
         .tx_rd_addr  (tx_rd_addr),
