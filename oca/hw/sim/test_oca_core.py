@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 """End-to-end tests for oca_core: packets in, packets out.
 
-Requests are injected on the 8-bit stream that verilog-ethernet will
-later drive, so this runs with no Ethernet in the simulation. Every
-expected value comes from aead_model through proto_model.
+Requests are injected on the 64-bit stream an axis_adapter will drive
+from verilog-ethernet's 8-bit output, so this runs with no Ethernet in
+the simulation. Every expected value comes from aead_model through
+proto_model: the wire format is unchanged by the width, only the number
+of beats it takes to carry it.
 """
 
 import random
@@ -22,10 +24,27 @@ KEY = bytes(range(32))
 NONCE = bytes(range(12))
 
 
+def words_of(pkt: bytes):
+    """Split a packet into little-endian beats.
+
+    Only the final beat may be partial, which is the invariant
+    oca_pktbuf documents and oca_proto fails closed on: an adapter that
+    emitted a short beat mid-packet would desynchronise the word write
+    pointer.
+    """
+    beats = []
+    for off in range(0, len(pkt), 8):
+        chunk = pkt[off:off + 8]
+        beats.append((int.from_bytes(chunk.ljust(8, b"\x00"), "little"),
+                      (1 << len(chunk)) - 1))
+    return beats
+
+
 async def setup(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst_n.value = 0
     dut.s_axis_tdata.value = 0
+    dut.s_axis_tkeep.value = 0
     dut.s_axis_tvalid.value = 0
     dut.s_axis_tlast.value = 0
     dut.m_axis_tready.value = 1
@@ -35,16 +54,17 @@ async def setup(dut):
     await RisingEdge(dut.clk)
 
 
-async def send_byte(dut, b: int, last: bool):
-    """Offer one byte as an AXI-Stream source.
+async def send_word(dut, data: int, keep: int, last: bool):
+    """Offer one beat as an AXI-Stream source.
 
-    tdata, tlast and tvalid are held stable until tready is seen high in
-    the read-only phase of a cycle; the transfer is the edge that ends
-    that cycle. Sampling the handshake before the edge rather than after
-    it is what keeps this a source the RTL cannot distinguish from
-    verilog-ethernet.
+    tdata, tkeep, tlast and tvalid are held stable until tready is seen
+    high in the read-only phase of a cycle; the transfer is the edge that
+    ends that cycle. Sampling the handshake before the edge rather than
+    after it is what keeps this a source the RTL cannot distinguish from
+    the adapter in front of verilog-ethernet.
     """
-    dut.s_axis_tdata.value = b
+    dut.s_axis_tdata.value = data
+    dut.s_axis_tkeep.value = keep
     dut.s_axis_tlast.value = 1 if last else 0
     dut.s_axis_tvalid.value = 1
     while True:
@@ -57,14 +77,15 @@ async def send_byte(dut, b: int, last: bool):
 
 async def send_packet(dut, pkt: bytes, rng: random.Random | None = None,
                       max_gap: int = 0):
-    for i, b in enumerate(pkt):
+    beats = words_of(pkt)
+    for i, (data, keep) in enumerate(beats):
         if rng is not None:
             gap = rng.randint(0, max_gap)
             if gap:
                 dut.s_axis_tvalid.value = 0
                 for _ in range(gap):
                     await RisingEdge(dut.clk)
-        await send_byte(dut, b, i == len(pkt) - 1)
+        await send_word(dut, data, keep, i == len(beats) - 1)
     dut.s_axis_tvalid.value = 0
     dut.s_axis_tlast.value = 0
 
@@ -74,8 +95,9 @@ async def recv_packet(dut, budget: int = 20000,
                       stall_p: float = 0.0) -> bytes:
     """Collect one response as an AXI-Stream sink.
 
-    A byte is taken only where tvalid and tready are both high in the
-    read-only phase, which is the cycle the transfer edge ends.
+    A beat is taken only where tvalid and tready are both high in the
+    read-only phase, which is the cycle the transfer edge ends; tkeep
+    says how many of its bytes are response and not padding.
     """
     out = bytearray()
     for _ in range(budget):
@@ -86,7 +108,9 @@ async def recv_packet(dut, budget: int = 20000,
                  and dut.m_axis_tready.value == 1)
         last = taken and dut.m_axis_tlast.value == 1
         if taken:
-            out.append(int(dut.m_axis_tdata.value))
+            keep = int(dut.m_axis_tkeep.value)
+            out += int(dut.m_axis_tdata.value).to_bytes(
+                8, "little")[:keep.bit_count()]
         await RisingEdge(dut.clk)
         if last:
             dut.m_axis_tready.value = 1
@@ -98,13 +122,14 @@ async def recv_packet(dut, budget: int = 20000,
 async def send_back_to_back(dut, pkts):
     """Send several packets without ever lowering tvalid between them.
 
-    This is the source verilog-ethernet becomes when a frame is already
-    queued behind the one going out: the first byte of the next packet
+    This is the source the adapter becomes when a frame is already
+    queued behind the one going out: the first beat of the next packet
     is offered in the cycle right after tlast.
     """
     for pkt in pkts:
-        for i, b in enumerate(pkt):
-            await send_byte(dut, b, i == len(pkt) - 1)
+        beats = words_of(pkt)
+        for i, (data, keep) in enumerate(beats):
+            await send_word(dut, data, keep, i == len(beats) - 1)
     dut.s_axis_tvalid.value = 0
     dut.s_axis_tlast.value = 0
 
