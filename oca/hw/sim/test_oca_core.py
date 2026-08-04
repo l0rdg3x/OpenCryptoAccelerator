@@ -1118,3 +1118,56 @@ async def test_pipelined_backpressure_is_transparent(dut):
             assert rsp["req_id"] == 0x320 + n, f"seed {seed:#x}: #{n} order"
             assert rsp["status"] == ST_OK, f"seed {seed:#x}: #{n} status"
             assert rsp["body"] == body, f"seed {seed:#x}: #{n} body"
+
+
+@cocotb.test()
+async def test_partial_keep_does_not_fail_its_neighbour(dut):
+    """A short beat in one packet fails that packet and no other.
+
+    The flag lives with the receive stage, which is a packet ahead of the
+    one being processed, so it has to be per bank. A single flag would
+    let a malformed packet still arriving answer 05 on behalf of the good
+    packet in front of it -- a denial of service one attacker can aim at
+    another host's traffic, and a silent one, since 05 is exactly what a
+    genuinely malformed packet gets.
+    """
+    await setup(dut)
+    await command(dut, build_load_key(0x10, 0, KEY))
+
+    msg = bytes((i * 17) & 0xFF for i in range(200))
+    ct, tag = aead_encrypt(KEY, NONCE, b"", msg)
+    good = build_seal(0x330, 0, NONCE, b"", msg)
+    bad = build_seal(0x331, 0, NONCE, b"", msg)
+
+    async def send_with_short_beat(pkt):
+        beats = [(int.from_bytes(pkt[:4], "little"), 0x0F)] + words_of(pkt[4:])
+        for i, (data, keep) in enumerate(beats):
+            await send_word(dut, data, keep, i == len(beats) - 1)
+
+    for stall_p in (0.0, 0.7):
+        sink = cocotb.start_soon(
+            recv_packets(dut, 3, rng=random.Random(0x3300),
+                         stall_p=stall_p))
+        for i, (data, keep) in enumerate(words_of(good)):
+            await send_word(dut, data, keep, i == len(words_of(good)) - 1)
+        await send_with_short_beat(bad)
+        third = build_seal(0x332, 0, NONCE, b"", msg)
+        for i, (data, keep) in enumerate(words_of(third)):
+            await send_word(dut, data, keep, i == len(words_of(third)) - 1)
+        dut.s_axis_tvalid.value = 0
+        dut.s_axis_tlast.value = 0
+
+        rsps = [parse_response(r) for r in await sink]
+        # The middle response carries no meaningful req_id: the short beat
+        # left the write pointer off a word boundary, so the next beat
+        # landed back on the header word and nothing read out of that
+        # packet is what arrived. That is the whole reason it is failed on
+        # the keep rather than on the fields.
+        assert [rsps[0]["req_id"], rsps[2]["req_id"]] == [0x330, 0x332], \
+            f"stall {stall_p}: neighbours out of order"
+        assert rsps[0]["status"] == ST_OK and rsps[0]["body"] == tag + ct, \
+            f"stall {stall_p}: the packet in front was failed by its successor"
+        assert rsps[1]["status"] == ST_BAD_LENGTH, \
+            f"stall {stall_p}: status {rsps[1]['status']} for the short beat"
+        assert rsps[2]["status"] == ST_OK and rsps[2]["body"] == tag + ct, \
+            f"stall {stall_p}: the packet behind was failed by its predecessor"

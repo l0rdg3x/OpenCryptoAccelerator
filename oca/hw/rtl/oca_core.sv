@@ -62,7 +62,7 @@ module oca_core #(
     // capacity on its own) and nothing reads the transmit buffer's byte
     // count or full flag on the read side.
     logic unused_ok;
-    assign unused_ok = (|rx_wr_count) | (|tx_rd_count) | tx_rd_full | eng_busy;
+    assign unused_ok = (|rx_wr_count) | (|tx_rd_count) | tx_rd_full;
 
     oca_pktbuf #(.BYTES(BYTES)) u_rxbuf (
         .clk,
@@ -169,6 +169,7 @@ module oca_core #(
         .ks_rd_valid (ks_rd_valid),
         .eng_start   (eng_start),
         .eng_dec     (eng_dec),
+        .eng_busy    (eng_busy),
         .eng_key     (eng_key),
         .eng_nonce   (eng_nonce),
         .eng_in_valid(eng_in_valid),
