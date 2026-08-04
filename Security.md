@@ -250,16 +250,23 @@ around a limitation it has not been told about.
    the remainder: it is key material for a counter block that may still
    be in use.
 
-4. **Secrets are not cleared on reset.** None of the three modules
-   zeroises its secret state when `rst_n` is asserted. After a reset,
-   `chacha20.sv` still holds the key and nonce inside `st` and
-   `st_init` and the last block in `data_out`; `poly1305.sv` still
-   holds the clamped r, the precomputed 5r, s, the accumulator and the
-   tag; `chacha20_poly1305.sv` still holds `key_r`, `nonce_r`, the
-   derived Poly1305 key `p_key`, the buffered block and `out_data`.
-   Reset restores control state, not confidentiality. Anything that can
-   read the fabric after a reset — readback, a subsequent bitstream, a
-   later design sharing the device — can recover them.
+4. **Secrets are cleared on reset, in the flip-flops.** All three
+   modules zeroise their secret state when `rst_n` is asserted:
+   `chacha20.sv` clears `st`, `st_init` and `data_out`; `poly1305.sv`
+   clears r, the precomputed 5r, s, the accumulator, every intermediate
+   derived from them, the registered products and the tag;
+   `chacha20_poly1305.sv` clears `key_r`, `nonce_r`, the derived
+   Poly1305 key `p_key`, `c_data_in`, `mac_buf`, `out_data` and
+   `p_data_in`. 5866 bits per core, named one by one and checked one by
+   one: `hw/sim/test_secret_zeroise.py` proves each register holds a
+   secret *before* the reset and zero after, because a test that only
+   looked after the reset would pass on a core that was never loaded.
+
+   Two things this does not cover. **The packet buffers are block RAM
+   and are not cleared** — 8192 bytes per core, the larger half of the
+   problem; see section 6. And clearing is only as good as the reset:
+   nothing zeroises on power loss, and a design that stops being
+   clocked keeps whatever it held.
 
 5. **An illegal `in_len` aborts the message.** `in_len` above 64 does
    not fit the 64-byte datapath and cannot be terminated by the MAC
@@ -323,11 +330,15 @@ What the protocol layer does add, against the engine alone:
   what was last written to either of their two banks — 4096 bytes each,
   two packets each: plaintext, ciphertext, and for a load-key command
   the 32 raw key bytes, which necessarily pass through the receive
-  buffer on their way to the slot. Limitation 4 above therefore extends
-  to the protocol layer rather than being resolved by it, and the three
-  engine cores are unchanged: reset restores control state, not
-  confidentiality. Clearing 8192 bytes of BRAM costs a counter and as
-  many cycles as there are addresses; it is not implemented.
+  buffer on their way to the slot. The three engine cores now clear
+  their own secret registers on reset (limitation 4), so this is the
+  whole of what survives one: 8192 bytes of block RAM against 5866 bits
+  of flip-flops, which is to say 91.8% of it. Clearing the memory costs
+  a counter and as many cycles as there are addresses, plus back
+  pressure while it runs — a reset-branch loop would be a 512-way
+  simultaneous write that no memory primitive can express, so yosys
+  would fail RAM inference and lower both buffers to 65536 flip-flops.
+  It is not implemented.
 - **The tag is compared on the FPGA in constant time, and a failure
   emits no plaintext.** See section 4 item 1.
 - **Failures are reported rather than dropped silently.** Every request

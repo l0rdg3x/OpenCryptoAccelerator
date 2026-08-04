@@ -3,6 +3,10 @@
 # install prefixes both. ~1.7 GB, and reproducible from the pins in that
 # script, so none of it is carried here.
 tools/
+# Also without the slash: a git worktree does not inherit tools/, so it
+# gets symlinked there, and a symlink is a file — `tools/` would not
+# match it and the absolute path would be committed into a public repo.
+/tools
 
 # Claude Code local settings
 .claude/settings.local.json

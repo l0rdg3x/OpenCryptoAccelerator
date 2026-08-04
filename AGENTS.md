@@ -121,6 +121,7 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
+.venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
 .venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
 .venv/bin/python hw/sim/run_oca_core.py           # 27/27 pass
@@ -129,7 +130,7 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-74 RTL tests, plus 6 on a synthesised netlist.
+76 RTL tests, plus 6 on a synthesised netlist.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because

@@ -49,6 +49,9 @@
  * order, because the input FSM fills the buffer in the order it accepts
  * blocks and the MAC FSM drains it in the order it was filled.
  * Deepening the buffer would break that argument.
+ *
+ * Reset clears the key, the derived one-time key and the buffered
+ * plaintext and ciphertext, not only the control state (Security.md).
  */
 module chacha20_poly1305 (
     input  logic         clk,
@@ -127,10 +130,12 @@ module chacha20_poly1305 (
     );
 
     // An aborted message leaves poly1305 part-way through a message, and
-    // poly1305 only honours `start` from its idle state: it would keep
-    // the one-time key and the accumulator of the abandoned message and
-    // authenticate the next one with a reused r and s. Hold it in reset
-    // from the abort until the next `start` clears `err`.
+    // poly1305 only honours `start` from its idle state: without this it
+    // would authenticate the next message with the abandoned one's r and
+    // s. Held in reset from the abort until the next `start` clears
+    // `err`, it returns to idle and its reset erases that r, s and
+    // accumulator on the way -- the next message cannot reuse them and
+    // they are no longer in the flip-flops either.
     logic p_rst_n;
     assign p_rst_n = rst_n && !err;
 
@@ -209,6 +214,12 @@ module chacha20_poly1305 (
             p_start   <= 1'b0;
             mac_valid <= 1'b0;
             err       <= 1'b0;
+            key_r     <= '0;
+            nonce_r   <= '0;
+            p_key     <= '0;
+            c_data_in <= '0;
+            mac_buf   <= '0;
+            out_data  <= '0;
         end else begin
             out_valid <= 1'b0;
             // a write in the same cycle wins: the buffer stays occupied
@@ -321,10 +332,11 @@ module chacha20_poly1305 (
     // MAC FSM: drains the buffer into poly1305, then the length block.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            m_state <= S_M_IDLE;
-            p_blk   <= 1'b0;
-            p_last  <= 1'b0;
-            done    <= 1'b0;
+            m_state   <= S_M_IDLE;
+            p_blk     <= 1'b0;
+            p_last    <= 1'b0;
+            done      <= 1'b0;
+            p_data_in <= '0;
         end else if (len_bad) begin
             // poly1305 goes into reset on this same edge, so a half-fed
             // block here would wait on a blk_ready that never returns

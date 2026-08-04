@@ -29,6 +29,9 @@
  *
  * Latency: 1 (load) + 20/ROUNDS_PER_CYCLE (rounds) + 1 (serialize)
  * cycles, so 22 cycles at the default ROUNDS_PER_CYCLE = 1.
+ *
+ * Reset clears the working state, the key/nonce snapshot it is added to
+ * and the output register, not only the control state (Security.md).
  */
 module chacha20 #(
     // Rounds computed per cycle. 1 halves the combinational path (22
@@ -166,6 +169,9 @@ module chacha20 #(
             busy      <= 1'b0;
             done      <= 1'b0;
             round_cnt <= 5'd0;
+            st        <= '0;
+            st_init   <= '0;
+            data_out  <= '0;
         end else begin
             done <= 1'b0;
             case (state)
