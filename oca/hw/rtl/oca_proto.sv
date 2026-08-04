@@ -41,12 +41,25 @@
  * never taken and discarded. A source with the next packet ready one
  * cycle after tlast simply waits.
  *
+ * Within a command the three phases of a block do overlap. The main FSM
+ * reads block k+1 out of the receive buffer while the engine works on
+ * block k, and a second state register writes block k-1's ciphertext into
+ * the transmit buffer at the same time. The feed path costs 14 cycles and
+ * the drain 10 against the engine's 40, so both hide inside it and a
+ * block costs what the engine costs rather than the sum of the three:
+ * 48 cycles a block became 40, measured 2026-08-04. Nothing about the
+ * packet boundary changes — the request is still whole before the engine
+ * sees any of it, and the response still whole before a byte leaves.
+ *
  * The four stats counters are: packets received (every packet that
  * reaches tlast), packets dropped for an invalid header (too short to
  * hold one, bad magic, bad version, unknown opcode — the first is the
  * only packet that gets no answer at all), commands completed with
  * status 00, and authentication failures. The snapshot is taken before
- * the stats command itself completes, so it never counts itself.
+ * the stats command itself completes, so it never counts itself. Its
+ * sixteen bytes travel through the same response field the tag of a
+ * seal uses, not through the transmit buffer: the two cannot both be
+ * present.
  *
  * A load-key command whose length is not exactly 40 bytes is refused
  * with status 05. Without that check the 32 key bytes would be read from
@@ -142,16 +155,27 @@ module oca_proto #(
         S_ARGS,      // read nonce, lengths and tag, validate them
         S_FEED,      // read the next 64-byte block out of the buffer
         S_PRESENT,   // hand that block to the engine
-        S_WAIT_OUT,  // wait for the block the engine gives back
-        S_DRAIN,     // write out_data into the transmit buffer
         S_NEXTBLK,   // advance section and offset
         S_WAIT_DONE, // wait for the tag
         S_CHECK,     // compare the tag (open only)
-        S_STATS,     // write the counters into the transmit buffer
         S_BUILD,     // size the response
         S_RESPOND    // stream the response out
     } fsm_t;
     fsm_t state;
+
+    // The drain runs on its own state register so that reading block k+1
+    // out of the receive buffer and writing block k's ciphertext into the
+    // transmit buffer both proceed while the engine chews on block k.
+    // Serialised, a block cost 48 cycles of which the engine needed 40;
+    // the feed path is 14 and the drain 9, so both fit inside the 40 with
+    // room over and the block period becomes the engine's floor.
+    //
+    // No second block register is needed for the prefetch: the engine
+    // samples in_data into its own c_data_in on the handshake cycle, so
+    // `blk` is free from the cycle after S_PRESENT, which is two cycles
+    // before S_FEED writes it again.
+    typedef enum logic [0:0] { D_IDLE, D_WRITE } drain_t;
+    drain_t dr_state;
 
     // Combinational, but only on the state register: nothing of the
     // source's own handshake reaches it, so there is no tvalid-to-tready
@@ -207,6 +231,11 @@ module oca_proto #(
     logic [ 8:0] resp_widx, body_start_w;
     logic [ 1:0] resp_sel;
     logic        resp_v;
+    // The sixteen bytes that sit between the header and the buffer body:
+    // the tag of a successful seal, or the four statistics counters. They
+    // never occur together, so one register carries both and the
+    // statistics no longer travel through the transmit buffer at all.
+    logic [127:0] resp_extra;
     logic [ 3:0] beat_bytes;
     logic [ 1:0] beat_sel;
     logic        beat_last, beat_v;
@@ -272,11 +301,6 @@ module oca_proto #(
                              : (nx_left <= 16'd64);
     end
 
-    // A block produces ciphertext only when it carries message bytes: an
-    // AAD block and the empty-message marker both come back silently.
-    logic blk_is_msg;
-    always_comb blk_is_msg = !sec_aad && (blk_len != 7'd0);
-
     // Where the next block starts, as a byte offset. Only the last block
     // of the AAD advances it by something other than a whole number of
     // words, which is the one boundary the funnel below exists for.
@@ -320,22 +344,30 @@ module oca_proto #(
     logic tag_match;
     always_comb tag_match = (resp_tag == rx_tag);
 
-    // Response word source: the header, the two tag words of a
-    // successful seal, then the transmit buffer. Selected by a
+    // Response word source: the header, the two words of the extra field
+    // where there is one, then the transmit buffer. Selected by a
     // registered two-bit code rather than by comparing the word index
     // here — the same multiplexer written as an if / else chain over
     // comparators costs 771 LUT4 at 64 bits against 129 for this,
-    // measured 2026-08-04. The tag is indexed rather than shifted out
-    // because a shift register would have to be advanced by the same
+    // measured 2026-08-04. The extra field is indexed rather than shifted
+    // out because a shift register would have to be advanced by the same
     // enable as the stage reading it, and a second thing to freeze is
     // what the pipeline below exists to avoid.
     logic [63:0] resp_hdr, resp_word;
     always_comb resp_hdr = {status, slot, req_id, opcode, VERSION, MAGIC};
+
+    // A response carries the extra field when it is a successful seal
+    // (the tag) or a successful stats (the counters). Every other
+    // response goes straight from the header to the buffer body, if it
+    // has one at all.
+    logic has_extra;
+    always_comb has_extra = (status == ST_OK)
+                            && ((opcode == OP_SEAL) || (opcode == OP_STATS));
     always_comb begin
         case (beat_sel)
             2'd0:    resp_word = resp_hdr;
-            2'd1:    resp_word = resp_tag[ 63: 0];
-            2'd2:    resp_word = resp_tag[127:64];
+            2'd1:    resp_word = resp_extra[ 63: 0];
+            2'd2:    resp_word = resp_extra[127:64];
             default: resp_word = tx_rd_data;
         endcase
     end
@@ -401,9 +433,6 @@ module oca_proto #(
             rx_wr_bytes   <= 4'd0;
             rx_wr_clear   <= 1'b0;
             rx_rd_addr    <= 9'd0;
-            tx_wr_en      <= 1'b0;
-            tx_wr_data    <= 64'd0;
-            tx_wr_bytes   <= 4'd0;
             tx_wr_clear   <= 1'b0;
             ks_wr_en      <= 1'b0;
             ks_wr_slot    <= 8'd0;
@@ -430,8 +459,6 @@ module oca_proto #(
             cnt_auth_fail <= 32'd0;
             args          <= 256'd0;
             blk           <= 512'd0;
-            outbuf        <= 512'd0;
-            out_left      <= 7'd0;
             feed_addr     <= 12'd0;
             feed_shift    <= 3'd0;
             feed_prev     <= 64'd0;
@@ -445,6 +472,7 @@ module oca_proto #(
             resp_widx     <= 9'd0;
             resp_sel      <= 2'd0;
             resp_v        <= 1'b0;
+            resp_extra    <= 128'd0;
             beat_bytes    <= 4'd0;
             beat_sel      <= 2'd0;
             beat_last     <= 1'b0;
@@ -459,7 +487,6 @@ module oca_proto #(
         end else begin
             rx_wr_en     <= 1'b0;
             rx_wr_clear  <= 1'b0;
-            tx_wr_en     <= 1'b0;
             tx_wr_clear  <= 1'b0;
             ks_wr_en     <= 1'b0;
             eng_start    <= 1'b0;
@@ -570,14 +597,12 @@ module oca_proto #(
                                 state <= S_LOADKEY;
                             end
                         end else if (opcode == OP_STATS) begin
-                            // packets received, packets dropped for an
-                            // invalid header, commands completed,
-                            // authentication failures — little-endian,
-                            // in that order
-                            outbuf   <= {384'd0, cnt_auth_fail, cnt_done,
-                                         cnt_drop, cnt_rx};
-                            out_left <= 7'd16;
-                            state    <= S_STATS;
+                            // The counters go out through the extra field
+                            // rather than the transmit buffer: the body is
+                            // two words, the same two the tag of a seal
+                            // occupies, and they cannot both be present.
+                            status <= ST_OK;
+                            state  <= S_BUILD;
                         end else if (!ks_rd_valid) begin
                             status <= ST_BAD_SLOT;
                             state  <= S_BUILD;
@@ -622,6 +647,11 @@ module oca_proto #(
                     if (rd_got == 4'd9) state <= S_PRESENT;
                 end
 
+                // in_valid is asserted the cycle after in_ready was seen
+                // high. That is still a handshake, not a speculative
+                // present: the engine lowers in_ready only in response to
+                // in_valid, so it cannot have fallen in between. A block
+                // offered while it is low would be discarded in silence.
                 S_PRESENT: begin
                     if (eng_err) begin
                         status        <= ST_ENGINE_ERR;
@@ -634,34 +664,7 @@ module oca_proto #(
                         eng_in_last  <= blk_last;
                         eng_in_len   <= blk_len;
                         eng_in_data  <= blk;
-                        state        <= S_WAIT_OUT;
-                    end
-                end
-
-                S_WAIT_OUT: begin
-                    if (eng_err) begin
-                        status        <= ST_ENGINE_ERR;
-                        resp_body_len <= 12'd0;
-                        tx_wr_clear   <= 1'b1;
-                        state         <= S_BUILD;
-                    end else if (!blk_is_msg) begin
-                        state <= S_NEXTBLK;
-                    end else if (eng_out_valid) begin
-                        outbuf   <= eng_out_data;
-                        out_left <= eng_out_len;
-                        state    <= S_DRAIN;
-                    end
-                end
-
-                S_DRAIN: begin
-                    if (out_left != 7'd0) begin
-                        tx_wr_en    <= 1'b1;
-                        tx_wr_data  <= outbuf[63:0];
-                        tx_wr_bytes <= out_bytes;
-                        outbuf      <= {64'd0, outbuf[511:64]};
-                        out_left    <= nx_out_left;
-                    end else begin
-                        state <= S_NEXTBLK;
+                        state        <= S_NEXTBLK;
                     end
                 end
 
@@ -682,13 +685,19 @@ module oca_proto #(
                     end
                 end
 
+                // The drain has to be idle as well as the tag ready:
+                // resp_body_len is taken from the transmit buffer's write
+                // counter, and a block still going into it would size the
+                // response short of its own ciphertext. `done` follows the
+                // last out_valid by the whole MAC tail, so this waits on
+                // nothing in practice — it is the invariant, written down.
                 S_WAIT_DONE: begin
                     if (eng_err) begin
                         status        <= ST_ENGINE_ERR;
                         resp_body_len <= 12'd0;
                         tx_wr_clear   <= 1'b1;
                         state         <= S_BUILD;
-                    end else if (eng_done_seen) begin
+                    end else if (eng_done_seen && (dr_state == D_IDLE)) begin
                         if (opcode == OP_OPEN) begin
                             state <= S_CHECK;
                         end else begin
@@ -715,20 +724,6 @@ module oca_proto #(
                     state <= S_BUILD;
                 end
 
-                S_STATS: begin
-                    if (out_left != 7'd0) begin
-                        tx_wr_en    <= 1'b1;
-                        tx_wr_data  <= outbuf[63:0];
-                        tx_wr_bytes <= out_bytes;
-                        outbuf      <= {64'd0, outbuf[511:64]};
-                        out_left    <= nx_out_left;
-                    end else begin
-                        status        <= ST_OK;
-                        resp_body_len <= 12'd16;
-                        state         <= S_BUILD;
-                    end
-                end
-
                 S_LOADKEY: begin
                     ks_wr_en   <= 1'b1;
                     ks_wr_slot <= slot;
@@ -744,7 +739,16 @@ module oca_proto #(
                     resp_sel  <= 2'd0;
                     resp_v    <= 1'b1;
                     beat_v    <= 1'b0;
-                    if ((opcode == OP_SEAL) && (status == ST_OK)) begin
+                    // packets received, packets dropped for an invalid
+                    // header, commands completed, authentication failures
+                    // — little-endian, in that order. Read on the cycle
+                    // that counts this command, so the value taken is the
+                    // one before the increment and a stats command never
+                    // counts itself.
+                    resp_extra <= (opcode == OP_STATS)
+                                  ? {cnt_auth_fail, cnt_done, cnt_drop, cnt_rx}
+                                  : resp_tag;
+                    if (has_extra) begin
                         body_start_w <= 9'((HDR_LEN + 16) / 8);
                         resp_left    <= 12'(HDR_LEN + 16) + resp_body_len;
                     end else begin
@@ -791,6 +795,51 @@ module oca_proto #(
                 end
 
                 default: state <= S_RX;
+            endcase
+        end
+    end
+
+    // Drain. Owns the transmit buffer's write port and the block register
+    // behind it; the main FSM keeps the clear, and only ever issues one
+    // while this FSM is idle or while the packet it belongs to is already
+    // being failed.
+    //
+    // out_valid is a one-cycle pulse with no back-pressure, so a block
+    // arriving while the previous one is still being written would vanish
+    // and the response would come back 64 bytes short under a valid tag —
+    // indistinguishable from success, which is the worst shape a failure
+    // can take. The margin is the engine's block period against the ten
+    // cycles a capture and eight writes cost, and the engine cannot
+    // produce a second block faster than it can run ChaCha20 over it.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dr_state    <= D_IDLE;
+            outbuf      <= 512'd0;
+            out_left    <= 7'd0;
+            tx_wr_en    <= 1'b0;
+            tx_wr_data  <= 64'd0;
+            tx_wr_bytes <= 4'd0;
+        end else begin
+            tx_wr_en <= 1'b0;
+            case (dr_state)
+                D_IDLE: begin
+                    if (eng_out_valid) begin
+                        outbuf   <= eng_out_data;
+                        out_left <= eng_out_len;
+                        dr_state <= D_WRITE;
+                    end
+                end
+                D_WRITE: begin
+                    if (out_left != 7'd0) begin
+                        tx_wr_en    <= 1'b1;
+                        tx_wr_data  <= outbuf[63:0];
+                        tx_wr_bytes <= out_bytes;
+                        outbuf      <= {64'd0, outbuf[511:64]};
+                        out_left    <= nx_out_left;
+                    end else begin
+                        dr_state <= D_IDLE;
+                    end
+                end
             endcase
         end
     end
