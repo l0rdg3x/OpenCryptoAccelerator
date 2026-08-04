@@ -429,6 +429,46 @@ async def test_corrupt_tag_yields_no_plaintext(dut):
 
 
 @cocotb.test()
+async def test_every_tag_byte_is_compared(dut):
+    """The comparison is 128 bits wide, and this is what says so.
+
+    Every other tag corruption in both suites flips byte 0 or byte 15, so
+    a comparison of eight bits passes all of test_oca_core and a
+    comparison of 120 bits — one that ignores tag byte 7 — passes all 41
+    tests in the two suites while handing back the whole plaintext to a
+    forgery that differs in that one byte. Sixteen opens, one flipped bit
+    per byte and the bit position rotating with it, each of which must
+    answer 06 with no body.
+
+    The intact tag is opened again at the end: without it a comparison
+    wired to constant false would satisfy all sixteen negative cases.
+    """
+    await setup(dut)
+    await command(dut, build_load_key(0x50, 5, KEY))
+    msg = b"every one of the sixteen tag bytes decides this"
+    sealed = await command(dut, build_seal(0x51, 5, NONCE, b"", msg))
+    assert sealed["status"] == ST_OK, f"seal status {sealed['status']}"
+    tag, ct = sealed["body"][:16], sealed["body"][16:]
+
+    for i in range(16):
+        forged = bytearray(tag)
+        forged[i] ^= 1 << (i % 8)
+        rsp = await command(
+            dut, build_open(0x60 + i, 5, NONCE, b"", ct, bytes(forged)))
+        assert rsp["body"] == b"", \
+            f"tag byte {i}, bit {i % 8}: plaintext leaked: {rsp['body']!r}"
+        assert msg not in rsp["body"], f"tag byte {i}: plaintext present"
+        assert rsp["status"] == ST_AUTH_FAIL, \
+            (f"tag byte {i}, bit {i % 8} flipped and the open still "
+             f"answered {rsp['status']}: that byte is not compared")
+
+    opened = await command(dut, build_open(0x70, 5, NONCE, b"", ct, tag))
+    assert opened["status"] == ST_OK, \
+        f"the intact tag stopped verifying: status {opened['status']}"
+    assert opened["body"] == msg, "the intact tag returned the wrong plaintext"
+
+
+@cocotb.test()
 async def test_bad_header_fields(dut):
     await setup(dut)
     bad_magic = b"XX" + build_seal(1, 0, NONCE, b"", b"x")[2:]
