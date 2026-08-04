@@ -42,6 +42,18 @@
  * that bank: a truncated packet becomes a length error at the protocol
  * layer rather than a silent wrap that corrupts what is already stored.
  *
+ * BYTES is eight times a power of two, from 16 to 2048, and anything else
+ * is refused at elaboration. The bank base is 2**ADDR_W while the array
+ * is 2*WORDS entries long, so a WORDS that is not a power of two leaves
+ * the upper bank running off the end of the array: writes there are
+ * dropped, reads come back empty, and oca_proto answers status 00 over
+ * whatever the register held — the failure indistinguishable from success
+ * once more, and this one reaches the wire. Above 2048 the 12-bit byte
+ * counters cannot represent BYTES, 12'(BYTES) truncates and both full
+ * flags jam high. Nothing downstream can see either case, and BYTES=1536
+ * is exactly the number someone sizing the buffer against an Ethernet
+ * MTU would reach for, so the module refuses to build instead.
+ *
  * Reads are registered, one word per cycle, and there is exactly one
  * write port and one read port, which is what lets yosys map the memory
  * through $__PDPW16KD_ — pseudo dual-port, 36 bits wide. That mode is
@@ -77,6 +89,16 @@ module oca_pktbuf #(
     // which is only ever used once the wide one has been range-checked.
     localparam int WORDS  = BYTES / 8;
     localparam int ADDR_W = $clog2(WORDS);
+
+    // The constraint from the header, checked where it is cheap to check.
+    // An elaboration-time $fatal inside a generate block: verilator and
+    // slang both stop on it, so the illegal parameter fails the build and
+    // the lint rather than the board.
+    if ((BYTES < 16) || (BYTES > 2048) || (8 * WORDS != BYTES)
+        || (2 ** ADDR_W != WORDS)) begin : gen_illegal_bytes
+        $fatal(1, "oca_pktbuf: BYTES must be 8 * 2**k, 16..2048 (got %0d)",
+               BYTES);
+    end
 
     logic [63:0] mem [2*WORDS];
 
