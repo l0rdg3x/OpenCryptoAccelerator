@@ -498,6 +498,39 @@ core and never updated as the design grew by 3000 LUTs.
   key store makes non-trivial: a slot is loaded into one core and only
   that core can use it.
 
+  **With the secret zeroisation merged, four seeds give 24602 LUTs
+  (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8 DP16KD, Fmax 50.37 /
+  48.12 / 48.05 / 49.03, mean 48.89 MHz.** That is +1411 LUTs over the
+  pre-zeroisation pair — 705 per core, against the 718 measured on one
+  core alone — and the clock is 1.5% *better*, which is inside the seed
+  spread and means the zeroisation costs area and not time.
+
+  **And one Ethernet port costs 8422 LUTs, 19.2% of the device**,
+  measured out-of-context on this toolchain rather than estimated:
+  `udp_complete_64` 7147, `eth_mac_1g_rgmii_fifo` at 64 bits 1214, and
+  ~61 for the RGMII front end. What that leaves:
+
+  | configuration | LUTs | of device |
+  |---|---|---|
+  | two cores, two ports | 41446 | **94.5%** |
+  | two cores, one port | 33024 | **75.3%** |
+  | one core, one port | 20730 | 47.3% |
+
+  Two ports are not merely tight, they are out. Two cores behind one
+  port land at 75.3%, against the 76.4% at which this device stopped
+  routing in the occupancy study — and would additionally need a
+  distributor, a collector and an answer to the per-core key store. **On
+  the current RTL the MVP that fits is one core on one port, 0.561 Gbps
+  at MTU.**
+
+  **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
+  Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
+  DP16KD through `read_verilog` and 6454 LUTs with no block RAM at all
+  through `read_slang`; `eth_mac_1g_fifo` is 1185 against 12620. Slang
+  does not infer these memories and spills them into logic, so a mixed
+  design read entirely through slang would measure an order of magnitude
+  too large and be abandoned for the wrong reason.
+
   This corrects the figure this entry carried until 2026-08-05, which
   read "one gigabit port is saturated at MTU with 12% of margin". That
   summed both cores' cycle budgets against a single port — a topology
