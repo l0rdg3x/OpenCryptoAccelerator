@@ -96,12 +96,18 @@ Hardware accelerator for:
   bouncing between 50 and 2300 unrouted arcs rather than descending. The
   cycle budget is measured; the clock and the fit at two cores are not,
   and routability rather than the clock is what was already marginal.
-  **The board's second GbE PHY cannot be fed, and this is recorded
-  rather than overlooked.** The Colorlight i9 v7.2 carries two PHYs
-  (`BOM-MVP.md`), so 2 Gbps of wire is present on the board and
-  >= 2 Gbps was the honest thing to aim at; the fabric holds ~1.26 Gbps
-  of crypto. The second port is out of reach on this silicon and stays
-  out of reach until the Artix-7 phase.
+  **Both PHYs can be fed; neither can be saturated. Corrected
+  2026-08-05, having previously read that the second PHY could not be
+  fed at all.** The Colorlight i9 v7.2 carries two PHYs (`BOM-MVP.md`),
+  so 2 Gbps of wire is present and >= 2 Gbps was the honest thing to aim
+  at. Two cores place and route at 48.16 MHz mean, and `oca_dual` wires
+  them as two independent streams — one core per port. That gives
+  **0.561 Gbps per port at a 1500-byte MTU, 56% of line rate, 1.121 Gbps
+  across both**. Saturating a single port needs both cores behind it,
+  which needs a distributor, a collector and an answer to the per-core
+  key store; saturating both needs four cores, and three do not route.
+  Full line rate on any port stays out of reach until the Artix-7
+  phase.
   Both figures are projections from measurement rather than silicon
   results: the builds are `--out-of-context`, with no IO, no pin
   constraints and no Ethernet MAC, and the MAC still has to fit

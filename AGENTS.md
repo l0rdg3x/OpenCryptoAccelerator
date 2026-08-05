@@ -480,20 +480,30 @@ core and never updated as the design grew by 3000 LUTs.
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
   datapath.
-- **The MVP target: one gigabit port is saturated at MTU, measured at
-  two cores.** `run_synth.py oca_dual` builds the configuration the MVP
-  actually is — two `oca_core`, one per PHY, sharing nothing — and four
+- **The MVP target: two ports at 56% of line rate each, not one port
+  saturated.** `run_synth.py oca_dual` builds two `oca_core` and four
   placer seeds give **23191 LUTs (52.9%), 24086 FF (54.9%), 40
   MULT18X18D (55.6%), 8 DP16KD, Fmax 47.07 / 49.61 / 47.99 / 47.98,
   mean 48.16 MHz** (spread 5.4%). Replication is linear to eleven LUTs
   of glue against 2 x 11590, and the second core costs 0.7% of clock,
-  which is inside that spread. At 40 cycles per 64-byte block plus 71
-  fixed per packet: **1.233 Gbps asymptotic, 1.121 Gbps at a 1500-byte
-  MTU, 0.444 Gbps on 64-byte packets.** A bare GbE port is 1 Gbps, so
-  MTU-sized traffic clears it with 12% of margin and short packets do
-  not — the fixed 71 cycles dominate there. **Two ports are not
-  reachable on this device**: that needs four cores, and three do not
-  route.
+  inside that spread.
+
+  **What that buys depends on how the cores are wired to the ports, and
+  `oca_dual` answers it: two independent AXI-Stream pairs, one per
+  core.** One core per port is therefore **0.561 Gbps at a 1500-byte
+  MTU — 56% of line rate — and 0.222 Gbps on 64-byte packets**, with
+  1.121 Gbps aggregated across both ports. Neither port is saturated.
+  Saturating one would need both cores behind it, which needs a
+  distributor and a collector that do not exist, and which the per-core
+  key store makes non-trivial: a slot is loaded into one core and only
+  that core can use it.
+
+  This corrects the figure this entry carried until 2026-08-05, which
+  read "one gigabit port is saturated at MTU with 12% of margin". That
+  summed both cores' cycle budgets against a single port — a topology
+  the RTL does not implement and has no path to without new logic. The
+  synthesis numbers above are unaffected; only what they were claimed to
+  deliver was wrong.
 
   **All four seeds routed.** The previous two-core reading had two of
   its four fail to route at all, stopped after 3 h 22 min each with the
