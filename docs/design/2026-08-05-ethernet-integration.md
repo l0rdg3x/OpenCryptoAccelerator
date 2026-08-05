@@ -58,15 +58,41 @@ per-engine read ports. It also needs response reordering: two
 independently paced cores complete out of order, and the current protocol
 promises arrival order, tested in six places.
 
-**This decision is deferred to a measurement, not to taste.** Two
-`oca_core` already occupy 52.9% of the LUTs, and this device stopped
-routing entirely at 76.4% in the occupancy study — congestion, unmoved by
-relaxing the clock from 100 MHz to 35. Whether two full Ethernet stacks
-fit beside two cores is the question, and the published estimates for a
-MAC-plus-stack swing by a factor of two. The project has already paid
-once for multiplying instead of measuring, so `udp_complete_64` and the
-MAC are being synthesised out-of-context on our own toolchain, and the
-topology is chosen when that number exists.
+**The measurement was taken rather than argued, and it settles it.** One
+complete port costs **8422 LUTs, 19.2% of the device**: `udp_complete_64`
+7147, `eth_mac_1g_rgmii_fifo` at 64 bits 1214, ~61 for the RGMII front
+end. Against two cores at 24602 (56.1%):
+
+| configuration | LUTs | of device |
+|---|---|---|
+| two cores, two ports | 41446 | 94.5% |
+| two cores, one port | 33024 | 75.3% |
+| one core, one port | 20730 | 47.3% |
+
+Two ports are out. Two cores behind one port land at 75.3%, against the
+76.4% at which this device stopped routing in the occupancy study.
+
+Turning off the UDP checksum generator recovers less than hoped:
+`UDP_CHECKSUM_GEN_ENABLE=0` gives 6419 LUTs against 7147, three fewer
+block RAMs — but 288 TRELLIS_RAMW appear, which is LUT fabric spent as
+distributed RAM, so the net saving is smaller than the column suggests,
+and Fmax falls from 81 to 72.9 MHz. One port becomes 7694 LUTs: two ports
+91.2%, two cores and one port 73.7%. Better, decisive for neither.
+
+**Three cores are now further out of reach than the occupancy study
+found.** With the secret zeroisation they are ~36900 LUTs, 84.2%, and
+nextpnr fails at *placement* — "unable to find legal placement for all
+cells" — rather than exhausting itself in the router. Note what that does
+not prove: it does not test `router2`, nextpnr's congestion-driven
+router, because the run never reached routing. Whether router2 clears the
+kind of congestion that stopped router1 is still unmeasured, and the
+place to measure it is the two-core-plus-port build at 73.7%, once it
+exists.
+
+**So the MVP that fits today is one core on one port**, 0.561 Gbps at
+MTU, at 47.3% occupancy — with the rest of the device free for the
+second core if a distributor is ever built, or for the second port if the
+stack shrinks.
 
 ## 3. The RGMII front end
 
