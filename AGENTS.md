@@ -44,17 +44,46 @@ tools/                      local tool builds — NOT committed
 
 **The Ethernet MAC is an external dependency, not project RTL.** The
 1G MAC, the RGMII interface and the IP/ARP/UDP stack come from
-`verilog-ethernet` (Alex Forencich, **MIT licence**), which has working
-ECP5 support; it will arrive as a submodule when the board does. Writing
-a MAC from scratch is weeks of work on well-trodden ground where every
-bug presents as "the link does not come up". That choice sets the
-project's RTL boundary: `verilog-ethernet` hands over the UDP payload as
-an 8-bit AXI-Stream, and everything in `hw/rtl/` sits behind that
-interface — which is why `oca_core` can be tested end to end with no
+`verilog-ethernet` (Alex Forencich, **MIT licence**); it will arrive as
+a submodule. Writing a MAC from scratch is weeks of work on well-trodden
+ground where every bug presents as "the link does not come up". That
+choice sets the project's RTL boundary: the stack hands over the UDP
+payload as an AXI-Stream and everything in `hw/rtl/` sits behind that
+interface, which is why `oca_core` can be tested end to end with no
 Ethernet in the simulation at all
-(`docs/design/2026-08-03-host-protocol.md`). Since 2026-08-04 `oca_core`
-itself is **64 bits wide with `tkeep`**, so a width converter belongs
-between the MAC and it; the 8-bit boundary at the MAC is unchanged.
+(`docs/design/2026-08-03-host-protocol.md`).
+
+**This entry used to say that verilog-ethernet "has working ECP5
+support". It does not, and the correction matters because the missing
+piece is the one nearest the pins.** Checked 2026-08-05 against the
+repository: all 25 directories under `example/` target Xilinx or Intel,
+a code search for `ecp5`, `lattice`, `colorlight` and `trellis` returns
+nothing, and `rgmii_phy_if.v` accepts only `SIM`, `GENERIC`, `XILINX`
+and `ALTERA` — an unrecognised value falls through to `GENERIC` without
+a warning. `GENERIC` is not merely unoptimised on this device: `oddr.v`
+drives one register from two `always` blocks on opposite edges, and
+`synth_ecp5` reports conflicting drivers on every bit rather than
+inferring `ODDRX1F`. `iddr.v` does elaborate, into fabric flip-flops on
+both edges instead of `IDDRX1F`. **The RGMII front end — DDR
+primitives, the RX clock delay and its ECLK routing — is therefore ours
+to write, behind the wrapper SPEC.md's portability rule requires.**
+(`example/RV901T` is a Linsn RV901T, a Spartan-6 board, not a
+Colorlight.)
+
+Two further facts recorded before they are rediscovered. The repository
+is **deprecated by its author** in favour of `taxi`, and has not moved
+since 2025-02-27; taxi is CERN-OHL-S 2.0 strongly reciprocal or
+commercial, which is not compatible with keeping this project's design
+under a permissive licence, so verilog-ethernet at MIT stays the choice.
+And the stack has a **64-bit variant** (`udp_complete_64` and the `_64`
+modules below it) alongside the 8-bit one, which changes where the width
+conversion belongs: at 48 MHz an 8-bit stream carries 384 Mbps, under
+the port, so the conversion has to happen on the 125 MHz side rather
+than in our clock domain. `eth_mac_1g_rgmii_fifo` with
+`AXIS_DATA_WIDTH = 64` does the width conversion and the clock domain
+crossing in one instance, on the correct side of each — that
+configuration is not exercised by the upstream testbench, so it needs
+one of ours.
 
 ## Environment rules
 
