@@ -235,8 +235,9 @@ around a limitation it has not been told about.
 
 2. **There is no `tag_valid`, and `done` is a single-cycle pulse.** The
    `tag` output is a register that holds the *previous* message's tag
-   until a new one completes; it is not cleared on reset, nor when a
-   new message starts, nor when a message is aborted. Callers must
+   until a new one completes. Reset clears it (limitation 4), but
+   nothing else does: not a new message starting, not a message being
+   aborted. Callers must
    latch `tag` on the cycle `done` pulses. Polling `tag` and assuming
    it belongs to the message in flight will return a stale tag from an
    earlier message — which is both a correctness bug and a way to
@@ -250,16 +251,31 @@ around a limitation it has not been told about.
    the remainder: it is key material for a counter block that may still
    be in use.
 
-4. **Secrets are not cleared on reset.** None of the three modules
-   zeroises its secret state when `rst_n` is asserted. After a reset,
-   `chacha20.sv` still holds the key and nonce inside `st` and
-   `st_init` and the last block in `data_out`; `poly1305.sv` still
-   holds the clamped r, the precomputed 5r, s, the accumulator and the
-   tag; `chacha20_poly1305.sv` still holds `key_r`, `nonce_r`, the
-   derived Poly1305 key `p_key`, the buffered block and `out_data`.
-   Reset restores control state, not confidentiality. Anything that can
-   read the fabric after a reset — readback, a subsequent bitstream, a
-   later design sharing the device — can recover them.
+4. **Secrets are cleared on reset, in the flip-flops.** All three
+   modules zeroise their secret state when `rst_n` is asserted:
+   `chacha20.sv` clears `st`, `st_init` and `data_out`; `poly1305.sv`
+   clears r, the precomputed 5r, s, the accumulator, every intermediate
+   derived from them, the registered products and the tag;
+   `chacha20_poly1305.sv` clears `key_r`, `nonce_r`, the derived
+   Poly1305 key `p_key`, `c_data_in`, `mac_buf`, `out_data` and
+   `p_data_in`. 5866 bits per core, named one by one and checked one by
+   one: `hw/sim/test_secret_zeroise.py` proves each register holds a
+   secret *before* the reset and zero after, because a test that only
+   looked after the reset would pass on a core that was never loaded.
+
+   The packet buffers are block RAM and cannot be cleared the same way;
+   they are walked instead, one word per cycle, and section 6 gives
+   that.
+
+   Two things this does not reach. **223 bits of metadata survive**, in
+   registers holding no key material but describing the last message:
+   `aad_len`, `ct_len`, `ctr`, `c_counter`, `out_len`, `cur_len`,
+   `mac_len`, `sub_idx` and four flags in `chacha20_poly1305.sv`, plus
+   `row` and `last_r` in `poly1305.sv`. None is read before it is
+   written, so nothing malfunctions; what they leak after a reset is the
+   exact size of the last AAD and ciphertext. And clearing is only as
+   good as the reset: nothing zeroises on power loss, and a design that
+   stops being clocked keeps whatever it held.
 
 5. **An illegal `in_len` aborts the message.** `in_len` above 64 does
    not fit the 64-byte datapath and cannot be terminated by the MAC
@@ -317,17 +333,26 @@ What the protocol layer does add, against the engine alone:
   the block draining back, the parsed arguments and the received tag
   are all zeroed on reset.
 
-  **The packet buffers are the exception, and it is a real one.**
-  `oca_pktbuf.sv` resets the byte counts and the output register but
-  **not the memory array**, so after a reset both buffers still hold
-  what was last written to either of their two banks — 4096 bytes each,
-  two packets each: plaintext, ciphertext, and for a load-key command
-  the 32 raw key bytes, which necessarily pass through the receive
-  buffer on their way to the slot. Limitation 4 above therefore extends
-  to the protocol layer rather than being resolved by it, and the three
-  engine cores are unchanged: reset restores control state, not
-  confidentiality. Clearing 8192 bytes of BRAM costs a counter and as
-  many cycles as there are addresses; it is not implemented.
+  **The packet buffers are walked, not reset.** `oca_pktbuf.sv` holds
+  4096 bytes each — two packets each, in two banks: plaintext,
+  ciphertext, and for a load-key command the 32 raw key bytes, which
+  necessarily pass through the receive buffer on their way to the slot.
+  Block RAM has no reset on its contents, so the array is zeroed one
+  word per cycle out of reset: 512 words, 512 cycles, about 10 µs at
+  50 MHz, once. A loop over the array in the reset branch would be a
+  512-way simultaneous write that no memory primitive expresses, and
+  yosys would answer it by lowering both buffers to 65536 flip-flops —
+  which is why the clear and the writer meet in a multiplexer and the
+  array keeps its single write port.
+
+  While the walk runs the buffer's writer is inert and `clr_busy` is
+  high, and `oca_core` masks **both halves** of the request handshake on
+  it. Masking only the outgoing `tready` is not enough and the suite
+  proves it: AXI-Stream forbids a master from waiting for `tready`
+  before asserting `tvalid`, so a request can sit on the bus from the
+  cycle reset ends, and `oca_proto`'s receive stage — which reaches its
+  accepting state one cycle after reset — consumes beats the master
+  never saw taken. With only `tready` gated, 24 of 29 core tests fail.
 - **The tag is compared on the FPGA in constant time, and a failure
   emits no plaintext.** See section 4 item 1.
 - **Failures are reported rather than dropped silently.** Every request

@@ -34,6 +34,11 @@ NONCE = bytes(range(12))
 BYTES = 2048
 MAX_REQUEST = BYTES - 8
 
+# Both packet buffers zero themselves out of reset, one word per cycle
+# over their two banks, and the core holds s_axis_tready low until they
+# are done.
+CLEAR_CYCLES = 2 * (BYTES // 8)
+
 
 def counters(rsp: dict) -> dict:
     """Unpack a stats response: four little-endian 32-bit counters."""
@@ -1210,3 +1215,75 @@ async def test_partial_keep_does_not_fail_its_neighbour(dut):
             f"stall {stall_p}: status {rsps[1]['status']} for the short beat"
         assert rsps[2]["status"] == ST_OK and rsps[2]["body"] == tag + ct, \
             f"stall {stall_p}: the packet behind was failed by its predecessor"
+
+
+@cocotb.test()
+async def test_ready_is_low_until_the_buffers_are_cleared(dut):
+    """No beat is accepted while oca_pktbuf is still zeroing itself.
+
+    The clear owns the buffer's single write port, so a request taken
+    during it is dropped word by word while the protocol still counts it
+    in: the command would be answered at its full length over bytes the
+    buffer never wrote. s_axis_tready is the only thing in front of that,
+    and it has to stay low for the whole clear and rise the cycle it
+    ends.
+    """
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    dut.rst_n.value = 0
+    dut.s_axis_tdata.value = 0
+    dut.s_axis_tkeep.value = 0
+    dut.s_axis_tvalid.value = 0
+    dut.s_axis_tlast.value = 0
+    dut.m_axis_tready.value = 1
+    for _ in range(3):
+        await RisingEdge(dut.clk)
+    dut.rst_n.value = 1
+
+    for n in range(CLEAR_CYCLES):
+        await ReadOnly()
+        assert dut.s_axis_tready.value == 0, \
+            f"tready high {n} cycles into the buffer clear"
+        await RisingEdge(dut.clk)
+    await ReadOnly()
+    assert dut.s_axis_tready.value == 1, \
+        f"tready still low after the clear's {CLEAR_CYCLES} cycles"
+    await RisingEdge(dut.clk)
+
+    dut._oca_watch = EngineWatch()
+    cocotb.start_soon(watch_engine(dut, dut._oca_watch))
+
+    rsp = await command(dut, build_load_key(0x71, 5, KEY))
+    assert rsp["status"] == ST_OK, f"load_key status {rsp['status']}"
+    aad, msg = b"after", b"the clear"
+    want_ct, want_tag = aead_encrypt(KEY, NONCE, aad, msg)
+    rsp = await command(dut, build_seal(0x72, 5, NONCE, aad, msg))
+    assert rsp["status"] == ST_OK, f"seal status {rsp['status']}"
+    assert rsp["body"] == want_tag + want_ct, "seal body after the clear"
+
+
+@cocotb.test()
+async def test_request_offered_during_the_clear_is_not_swallowed(dut):
+    """A source may hold tvalid high from the cycle reset ends.
+
+    AXI-Stream forbids a master from waiting for tready before it
+    asserts tvalid, so the first request can be sitting on the bus for
+    the whole length of the buffer clear. Lowering only the tready that
+    leaves the core does not stop it: oca_proto's accepting state still
+    sees a valid beat and consumes it, and the source -- which never saw
+    the transfer -- offers it again. This packet is one beat with tlast
+    on it, which is that hole at its widest: taken during the clear it
+    ends a packet with nothing in the buffer at all.
+
+    The counters are the witness. Nothing reached the device before this
+    command, and cnt_rx is incremented in P_PARSE, so a stats snapshot
+    counts the command carrying it: exactly one packet received, none
+    dropped. The swallowed beat leaves a zero-length packet behind,
+    which PROC drops for being shorter than a header and counts in both,
+    before the source's retry is received as a second packet.
+    """
+    await setup(dut)
+    rsp = await command(dut, build_stats(0x73))
+    assert rsp["status"] == ST_OK, f"stats status {rsp['status']}"
+    got = counters(rsp)
+    assert got == {"rx": 1, "drop": 0, "done": 0, "auth": 0}, \
+        f"{got}: the device processed traffic during the buffer clear"

@@ -60,32 +60,48 @@ between the MAC and it; the 8-bit boundary at the MAC is unchanged.
 
 - **No system-wide installs without explicit permission.** Everything
   lives under this directory (`tools/`, `oca/.venv/`).
-- Developed on CachyOS with Python 3.14. cocotb PyPI releases (<= 2.0.1)
-  reject Python >= 3.14, so cocotb is installed from git master:
-  `oca/.venv/bin/pip install "git+https://github.com/cocotb/cocotb.git@master"`
-- To rebuild Verilator: clone `verilator/verilator` branch `stable`,
-  `autoconf && ./configure --prefix=$PWD/../../tools/verilator` with
-  `help2man` from `tools/help2man` in PATH, `make -j && make install`.
-- To rebuild the ECP5 toolchain (sources in `tools/src/`, all installed
-  with `-DCMAKE_INSTALL_PREFIX=tools/<name>`):
-  - Eigen 3.4.0 — header-only, `cmake --install` into `tools/eigen`;
-  - prjtrellis — cmake on `libtrellis/`; `pytrellis` builds against
-    Python 3.14 with the bundled pybind11;
-  - yosys — CMake (not the old Makefile), Ninja, submodules included
-    (`abc`, `slang`). **Apply
-    `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`**
-    (`git apply` in `tools/src/yosys`) — without it synthesis silently
-    deletes the key store. `techlibs/common/cmp2lut.v` is read at run
-    time from `tools/yosys/share/yosys/cmp2lut.v`, so an already-built
-    yosys is fixed by copying the patched file there, no rebuild
-    needed;
-  - nextpnr — `-DARCH=ecp5 -DECP5_DEVICES=45k -DBUILD_PYTHON=OFF
-    -DTRELLIS_INSTALL_PREFIX=tools/trellis
-    -DEigen3_DIR=tools/eigen/share/eigen3/cmake`. Building only the 45k
-    chipdb keeps the build short; add devices when other boards appear.
-- System dependencies used as-is (already present on the dev machine, no
-  installs performed): boost 1.91 (incl. `libboost_python314`), tcl 8.6,
-  readline, libffi, zlib.
+- The whole toolchain is built by `scripts/build-toolchain.sh`, pinned to
+  the exact revisions every number in this repository was measured on:
+
+  ```sh
+  scripts/build-toolchain.sh --check   # what is present, and probe yosys
+  scripts/build-toolchain.sh           # build all of it, hours
+  scripts/build-toolchain.sh yosys     # or one component
+  ```
+
+  It fetches into `tools/src/<name>`, installs into `tools/<name>`, and
+  writes nothing else. It never installs a system package: missing build
+  tools are reported together and it stops.
+
+- `tools/` is gitignored, so the script and the patch beside it are the
+  only record of how to get one. **A yosys built without
+  `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
+  silently deletes the key store from the netlist** — the script applies
+  it, and `--check` proves the result with the same behavioural probe
+  `run_synth.py` refuses to synthesise without: `$signed(a) >= -8` is a
+  tautology and must map to an all-ones LUT. `techlibs/common/cmp2lut.v`
+  is read at run time from `tools/yosys/share/yosys/`, so an
+  already-built yosys is repaired by copying the patched file there, no
+  rebuild.
+
+- Pins, for reference: help2man 1.49.3, Verilator `3d2421f3` (v5.050),
+  Eigen `3147391d` (3.4.0), prjtrellis `56bb1704`, yosys `41a4b5a0`
+  (0.67+), nextpnr `89454078`, cocotb `82d0eed5`. cocotb comes from git
+  because its PyPI releases (<= 2.0.1) reject Python >= 3.14, and it is
+  pinned to a commit rather than `@master`, which drifts under the pin
+  without saying so.
+
+- Developed on CachyOS with Python 3.14. System dependencies are used as
+  found and never installed: boost 1.91, ICU 78, tcl 8.6, readline,
+  ncursesw, libffi, system fmt 12, zlib, bzip2, lzma, zstd, jemalloc,
+  libatomic, and a C++20 compiler.
+
+- The `tools/verilator` and `tools/help2man` in this working copy were
+  not built here — they are copies of artefacts from another project on
+  the same machine, which is why `verilator_bin` carries that project's
+  path internally. The Perl wrapper resolves `VERILATOR_ROOT` from its
+  own location, so the suites are unaffected; a toolchain built by the
+  script does not have the discrepancy.
 
 ## How to build and test
 
@@ -105,15 +121,17 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
+.venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
-.venv/bin/python hw/sim/run_pktbuf.py             # 9/9 pass
-.venv/bin/python hw/sim/run_oca_core.py           # 27/27 pass
+.venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass, + 3 at BYTES=16
+.venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-74 RTL tests, plus 6 on a synthesised netlist.
+81 RTL tests, three of them run a second time at the smallest BYTES
+oca_pktbuf accepts, plus 6 on a synthesised netlist.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because
@@ -366,10 +384,25 @@ core and never updated as the design grew by 3000 LUTs.
   `test_partial_keep_mid_packet_fails_closed` sends a short beat before
   `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
   error is not a header drop.
-- **`oca_core` as committed: 11590 LUTs (26.4%), 12043 FF (27.5%), 20
-  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 48.52 MHz at seed 1 — the
+- **`oca_core` as committed: 12308 LUTs (28.1%), 12033 FF (27.4%), 20
+  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 47.93 MHz at seed 1 — the
   figures `run_synth.py oca_core` reproduces today, on a netlist whose
-  key store is present (see the `cmp2lut` bullet below). Everything in
+  key store is present (see the `cmp2lut` bullet below).
+
+  **What secret zeroisation cost**, measured seed 1 against the same
+  toolchain, one step at a time from 11590 / 12043 / 48.52 MHz:
+  clearing the engines' secret registers is **+670 LUTs (+5.8%)**, −30
+  FF, 49.65 MHz; walking the packet memory adds **+48 LUTs (+0.4%)**,
+  +20 FF, 47.93 MHz. Together **+718 LUTs (+6.2%)** and no change in
+  multipliers or block RAM. On this device it costs no DSP — synth_ecp5
+  maps through `dsp_map_18x18.v`, which connects no clock or reset, so
+  those registers were already in fabric — but the LUT bill is real and
+  it is logic, not routing. Fmax moves in both directions across the
+  three points and stays inside the 4.8% seed spread documented below,
+  so there is no clock signal in it either way; a multi-seed sweep would
+  be needed to claim otherwise.
+
+  Everything in
   the rest of this bullet is the 64-bit widening step that came before
   the packet overlap and before that fix, kept because the comparison
   with the 8-bit core is only meaningful against it: **11429 LUTs

@@ -9,17 +9,27 @@ at. A clear that reaches the other bank truncates a packet in flight in
 silence, and an out-of-range read that falls back to absolute word zero
 hands back a neighbour's header."""
 
+import os
 import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import ReadOnly, RisingEdge, Timer
 
-BYTES = 2048
+# The build decides BYTES and the tests must agree with it, so the runner
+# passes the same number here that it elaborated the module with. The
+# default is the one oca_core instantiates; the runner also drives the
+# clear tests at the smallest legal size, where the walk's address is two
+# bits wide and an off-by-one at either end of it would be visible.
+BYTES = int(os.environ.get("OCA_PKTBUF_BYTES", "2048"))
 WORDS = BYTES // 8
 
+# The memory is zeroed out of reset one word per cycle, over both banks,
+# and clr_busy is high for exactly that long.
+CLEAR_CYCLES = 2 * WORDS
 
-async def setup(dut):
+
+async def setup(dut, wait_clear: bool = True):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     dut.rst_n.value = 0
     dut.wr_en.value = 0
@@ -32,7 +42,32 @@ async def setup(dut):
     for _ in range(3):
         await RisingEdge(dut.clk)
     dut.rst_n.value = 1
-    await RisingEdge(dut.clk)
+    if not wait_clear:
+        return
+    # The clear owns the single write port while it runs, so a test that
+    # started writing here would have its first words dropped.
+    for _ in range(CLEAR_CYCLES + 1):
+        await RisingEdge(dut.clk)
+
+
+async def wait_clear_done(dut, limit: int = 4 * WORDS) -> int:
+    """Cycles spent with clr_busy high, sampled before each edge.
+
+    Returns once it has read low, one edge past that cycle so the caller
+    is free to drive again.
+    """
+    for n in range(limit):
+        await ReadOnly()
+        done = int(dut.clr_busy.value) == 0
+        await RisingEdge(dut.clk)
+        if done:
+            return n
+    raise AssertionError(f"clr_busy still high {limit} cycles after reset")
+
+
+def secret_word(bank: int, addr: int) -> int:
+    """A non-zero word, distinct for every (bank, address) pair."""
+    return 0x5EC5E700_00000000 | (bank << 20) | (addr + 1)
 
 
 async def write_words(dut, words, bank: int = 0):
@@ -220,3 +255,83 @@ async def test_counts_are_reported_per_side(dut):
     await RisingEdge(dut.clk)
     assert int(dut.wr_count.value) == 56, f"wr_count {int(dut.wr_count.value)}"
     assert int(dut.rd_count.value) == 24, f"rd_count {int(dut.rd_count.value)}"
+
+
+@cocotb.test()
+async def test_reset_zeroises_both_banks(dut):
+    """Reset must wipe the stored bytes, not only the byte counts.
+
+    The array holds the request and the response of whatever ran last:
+    plaintext, ciphertext, and the 32 raw key bytes of a load-key
+    command. Resetting the counters hides those bytes from the protocol
+    and leaves every one of them in the block RAM.
+
+    Every word is read back before the reset, so the check afterwards
+    cannot pass on a buffer that was never written.
+    """
+    await setup(dut)
+    for bank in (0, 1):
+        await write_words(dut, [(secret_word(bank, a), 8)
+                                for a in range(WORDS)], bank=bank)
+        assert int(dut.wr_count.value) == BYTES, \
+            f"bank {bank} stored {int(dut.wr_count.value)} bytes, want {BYTES}"
+    for bank in (0, 1):
+        for addr in range(WORDS):
+            got = await read_word(dut, addr, bank=bank)
+            assert got == secret_word(bank, addr), \
+                f"bank {bank} word {addr} reads {got:#018x} before the reset"
+
+    dut.rst_n.value = 0
+    for _ in range(3):
+        await RisingEdge(dut.clk)
+    dut.rst_n.value = 1
+    for _ in range(CLEAR_CYCLES + 1):
+        await RisingEdge(dut.clk)
+
+    for bank in (0, 1):
+        for addr in range(WORDS):
+            got = await read_word(dut, addr, bank=bank)
+            assert got == 0, \
+                f"bank {bank} word {addr} still holds {got:#018x} after reset"
+
+
+@cocotb.test()
+async def test_clear_busy_spans_one_cycle_per_word(dut):
+    """clr_busy is high out of reset and falls when the last word is done.
+
+    One write port and one word per cycle, over both banks: any other
+    number means either the clear stops short of the array or something
+    downstream is held off longer than it has to be.
+    """
+    await setup(dut, wait_clear=False)
+    await Timer(1, unit="ns")
+    assert int(dut.clr_busy.value) == 1, "clr_busy is low out of reset"
+    n = await wait_clear_done(dut)
+    assert n == CLEAR_CYCLES, \
+        f"clr_busy fell after {n} cycles, want {CLEAR_CYCLES} (2 * {WORDS})"
+
+
+@cocotb.test()
+async def test_writes_during_the_clear_do_not_land(dut):
+    """A write offered while clr_busy is high must leave no trace.
+
+    The clear owns the write port, so the data cannot land; the byte
+    count must not move either. A count that advanced over dropped data
+    is the failure with no symptom -- the packet is answered at its full
+    length out of words the buffer never wrote.
+    """
+    # One word per cycle against a clear that runs for 2*WORDS of them,
+    # so the offer has to be shorter than the walk or it outlives it and
+    # proves nothing. At the smallest legal BYTES the whole bank is two
+    # words and the walk is four cycles.
+    offered = min(16, WORDS)
+    await setup(dut, wait_clear=False)
+    await write_words(dut, [(secret_word(0, a), 8) for a in range(offered)])
+    left = await wait_clear_done(dut)
+    assert left > 0, "the clear was already over: nothing was offered against it"
+    assert int(dut.wr_count.value) == 0, \
+        f"wr_count is {int(dut.wr_count.value)}: a write moved it during the clear"
+    for addr in range(offered):
+        got = await read_word(dut, addr)
+        assert got == 0, \
+            f"word {addr} holds {got:#018x}: a write landed during the clear"

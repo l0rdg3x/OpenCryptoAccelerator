@@ -63,6 +63,27 @@
  * asynchronous read, or a multiplexer between the memory and its output
  * register would take it to 4 DP16KD or into LUT RAM (SPEC.md
  * portability rule: inferred, never instantiated).
+ *
+ * The array is zeroed out of reset, one word per cycle over both banks,
+ * and clr_busy is high until the last of them is done. It holds the
+ * request and the response of whatever ran last — plaintext, ciphertext
+ * and the 32 raw key bytes of a load-key command — and a reset that
+ * restored the counters alone left every byte of it in the block RAM
+ * (Security.md). The counters are cleared by the reset itself, so what
+ * this walk exists for is the payload, which nothing else can reach.
+ *
+ * The clear owns the write port while it runs and the writer is inert:
+ * no word lands and no count moves, because a count that advanced over
+ * dropped data would have the packet answered at its full length out of
+ * words the buffer never wrote. clr_busy is what lets the level above
+ * hold the traffic off instead — oca_core gates s_axis_tready on it.
+ *
+ * That single port is also why the clear is a walk and not a loop over
+ * the array in the reset branch: a 512-way simultaneous write is not
+ * something a memory primitive expresses, and yosys would answer it by
+ * lowering `mem` to 32768 flip-flops. The clear and the writer meet in
+ * the always_comb below, so the always_ff keeps exactly one assignment
+ * to `mem`.
  */
 module oca_pktbuf #(
     parameter int BYTES = 2048
@@ -81,7 +102,12 @@ module oca_pktbuf #(
     input  logic [ 8:0] rd_addr,
     output logic [63:0] rd_data,
     output logic [11:0] rd_count,
-    output logic        rd_full
+    output logic        rd_full,
+    // high while the memory is being zeroed. The write side is inert
+    // while it is; the read side is not gated and answers out of words
+    // the walk has not reached yet, so a reader that cannot wait for
+    // this must not believe what it gets.
+    output logic        clr_busy
 );
 
     // Offsets are carried as a 12-bit byte quantity at the protocol
@@ -101,6 +127,15 @@ module oca_pktbuf #(
     end
 
     logic [63:0] mem [2*WORDS];
+
+    // One address per word of the array, both banks. WORDS is a power of
+    // two, so the last one is all ones and the walk ends on it.
+    localparam int CLR_W = ADDR_W + 1;
+
+    logic             clearing;
+    logic [CLR_W-1:0] clr_addr;
+
+    always_comb clr_busy = clearing;
 
     // One counter per bank, written only by the owner of that bank's
     // write port. Kept as two named registers rather than an array so
@@ -125,20 +160,38 @@ module oca_pktbuf #(
     always_comb rd_index = {rd_bank, (rd_addr < 9'(WORDS))
                                      ? rd_addr[ADDR_W-1:0] : {ADDR_W{1'b0}}};
 
+    // The write port, and the only place the clear and the writer choose
+    // between each other. Both reach `mem` through the single assignment
+    // below, which is what keeps the array a block RAM.
+    logic             mem_we;
+    logic [CLR_W-1:0] mem_addr;
+    logic [     63:0] mem_din;
+
+    always_comb begin
+        mem_we   = clearing ? 1'b1 : (wr_en && !wr_clear && !wr_full);
+        mem_addr = clearing ? clr_addr : {wr_bank, wr_count[ADDR_W+2:3]};
+        mem_din  = clearing ? 64'd0 : wr_data;
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            count0  <= '0;
-            count1  <= '0;
-            rd_data <= '0;
+            count0   <= '0;
+            count1   <= '0;
+            rd_data  <= '0;
+            clearing <= 1'b1;
+            clr_addr <= '0;
         end else begin
-            if (wr_clear) begin
+            if (clearing) begin
+                clr_addr <= clr_addr + CLR_W'(1);
+                if (clr_addr == {CLR_W{1'b1}}) clearing <= 1'b0;
+            end else if (wr_clear) begin
                 if (wr_bank) count1 <= '0;
                 else         count0 <= '0;
             end else if (wr_en && !wr_full) begin
-                mem[{wr_bank, wr_count[ADDR_W+2:3]}] <= wr_data;
                 if (wr_bank) count1 <= wr_count + 12'(wr_bytes);
                 else         count0 <= wr_count + 12'(wr_bytes);
             end
+            if (mem_we) mem[mem_addr] <= mem_din;
             rd_data <= mem[rd_index];
         end
     end

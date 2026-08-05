@@ -30,6 +30,9 @@
  * Portability: no vendor primitives are instantiated and multiplier
  * inputs and outputs are registered, so ECP5 MULT18X18D, 7-series
  * DSP48E1 and UltraScale+ DSP48E2 blocks can absorb them.
+ *
+ * Reset clears r, s, the accumulator, the tag and every intermediate
+ * derived from them, not only the control state (Security.md).
  */
 module poly1305 #(
     // Rows of r consumed per cycle. 1 costs 5 multipliers and 5 cycles;
@@ -131,6 +134,22 @@ module poly1305 #(
             busy      <= 1'b0;
             blk_ready <= 1'b0;
             done      <= 1'b0;
+            s         <= '0;
+            fold      <= '0;
+            a_flat    <= '0;
+            tag       <= '0;
+            for (int i = 0; i < NL; i++) begin
+                r_d[i]   <= '0;
+                r5_d[i]  <= '0;
+                a_d[i]   <= '0;
+                sum_d[i] <= '0;
+                t[i]     <= '0;
+                c1[i]    <= '0;
+                f[i]     <= '0;
+            end
+            for (int sl = 0; sl < ROWS_PER_CYCLE; sl++)
+                for (int i = 0; i < NL; i++)
+                    prod[sl][i] <= '0;
         end else begin
             done <= 1'b0;
             // registered products, every cycle: the DSP blocks absorb
