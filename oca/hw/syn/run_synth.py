@@ -39,6 +39,9 @@ DESIGNS = {
     "oca_core": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
                  "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
                  "oca_core.sv"],
+    "oca_dual": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+                 "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+                 "oca_core.sv", "oca_dual.sv"],
 }
 
 # Minimum live flip-flops a netlist must contain, keyed by the RTL file
@@ -59,8 +62,15 @@ DESIGNS = {
 # wholesale, which is what the cmp2lut trap did to 89% of the key store.
 # It has to be re-measured whenever oca_proto's state changes, and the
 # census check_netlist prints below is where the new number comes from.
+#
+# oca_dual instantiates oca_core twice and shares nothing, so both floors
+# double. Stated as its own entry rather than computed from oca_core's:
+# if one core's key store vanished and the other survived, a doubled
+# figure would still be met by 2313 live registers and the check would
+# pass over a half-empty netlist.
 NETLIST_FF_FLOOR = {
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
+    "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
