@@ -451,32 +451,37 @@ core and never updated as the design grew by 3000 LUTs.
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
   datapath.
-- **The MVP target: the cycle budget now clears the port, the fit at two
-  cores is unmeasured.** At 40 cycles per 64-byte block a core moves 1.6
-  bytes/cycle, so two cores at the 48.53 MHz of the last 64-bit pair are
-  155 MB/s = **~1.24 Gbps**: 124% of a bare GbE port (125 MB/s) and
-  within 2% of the ~1.26 Gbps the target asks for — one port saturated
-  *with margin*. **That is a projection and it must not be read as the
-  target being met.** The 48.53 MHz and the 22891 LUTs (52.2%), 22456
-  FF, 40 MULT, 8 DP16KD beside it were measured on RTL from before the
-  packet overlap, in a build whose key store yosys had deleted; **two
-  cores of the current RTL have never been placed and routed.** One core
-  of it is 11590 LUTs against the 11429 that pair was scaled from.
-  **And the pair was already the tightest thing in the study.** Two of
-  its four placer seeds **did not route**: restarted alone after the
-  other two finished, then stopped after 3 h 22 min each with the
-  remaining arc count oscillating rather than descending over their last
-  200 router reports (seed 2 between 53 and 2292, seed 3 between 77 and
-  2180). So the 48.53 MHz mean is over two seeds and is weaker evidence
-  than every other Fmax here — and the two were stopped, not shown to
-  diverge. This is a narrowed routability margin, not the three-core
-  failure mode of the occupancy study (roughly 50000 flat arcs, unmoved
-  by relaxing the constraint), and routability rather than the clock is
-  what has to be re-measured. Two more buffers per core (4 -> 8 DP16KD)
-  went in with the overlap and have not been paid for at two cores
-  either. And **nothing here has run on silicon** — Verilator cycle
-  counts and `--out-of-context` synthesis, with no IO, no pin
-  constraints, no MAC and no PLL.
+- **The MVP target: one gigabit port is saturated at MTU, measured at
+  two cores.** `run_synth.py oca_dual` builds the configuration the MVP
+  actually is — two `oca_core`, one per PHY, sharing nothing — and four
+  placer seeds give **23191 LUTs (52.9%), 24086 FF (54.9%), 40
+  MULT18X18D (55.6%), 8 DP16KD, Fmax 47.07 / 49.61 / 47.99 / 47.98,
+  mean 48.16 MHz** (spread 5.4%). Replication is linear to eleven LUTs
+  of glue against 2 x 11590, and the second core costs 0.7% of clock,
+  which is inside that spread. At 40 cycles per 64-byte block plus 71
+  fixed per packet: **1.233 Gbps asymptotic, 1.121 Gbps at a 1500-byte
+  MTU, 0.444 Gbps on 64-byte packets.** A bare GbE port is 1 Gbps, so
+  MTU-sized traffic clears it with 12% of margin and short packets do
+  not — the fixed 71 cycles dominate there. **Two ports are not
+  reachable on this device**: that needs four cores, and three do not
+  route.
+
+  **All four seeds routed.** The previous two-core reading had two of
+  its four fail to route at all, stopped after 3 h 22 min each with the
+  arc count oscillating rather than descending; this RTL is slightly
+  larger at 23191 LUTs against that build's 22891 and routes on every
+  seed. Why is not established here, and the earlier pair was measured
+  on RTL from before the packet overlap in a build whose key stores
+  yosys had deleted, so the two are not a controlled comparison. What
+  is established: both key stores are present in this netlist, 4626
+  live flip-flops attributed to `oca_keystore.sv`, exactly twice 2313.
+
+  Two caveats. These figures **predate the secret zeroisation**, which
+  costs 718 LUTs per core — two cores should land near 24600 (56% of
+  the device), and the two-core Fmax with it is not measured. And
+  **nothing here has run on silicon**: Verilator cycle counts and
+  `--out-of-context` synthesis, with no IO, no pin constraints, no MAC
+  and no PLL.
 - **The key store was missing from every netlist this project ever
   produced**, and is now present: a mis-mapping in yosys's
   `cmp2lut.v` folded `oca_keystore.sv`'s index bounds check to constant
