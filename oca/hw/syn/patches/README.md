@@ -32,9 +32,13 @@ yosys is fixed by copying the patched file over
 
 Background and blast radius: `../README.md`, "The cmp2lut trap".
 
-### Draft report for YosysHQ/yosys — NOT SUBMITTED
+### Reported upstream: YosysHQ/yosys#6085
 
-Nothing has been posted upstream. This is a draft awaiting review.
+Filed 2026-08-05, after re-checking that the defect is still in `main`
+and that nothing equivalent was already open. The text below is what was
+posted, kept here so the repository carries its own record of it. If it
+needs correcting, the correction goes in a new comment on the issue —
+this file is not the public record and editing it changes nothing there.
 
 ---
 
