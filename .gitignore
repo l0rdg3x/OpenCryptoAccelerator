@@ -9,3 +9,4 @@ tools/
 
 # Personal agent kickoff prompt
 prompt-claude-code.md
+.worktrees/
