@@ -209,9 +209,12 @@ The i9 has no platform file of its own: it is a `revision="7.2"` variant
 inside litex-boards' `colorlight_i5.py`, which deep-copies the 7.0 IO map
 and changes only the LED. Everything else — clock, RGMII, MDIO, reset —
 is inherited from the i5 and has not been re-verified against i9 silicon
-by anyone we can find. All 203 pins referenced do exist in the CABGA381
-package, checked against prjtrellis's IO database, and both RX clocks
-land on clock-capable pins (`PCLKT6_0` and `PCLKT3_0`).
+by anyone we can find. Every pin that file references — the i9 IO map
+and the PMOD connector tables both — does exist in the CABGA381 package,
+checked against prjtrellis's IO database, and both RX clocks land on
+clock-capable pins (`PCLKT6_0` and `PCLKT3_0`). This sentence read "all
+203 pins referenced" until 2026-08-06: 203 is how many IO the package
+itself carries in that database, not how many the platform file names.
 
 **Port 0 is entirely in bank 6; port 1 entirely in bank 3.** And bank 6
 also carries the LED. nextpnr enforces one VCCIO per bank across outputs,

@@ -11,9 +11,9 @@ as a locked macro. The numbers therefore characterise the core itself,
 not a pinned-out design; a top level with a real host interface will add
 its own IO and routing pressure.
 
-Usage:
-    ../.venv/bin/python hw/syn/run_synth.py chacha20_poly1305
-    ../.venv/bin/python hw/syn/run_synth.py --freq 150 chacha20
+Usage, from oca/:
+    .venv/bin/python hw/syn/run_synth.py chacha20_poly1305
+    .venv/bin/python hw/syn/run_synth.py --freq 150 chacha20
 """
 
 import argparse
@@ -72,6 +72,30 @@ NETLIST_FF_FLOOR = {
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
 }
+
+# The AEAD engine's own storage — ChaCha20's block state, Poly1305's
+# accumulator, the 512-bit staging registers between them — is guarded
+# by a floor on the whole netlist rather than per file, because yosys's
+# per-file attribution is not stable enough to floor tightly. Measured
+# on this toolchain, oca_core across the secret-zeroisation merge:
+# poly1305.sv 391 -> 1789 live registers while the unattributed bucket
+# fell 1753 -> 324 and the whole netlist lost ten. Over that delta
+# poly1305.sv gained reset branches, not 1398 registers of new state, so
+# what moved was the label and not the storage. (The merge did add state
+# elsewhere — oca_pktbuf's memory-clearing walk, +20 registers — which
+# is why the total moved at all.) A per-file floor tight enough to catch
+# the accumulator vanishing would have failed that healthy build; a
+# floor loose enough to survive it would not catch the accumulator.
+#
+# A total is immune to that migration and still tight: the smallest
+# thing worth catching here is a few hundred registers, and the margin
+# below is ~1%, the same discipline as oca_proto's floor. It has to be
+# re-measured whenever any of the RTL changes, and the census
+# check_netlist prints is where the new number comes from. Adding
+# storage is free — this only ever fails downwards.
+#
+# oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
+NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800}
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
 DEFAULT_DEVICE = "45k"
@@ -170,8 +194,9 @@ def check_netlist(top, netlist):
     it; hw/sim/run_proto_gate.py replays it on the mapped netlist for
     that reason.
     """
-    floors = NETLIST_FF_FLOOR.get(top)
-    if not floors:
+    floors = NETLIST_FF_FLOOR.get(top, {})
+    total_floor = NETLIST_FF_TOTAL.get(top)
+    if not floors and total_floor is None:
         return 0
     census = live_ff_census(top, netlist)
     print("\nlive flip-flops by source file:")
@@ -184,6 +209,13 @@ def check_netlist(top, netlist):
         print(f"netlist check {src}: {live} live flip-flops "
               f"(>= {want} required) — {status}")
         if live < want:
+            rc = 1
+    if total_floor is not None:
+        live = sum(census.values())
+        status = "ok" if live >= total_floor else "FAILED"
+        print(f"netlist check (whole netlist): {live} live flip-flops "
+              f"(>= {total_floor} required) — {status}")
+        if live < total_floor:
             rc = 1
     if rc:
         print("\nStorage is missing from the netlist: the design would build "

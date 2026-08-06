@@ -170,10 +170,14 @@ store's own tests on a mapped `oca_keystore`; the second maps
 replays a round trip and the sixteen tag bytes — the tag comparison is
 combinational, so the flip-flop floors in `run_synth.py` cannot see it
 and only a simulation of the cells can. The whole core cannot be
-replayed that way: yosys ships no simulation model for `MULT18X18D` or
-`PDPW16KD`, only blackbox declarations, so a netlist carrying
-`poly1305`'s multipliers or the packet buffers' block RAM will not
-elaborate in Verilator. `oca_proto` infers neither.
+replayed that way, for two different reasons. `MULT18X18D` is declared
+only in `cells_bb.v`, which these runners do not read, so a netlist
+carrying `poly1305`'s multipliers will not elaborate in Verilator at
+all. The packet buffers fail more quietly: they map through
+`$__PDPW16KD_` but emit `DP16KD`, which `cells_sim.v` does declare, as a
+blackbox with no behaviour — that netlist elaborates and the memory
+reads nothing, so the run would be green over a buffer that never
+returns a byte. `oca_proto` infers neither primitive.
 
 `run_attack.py` drives the same DUT as `run_oca_core.py` but from the
 other side: its tests are written to break the four-stage overlap
@@ -191,10 +195,16 @@ cd hw/sim && ../../.venv/bin/python test_proto_model.py   # prints "proto_model:
 ```
 
 `run_dirty_pad.py` is separate from the official-vector suite on
-purpose: it drives random garbage into the bytes past `in_len` instead
-of zeros, and is the only test that can fail when the engine's padding
-masking is wrong. The suite above zero-pads and passes with that masking
-removed entirely.
+purpose: it drives random garbage into the bytes past `in_len` where
+that suite zero-pads, which is the only way to see the engine's padding
+mask on the **decrypt** path. Measured 2026-08-06 with the mask removed
+entirely: `run_dirty_pad.py` fails both its tests and
+`run_chacha20_poly1305.py` fails **3 of its 7** — exactly the three that
+encrypt, because on encryption the padding is XORed with keystream
+before it reaches Poly1305 and is therefore not zero. **The decrypt
+tests all still pass**, since the zero padding the testbench supplies
+goes into Poly1305 unchanged whether it is masked or not
+(`oca/hw/syn/README.md`, "After the area pass").
 
 Lint (must stay clean, `-Wall`):
 
@@ -378,17 +388,21 @@ core and never updated as the design grew by 3000 LUTs.
   three engines the critical path also leaves `chacha20.sv` for
   `poly1305.sv:140` (the registered DSP products), routing-dominated
   because the third engine fills 83% of the DSP columns.
-  **Corrected MVP target: ~1.26 Gbps**, i.e. two engines x 1.6
-  bytes/cycle at 49.28 MHz = 158 MB/s, saturating one GbE port
-  (125 MB/s) with **26% margin**. The board has two PHYs
-  (`BOM-MVP.md`); **the second cannot be fed on this device** — a
-  recorded limit, not an oversight. This supersedes the 1.97-2.07 Gbps
-  three-engine projection and the >= 2 Gbps target (`SPEC.md`,
-  `oca/hw/syn/README.md` "The occupancy study"). Note that
-  `ROWS_PER_CYCLE` in `poly1305.sv` competes with replication for the
-  same 72 multipliers — 2 rows per cycle costs 40 per engine, so one
-  engine instead of two — while removing the one-cycle `p_blk` bubble
-  is free.
+  **Corrected MVP target: two ports at 56% of line rate each, not one
+  port saturated.** The board has two PHYs (`BOM-MVP.md`) and
+  `oca_dual` wires the two engines as two independent AXI-Stream pairs,
+  one per core — so this is **0.561 Gbps per port at a 1500-byte MTU,
+  1.121 Gbps aggregated across both**, and **neither port is
+  saturated**. Both PHYs can be fed; saturating one of them would need
+  both cores behind it, hence a distributor and a collector that do not
+  exist (the two-core bullet below, and commit 23742dc, which retracted
+  the "one port saturated with margin" reading this passage carried).
+  This supersedes the 1.97-2.07 Gbps three-engine projection and the
+  >= 2 Gbps target (`SPEC.md`, `oca/hw/syn/README.md` "The occupancy
+  study"). Note that `ROWS_PER_CYCLE` in `poly1305.sv` competes with
+  replication for the same 72 multipliers — 2 rows per cycle costs 40
+  per engine, so one engine instead of two — while removing the
+  one-cycle `p_blk` bubble is free.
 - **The host protocol is implemented and verified** (design:
   `docs/design/2026-08-03-host-protocol.md`). Four new modules behind a
   64-bit AXI-Stream boundary with `tkeep`: `oca_keystore.sv` (8 key
@@ -398,7 +412,7 @@ core and never updated as the design grew by 3000 LUTs.
   `oca_core.sv` (wiring only). Store and forward throughout: the request
   is buffered whole before the engine sees it and the response is built
   whole before a byte leaves, which is what lets a failed tag return no
-  plaintext at all. Suites: keystore 4/4, pktbuf 9/9, oca_core 27/27, attack 16/16,
+  plaintext at all. Suites: keystore 4/4, pktbuf 12/12, oca_core 29/29, attack 16/16,
   plus `test_proto_model.py` as plain Python. Lint `-Wall` clean with
   `--top-module oca_core`. **The security property has two tests that
   can fail**: `test_corrupt_tag_yields_no_plaintext` asserts on the leak
@@ -408,8 +422,13 @@ core and never updated as the design grew by 3000 LUTs.
   suites, because every other tag corruption in them touches byte 0 or
   byte 15. Two more properties the 64-bit datapath introduced are
   covered the same way: `recv_packet` asserts the bytes past `tkeep` are
-  zero, so every test witnesses the final-beat mask (removing it fails
-  14 of the 27 and 9 of the 16), and
+  zero, so every test witnesses the final-beat mask. Re-measured
+  2026-08-06: deleting that mask from `oca_proto` fails **15 of the 29
+  and 9 of the 16**, and deleting the assertion as well takes both
+  suites straight back to 29/29 and 16/16 — that one assertion is the
+  only thing in either suite that can see the leak, because
+  `recv_packet` reads the response through `tkeep` and would otherwise
+  discard the unmasked bytes in silence. Beside it,
   `test_partial_keep_mid_packet_fails_closed` sends a short beat before
   `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
   error is not a header drop.
@@ -562,7 +581,8 @@ core and never updated as the design grew by 3000 LUTs.
   Not a regression — synthesising `95c81f7` shows the same key store
   already dead, as 2056 self-holding registers. Fixed by
   `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
-  (upstream report drafted, not filed); `run_synth.py` now refuses an
+  (reported upstream 2026-08-05 as YosysHQ/yosys#6085, its text kept in
+  `oca/hw/syn/patches/README.md`); `run_synth.py` now refuses an
   unpatched toolchain and asserts the key store's storage against the
   netlist, and `run_keystore_gate.py` replays the key store tests on the
   synthesised netlist — 2 of its 4 fail without the patch. The same net
@@ -577,12 +597,20 @@ core and never updated as the design grew by 3000 LUTs.
   of having a key store at all, not a regression in area — what it does
   cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
   "The cmp2lut trap".
-- Next: **the Ethernet integration**, which needs the board (expected
-  ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII wrapper
-  with its ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
-  constraints, plus the **8-to-64-bit width conversion at the MAC
-  boundary** — the 1G MAC hands over an 8-bit AXI-Stream and `oca_core`
-  is now 64 bits, so the conversion belongs there and not inside the
-  buffers. The cheapest measurement that does not need the board is the
-  two-core build of the current RTL: area, clock and above all whether
-  it still routes.
+- Next: **the Ethernet integration**, designed in
+  `docs/design/2026-08-05-ethernet-integration.md` and needing the board
+  (expected ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII
+  front end written by us around the ECP5 DDR primitives with its RX
+  delay as a parameter rather than a constant, PLL, reset and the
+  Colorlight i9 pin constraints. **The 8-to-64-bit width conversion is
+  not in our clock domain**: at ~48 MHz an 8-bit stream carries
+  384 Mbps, under the port it is meant to feed, so it happens on the
+  125 MHz side inside `eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`,
+  which does the conversion and the clock domain crossing in one
+  instance. Upstream's testbench does not exercise that configuration,
+  so it needs one of ours — as do the RGMII wrapper and the whole path
+  from a synthetic frame back out to one, all three of them buildable
+  without the board. `openFPGALoader` is not in `tools/` yet and there
+  is no programmer of any kind in the tree. What the board alone can
+  settle is listed in that document: the RGMII delay value and the IO
+  bank voltages above all.

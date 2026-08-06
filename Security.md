@@ -243,13 +243,21 @@ around a limitation it has not been told about.
    earlier message — which is both a correctness bug and a way to
    accept a forgery.
 
-3. **`out_data` beyond `out_len` carries raw keystream.** On a partial
-   final block the engine masks the *input* to `in_len` bytes before
-   the XOR, so the unused high bytes of `out_data` come out as
-   plaintext keystream for that (key, nonce, counter). Callers must
-   truncate the output to `out_len` and must never transmit or store
-   the remainder: it is key material for a counter block that may still
-   be in use.
+3. **`out_data` beyond `out_len` carries keystream XORed with whatever
+   the caller drove into the padding bytes.** Nothing masks the input:
+   `chacha20_poly1305.sv` latches the block whole (`c_data_in <=
+   in_data`) and `chacha20.sv` XORs all sixteen words of it, so the
+   bytes past `in_len` reach the XOR. The only surviving mask is
+   `mask_sub`, applied to the 16-byte sub-block on its way into
+   `poly1305.sv`, which is where RFC 8439 requires the padding to be
+   zero and where the masking therefore stops. A caller that zero-pads
+   reads back the raw keystream for that (key, nonce, counter); a
+   caller that leaves anything else there reads that keystream XORed
+   with its own bytes, so the remainder carries both — whatever sat in
+   the padding leaves the engine together with the keystream masking
+   it. Callers must truncate the output to `out_len` and must never
+   transmit or store the remainder: it is key material for a counter
+   block that may still be in use.
 
 4. **Secrets are cleared on reset, in the flip-flops.** All three
    modules zeroise their secret state when `rst_n` is asserted:
