@@ -597,6 +597,20 @@ core and never updated as the design grew by 3000 LUTs.
   of having a key store at all, not a regression in area — what it does
   cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
   "The cmp2lut trap".
+- **The AEAD engine is guarded too, by a floor on the whole netlist**
+  (2026-08-06). The two per-file floors left `chacha20.sv`,
+  `poly1305.sv` and `chacha20_poly1305.sv` with no netlist assertion at
+  all, and neither gate runner can reach them, so the same mapping
+  defect landing on the block state or the accumulator would have been
+  invisible to the entire flow. `NETLIST_FF_TOTAL` in `run_synth.py`
+  requires 11900 live flip-flops for `oca_core` (12033 measured) and
+  23800 for `oca_dual` (24066). A total rather than three more per-file
+  floors because yosys's attribution moves: across the
+  secret-zeroisation merge `poly1305.sv` went 391 -> 1789 while the
+  unattributed bucket fell 1753 -> 324, the module having gained reset
+  branches and no new state. Non-vacuous — deleting the flip-flops
+  attributed to any one of the three engine files fails it, and the
+  per-file floors report ok in all three cases.
 - Next: **the Ethernet integration**, designed in
   `docs/design/2026-08-05-ethernet-integration.md` and needing the board
   (expected ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII
