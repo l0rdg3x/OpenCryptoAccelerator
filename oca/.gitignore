@@ -1,5 +1,11 @@
 build/
 .venv/
+# Also without the slash, for the same reason /tools carries one in the
+# top-level file: a git worktree does not inherit the virtualenv, so it
+# gets symlinked here, and a symlink is a file — `.venv/` would not
+# match it and an absolute path out of someone's home directory would be
+# one `git add -A` away from a public repository.
+/.venv
 hw/sim/sim_build*/
 hw/sim/results.xml
 __pycache__/
