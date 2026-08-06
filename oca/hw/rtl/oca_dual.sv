@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: CERN-OHL-P-2.0
 /*
- * Two oca_core on one device: the MVP's shape.
+ * Two oca_core on one device: what a pair costs in area and clock.
  *
  * The Colorlight i9 v7.2 carries two gigabit PHYs and one core cannot
- * saturate one of them, so the MVP is one core per PHY. Three do not
+ * saturate one of them, so a pair is the configuration worth measuring —
+ * and measuring it is all this module is for. What the MVP is actually
+ * wired as depends on what fits beside the cores, and with one Ethernet
+ * port's area measured, two cores and two ports do not fit this device:
+ * the MVP that fits is one core on one port (AGENTS.md;
+ * docs/design/2026-08-05-ethernet-integration.md). Three cores do not
  * route on this device — 76.4% of the LUTs and 83.3% of the multipliers
  * fit, and nextpnr still leaves ~50000 arcs unrouted at any constraint
  * from 35 to 100 MHz, which is congestion rather than timing (README.md,

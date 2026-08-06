@@ -928,12 +928,20 @@ Two engines, at the two-core mean of 49.28 MHz and the 40 cycles per
 | one GbE port | 125 MB/s = 1 Gbps |
 | margin over one port | **26%** |
 
-**One GbE port saturated with 26% margin is the ceiling of this
+**~1.26 Gbps of aggregate crypto capacity is the ceiling of this
 silicon.** The MVP board carries two GbE PHYs (`BOM-MVP.md`), so
 2 Gbps of wire is present and >= 2 Gbps was the honest target to aim
-at; **the second port cannot be fed on an LFE5U-45F**, and that is a
-recorded limit rather than something the design overlooked. `SPEC.md`'s
-performance target has been corrected to ~1.26 Gbps accordingly.
+at. `SPEC.md`'s performance target has been corrected to ~1.26 Gbps
+accordingly.
+
+**Retracted 2026-08-06.** This paragraph read "One GbE port saturated
+with 26% margin is the ceiling of this silicon" and "**the second port
+cannot be fed on an LFE5U-45F**". Both readings add the two engines
+together against a single port. `oca_dual` wires each core to its own
+AXI-Stream pair, so a port sees one core: **0.561 Gbps at a 1500-byte
+MTU, 56% of line rate**, and both PHYs can be fed. Commit 23742dc
+retracted this for `AGENTS.md` and `SPEC.md` and did not reach this
+file; see `AGENTS.md` for the measured figures.
 
 Three qualifications, none of them in the project's favour:
 
@@ -1157,9 +1165,12 @@ of its two clauses is measured against:**
 | a bare GbE port, 125 MB/s | 97.1 of 125 MB/s = 78% | **22%** |
 | the target as `SPEC.md` states it, ~1.26 Gbps *with margin* | 0.78 of 1.26 Gbps = 62% | **38%** |
 
-The second row is the one the target actually asks for — "saturate one
-GbE host port **with margin**" — so **38% is the honest headline** and
-22% is only the distance to breaking even with the wire. To reach even
+The second row is the one the target asked for when this was measured —
+"saturate one GbE host port **with margin**" — so **38% is the honest
+headline** and 22% is only the distance to breaking even with the wire.
+(`SPEC.md` no longer states it that way: as of 2026-08-06 the ~1.26 Gbps
+is an aggregate cycle budget over both engines, and the per-port figure
+is what the retraction above records.) To reach even
 125 MB/s at 64 cycles per block, two cores would need **62.5 MHz**, 29%
 above what this device gives them and above the 52-53 MHz the standalone
 `chacha20` core has never beaten. **The clock is not where this comes
@@ -1187,9 +1198,12 @@ the engine's own 40, at which point two cores reach ~1.24 Gbps and 24% of
 headroom. That figure is not a coincidence: it is the ~1.26 Gbps of
 crypto capacity `SPEC.md` already records for two engines, recomputed at
 this pair's 48.53 MHz instead of the 8-bit pair's 49.28 — same figure,
-1.5% apart, and 24% of margin rather than 26%. **The target is reachable
-on this silicon, and reaching it means the protocol layer must cost
-nothing on top of the engine — not merely little.**
+1.5% apart. **The aggregate target is reachable on this silicon, and
+reaching it means the protocol layer must cost nothing on top of the
+engine — not merely little.** Amended 2026-08-06: this read "24% of
+headroom" and "24% of margin rather than 26%", both of which measure the
+two engines together against one port. `oca_dual` gives each core its
+own port, so the per-port figure is 0.561 Gbps at a 1500-byte MTU.
 
 The cost of pipelining is buffers, and it is affordable: a second receive
 and a second transmit buffer per core takes block RAM from 4 DP16KD per
@@ -1300,38 +1314,67 @@ netlist checks now cover:
 
 | | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax (seed 1) |
 |---|---|---|---|---|---|
-| `oca_core`, as committed | 11590 | 12043 | 4 | 20 | 48.52 MHz |
+| `oca_core`, as committed | 12308 | 12033 | 4 | 20 | 47.93 MHz |
 
 Live flip-flops by source file, printed by `check_netlist` on every run:
 `oca_proto.sv` 3645, `chacha20_poly1305.sv` 2479, `oca_keystore.sv`
-2313, `chacha20.sv` 1414, `poly1305.sv` 391, `oca_pktbuf.sv` 48, plus
-1753 yosys attributes to no file. The floors are 2313 for the key store
-(derived: `NUM_SLOTS*256 + NUM_SLOTS + 256 + 1`) and 3600 for
-`oca_proto` (measured, with head-room for the optimiser; re-measure from
-the census when its registers change). `hw/sim/run_proto_gate.py`
-covers what no census can: the tag comparison is combinational, and it
-is replayed on a mapped `oca_proto` inside an otherwise RTL `oca_core`.
+2313, `poly1305.sv` 1789, `chacha20.sv` 1415, `oca_pktbuf.sv` 68, plus
+324 yosys attributes to no file. Three floors guard that census. Two are
+per file: 2313 for the key store (derived:
+`NUM_SLOTS*256 + NUM_SLOTS + 256 + 1`) and 3600 for `oca_proto`
+(measured, with head-room for the optimiser). The third is on the whole
+netlist, 11900 against 12033 live, and it is what covers the AEAD
+engine.
+
+**Why the engine is floored by a total and not per file.** yosys's
+per-file attribution moves. Across the secret-zeroisation merge the
+census answered `poly1305.sv` 391 -> 1789 with the unattributed bucket
+1753 -> 324, on a netlist that lost ten registers in total. `poly1305.sv`
+gained reset branches over that delta and no new state, so those 1398
+registers were relabelled rather than created; the merge's own new
+state is elsewhere, the 20 registers of `oca_pktbuf`'s memory-clearing
+walk. A per-file floor tight enough to catch the
+accumulator vanishing would have failed that healthy build; one loose
+enough to survive it would not catch the accumulator. A total is immune
+to the relabelling and still tight, and the check is non-vacuous on all
+three engine files: deleting every flip-flop attributed to `chacha20.sv`
+(1415), `poly1305.sv` (1789) or `chacha20_poly1305.sv` (2479) from a
+real netlist fails it, and in all three cases the two per-file floors
+still pass. Every floor here has to be re-measured from the census
+whenever the RTL changes; they only ever fail downwards, so adding
+storage is free.
+
+`hw/sim/run_proto_gate.py` covers what no census can: the tag comparison
+is combinational, and it is replayed on a mapped `oca_proto` inside an
+otherwise RTL `oca_core`.
 
 **Two things this table is not.** It is not a two-core figure — the
 22891 LUTs and 48.53 MHz above were measured on RTL from before the
-packet overlap and before the key store was restored, and **two cores of
-the committed RTL have never been placed and routed**, so the throughput
-projections in this file that lean on 48.53 MHz stand as projections
-against a clock that has not been re-measured. And one seed is one
-sample: 48.52 MHz here against the 49.76 MHz this file records at seed 1
-for the RTL of one commit earlier is a 2.5% shift, well inside the 4.8%
-spread the five patched seeds above show — on a netlist yosys reports
-cell for cell identical to that one (7768 LUT4, 12043 TRELLIS_FF, 1687
-CCU2C, 4 DP16KD, 20 MULT18X18D; the RTL differs by one gate on the RX
-write enable). Placement and routing are where it moved: at seed 1 the
-worst path here is `oca_proto`'s `data_off` adder, 7.4 ns of which 2.2
-is a single route from (44,29) to (11,27), where the earlier netlist at
-the same seed put it in `chacha20.sv`. **That is the first time the
-protocol layer has appeared on a critical path in this file**, and on
-one seed it is a placement result rather than a property of the design —
-but it is the thing to watch, and it is why the sentences elsewhere
-saying no protocol module appears on any seed are scoped to the 64-bit
-build's four seeds. Router time moved the other way, 529 s to 208 s.
+packet overlap and before the key store was restored. The two-core build
+of the committed RTL has since been placed and routed over four seeds;
+`AGENTS.md` carries that result, and it is deliberately not repeated
+here, because the same figure written down twice is how this file and
+that one came to disagree about the single-core numbers.
+
+And one seed is one sample. 47.93 MHz here is a single draw from a
+spread this design measures at 4.8% across seeds, so it bounds nothing
+on its own; the four-seed figures are the ones to quote. The comparison
+this paragraph used to make — against 49.76 MHz at seed 1 on a netlist
+yosys reported cell for cell identical — no longer applies: the secret
+zeroisation changed the netlist (11590 -> 12308 TRELLIS_COMB), so the
+two are not the same design placed differently.
+
+At seed 1 the worst path is back inside the engine: `u_aead.u_poly`'s
+multiply into the carry chain (`poly1305.sv:159` through `mul2dsp`),
+20.86 ns of which **8.01 ns is logic and 12.86 ns is routing** (the two
+components are each rounded, so they sum to 20.87; 20.86 is nextpnr's
+own cumulative total). It is
+routing-dominated, which is the same thing the three-core study found by
+a different route. The protocol layer, which appeared on this path once
+on the pre-zeroisation netlist, does not appear on it here — one seed
+either way is a placement result and not a property of the design, which
+is why the sentences elsewhere about no protocol module appearing on any
+seed stay scoped to the four seeds that measured it.
 
 The cycle side is measured and does not depend on any of that: a
 64-byte block costs **40 cycles** end to end through `oca_core`, exactly

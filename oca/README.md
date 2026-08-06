@@ -85,9 +85,11 @@
   chosen around the 64-byte block and 16-byte MAC boundaries.
 - `hw/sim/test_dirty_pad.py` — adversarial padding test, encrypt and
   decrypt: random garbage is driven into the bytes past `in_len` and
-  neither the ciphertext nor the tag may move. The suite above cannot
-  see this — it zero-pads, so it passes with the engine's input masking
-  removed entirely — which is why the masking has a test of its own.
+  neither the ciphertext nor the tag may move. The suite above zero-pads,
+  so it is blind to that masking on the decrypt path: with the mask
+  removed entirely, all of its decrypt tests still pass and only the
+  three that encrypt fail, where the padding reaches Poly1305 XORed with
+  keystream. Which is why the masking has a test of its own.
 - `hw/sim/proto_model.py` — builds and parses host-protocol packets in
   Python, the reference for the wire format. The cryptography comes from
   `aead_model.py`, so no expected value is written by hand.
@@ -156,8 +158,8 @@ does with it, which is how a mis-mapped key store survived every green
 test run this project ever had.
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 9/9, oca_core
-27/27, attack 16/16, and post-synthesis keystore 4/4 and oca_proto 2/2;
+7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 12/12, oca_core
+29/29, attack 16/16, and post-synthesis keystore 4/4 and oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,
@@ -203,10 +205,13 @@ two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
 49.28 MHz, while three take 33484 LUTs (76.4%) and 60 multipliers
 (83.3%) — both under budget — and **never route**, with roughly 50000
 arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
-is congestion, not timing. Two engines at 49.28 MHz are 158 MB/s =
-**~1.26 Gbps of crypto capacity**, saturating one GbE port (125 MB/s)
-with 26% margin; the board's second PHY cannot be fed on this device.
-This supersedes the 1.97-2.07 Gbps three-engine projection, and
+is congestion, not timing. What two engines are worth depends on how
+they are wired to the ports, and `oca_dual` gives each core its own
+AXI-Stream pair, one per PHY: **0.561 Gbps per port at a 1500-byte MTU,
+56% of line rate, and 1.121 Gbps across both**. Both PHYs can be fed;
+neither port is saturated, and saturating one would need both cores
+behind it — a distributor and a collector that do not exist. This
+supersedes the 1.97-2.07 Gbps three-engine projection, and
 `SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
 occupancy study").
 
@@ -216,9 +221,11 @@ operation, a payload out, with no Ethernet in the simulation. Its
 datapath is **64 bits end to end inside `oca_core`**, which is the sixth
 rework and the one that made the protocol layer stop being the limit.
 
-As committed, `oca_core` synthesises to **11590 LUTs (26.4%), 12043 FF
-(27.5%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)**, 48.52 MHz at seed
-1 — reproducible with `hw/syn/run_synth.py oca_core`. That netlist has a
+As committed, `oca_core` synthesises to **12308 LUTs (28.1%), 12033 FF
+(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)**, 47.93 MHz at seed
+1 — reproducible with `hw/syn/run_synth.py oca_core`, and re-measured
+2026-08-06 because this read 11590 / 12043 / 48.52 MHz, which was the
+build from before the secret zeroisation. That netlist has a
 working key store in it; the 11429 / 11228 / 51.71 MHz figures below,
 and every earlier area figure in this file, were measured before the
 `cmp2lut` defect was found, when `oca_keystore.sv` was being deleted
@@ -258,24 +265,33 @@ it, and that is the floor until the engine changes.
 
 **What that is worth end to end is a projection, not a measurement.** At
 1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit pair,
-two cores are 155 MB/s = **~1.24 Gbps**: 124% of a GbE port's 125 MB/s,
-and within 2% of the ~1.26 Gbps `SPEC.md` asks for — one port saturated
-*with margin*. **Read that as a cycle budget that clears the port, not
-as the target being met.** The 48.53 MHz and the 22891 LUTs (52.2%), 40
-multipliers (55.6%) and 8 DP16KD beside it were measured on RTL from
-before the packet overlap, in a build whose key store the mapper had
-deleted, and **two cores of the current RTL have never been placed and
-routed**. The pair was also the tightest configuration in the study: two
-of its four placer seeds did not route, each stopped after 3 h 22 min
-still bouncing between 50 and 2300 unrouted arcs, so the 48.53 MHz mean
-is over two seeds and not four. Routability rather than the clock is
-what has to be re-measured, and **none of this has run on silicon.**
+two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
+added together, and `oca_dual` wires them to two ports, one core each.
+One port therefore sees one core, **0.561 Gbps at a 1500-byte MTU**, and
+is not saturated. **Read the aggregate as a cycle budget, not as a port
+cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
+(55.6%) and 8 DP16KD beside it were measured on RTL from before the
+packet overlap, in a build whose key store the mapper had deleted. That
+older pair was also the tightest configuration in the study: two of its
+four placer seeds did not route, each stopped after 3 h 22 min still
+bouncing between 50 and 2300 unrouted arcs, so its 48.53 MHz mean is
+over two seeds and not four. **Two cores of the current RTL have since
+been placed and routed, on four seeds with every seed routing** —
+`AGENTS.md` carries what they measure, and it is deliberately not
+repeated here. **None of this has run on silicon.**
 
-Next: the Ethernet integration, which needs the board —
-`verilog-ethernet` (MIT) as a submodule, the RGMII wrapper with its ECP5
-DDR primitives, PLL, reset and the Colorlight i9 pin constraints, plus
-the 8-to-64-bit width conversion at the MAC boundary. The cheapest thing
-that does not need the board is the two-core build of the current RTL.
+Next: the Ethernet integration, designed in
+`docs/design/2026-08-05-ethernet-integration.md` and needing the board —
+`verilog-ethernet` (MIT) as a submodule, the RGMII front end written by
+us around the ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
+constraints. The 8-to-64-bit width conversion is not in our clock
+domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
+is meant to feed, so it happens on the 125 MHz side inside
+`eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`. Upstream has no
+testbench for that configuration, so it needs one of ours — that
+testbench, one for the RGMII wrapper and one for the whole path from a
+synthetic frame back out to one are the work that does not need the
+board.
 
 ## Phase 1: abstract API + software backend
 

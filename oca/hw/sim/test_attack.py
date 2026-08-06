@@ -44,11 +44,14 @@ async def watch_descriptor(dut, g: Guard, stats=None):
 
     oca_proto's header claims every field DRAIN judges a packet on is
     copied at the stage boundary and that "no other packet's stage can
-    write it". pd_opcode/req_id/slot/status/crypto/engine are indeed
-    written only in P_ENDREQ, which is guarded by !pd_valid. pd_tag is
-    not: it is written in P_ARGS, by the *next* packet's parse, with no
-    guard at all. This watches the register file itself, so it fires on
-    any alignment the traffic happens to produce rather than on the one
+    write it". As the RTL stands that holds for all of them: pd_tag is
+    written in P_ENDREQ, under the same !pd_valid guard as
+    pd_opcode/req_id/slot/status/crypto/engine, and nowhere else. What
+    this watches for is a change that moves one of those writes -- a
+    copy of pd_tag made in P_ARGS, say, where the next packet's parse
+    would rewrite it under a descriptor still waiting for DRAIN. It
+    reads the register file itself, so such a regression fires on any
+    alignment the traffic happens to produce rather than only on the one
     a hand-written packet sequence reaches.
     """
     p = dut.u_proto

@@ -2,10 +2,10 @@
 """Replay the tag comparison on a SYNTHESISED oca_proto, inside oca_core.
 
 run_keystore_gate.py does this for oca_keystore, which is where the
-cmp2lut defect happened to land. oca_proto is 1241 lines and holds the
+cmp2lut defect happened to land. oca_proto is 1253 lines and holds the
 comparison that decides whether plaintext leaves, and until this runner
 existed nothing between the RTL simulation and the board looked at it: a
-mapper defect there would build, pass all 73 RTL tests, pass the
+mapper defect there would build, pass all 81 RTL tests, pass the
 flip-flop floors in hw/syn/run_synth.py — a 128-bit equality is
 combinational and no cell census can see it — and answer wrongly on
 hardware.
@@ -16,12 +16,16 @@ packets on the wire and the cryptography behind them are the ones the
 usual suites use. Verilator takes the netlist's `oca_proto` because the
 RTL one is not in the source list.
 
-Why not the whole core: yosys ships no simulation model for MULT18X18D
-or PDPW16KD, only blackbox declarations, so a netlist containing
-poly1305's multipliers or the packet buffers' block RAM cannot be
-simulated at all (Verilator: "Cannot find file containing module
-'MULT18X18D'"). oca_proto infers neither, which is exactly why it can be
-replayed like this and the core around it cannot.
+Why not the whole core, and it is two different reasons. yosys declares
+MULT18X18D only in cells_bb.v, which this runner does not read, so a
+netlist carrying poly1305's multipliers does not elaborate at all
+(Verilator: "Cannot find file containing module 'MULT18X18D'"). The
+packet buffers are the other case and the quieter one: they map through
+$__PDPW16KD_ but emit DP16KD, which cells_sim.v does declare — as a
+blackbox, with no behaviour. That netlist elaborates, and the memory
+reads nothing: the run would come out green over a buffer that never
+returns a byte. oca_proto infers neither primitive, which is exactly why
+it can be replayed like this and the core around it cannot.
 """
 
 import os

@@ -29,6 +29,36 @@ UDP payload as an 8-bit AXI-Stream (`tdata`, `tvalid`, `tready`,
 It can therefore be tested by injecting packets on that stream, with no
 Ethernet in the simulation at all.
 
+> **Amended 2026-08-06, and this one retracts a claim rather than
+> refining it.** Section 1 calls `verilog-ethernet` "a widely used
+> open-source core with working ECP5 support". The first half stands;
+> **the second is false.** AGENTS.md carried the same sentence and
+> retracted it on 2026-08-05, checked against the repository:
+>
+> - none of the 25 directories under `example/` targets Lattice, and a
+>   code search for `ecp5`, `lattice`, `colorlight` and `trellis`
+>   returns nothing;
+> - `rgmii_phy_if.v` accepts only `SIM`, `GENERIC`, `XILINX` and
+>   `ALTERA`, and falls through to `GENERIC` on anything else without a
+>   warning;
+> - `GENERIC` is not a slower path on this device but a broken one:
+>   `oddr.v` drives one register from two `always` blocks on opposite
+>   edges, so `synth_ecp5` reports conflicting drivers on every bit
+>   rather than inferring `ODDRX1F`.
+>
+> **The consequence is a schedule item, not a footnote: the RGMII front
+> end is ours to write**, behind the wrapper SPEC.md's portability rule
+> requires for vendor primitives — the piece nearest the pins, and the
+> one this document's section 7 assumed away by naming
+> `verilog-ethernet` as a submodule. It is designed in
+> `docs/design/2026-08-05-ethernet-integration.md`, which also lists what
+> only the bench can close about it.
+>
+> The choice of `verilog-ethernet` itself is unchanged, and so is this
+> section's boundary: the MAC, ARP, IP and UDP above the pins are still
+> upstream's, and the UDP payload still arrives as an AXI-Stream that
+> needs no Ethernet in the simulation.
+
 ## 2. Store and forward
 
 The received packet is buffered whole before the engine sees any of it,

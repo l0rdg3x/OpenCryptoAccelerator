@@ -42,10 +42,14 @@ Hardware accelerator for:
 
 # ================================================== PERFORMANCE TARGETS
 
-- MVP (ECP5): aggregate crypto-core throughput in the FPGA fabric high
-  enough to saturate one GbE host port with margin — target
-  ~1.26 Gbps aggregate from two parallel AEAD engines, measured in
-  simulation and on hardware.
+- MVP (ECP5): aggregate crypto-core throughput in the FPGA fabric of
+  ~1.26 Gbps from two parallel AEAD engines, measured in simulation and
+  on hardware. **That is an aggregate cycle budget and not a saturated
+  port.** This bullet read "high enough to saturate one GbE host port
+  with margin" until 2026-08-06, which added the two engines together
+  against a single port: `oca_dual` gives each core its own stream, so a
+  port sees one core and carries 0.561 Gbps at a 1500-byte MTU. The
+  2026-08-05 correction further down this bullet is the one that holds.
   This bullet asked for ">= 2 Gbps aggregate (multiple parallel cores)"
   until 2026-08-04, on the estimate that an LFE5U-45F would hold three
   engines. The estimate did not survive being placed. The occupancy
@@ -65,9 +69,11 @@ Hardware accelerator for:
     for a slower clock buys nothing.
   Two engines at 49.28 MHz and 40 cycles per 64-byte block (1.6
   bytes/cycle each, measured in simulation) are 158 MB/s = **~1.26 Gbps
-  of crypto capacity**, against the 125 MB/s a GbE port carries: one
-  port saturated with **26% margin**. That is what the fabric holds, so
-  that is where the target sits.
+  of crypto capacity**, against the 125 MB/s a GbE port carries. That is
+  what the fabric holds, so that is where the target sits — as a sum
+  over both engines. This paragraph read "one port saturated with **26%
+  margin**" until 2026-08-06; the sum only clears a port if both engines
+  sit behind that port, which `oca_dual` does not do.
   **Corrected 2026-08-04, then amended the same day: the cycle budget
   now clears the port in simulation, and what is unmeasured is whether
   the pair still fits.** The datapath inside `oca_core` was widened from
@@ -82,20 +88,27 @@ Hardware accelerator for:
   adding anything to it. Measured differentially in simulation and
   exactly linear: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16
   blocks, marginal 40.00.
-  **What that is worth end to end is a projection, not a result.** At
-  1.6 bytes/cycle and the 48.53 MHz measured for the last 64-bit pair,
-  two cores are 155 MB/s = **~1.24 Gbps**, 24% over a GbE port and
-  within 2% of the ~1.26 Gbps this bullet asks for. But that clock was
-  measured on RTL two rewrites older than this one, in a build whose key
-  store synthesis had silently deleted, and **two cores of the current
-  RTL have never been placed and routed**. One core of it measures 11590
-  LUTs, 12043 FF, 4 DP16KD, 20 multipliers and 48.52 MHz at seed 1,
+  **What that is worth end to end is a projection, not a result** — the
+  cycles and the clock are both measured, but nothing has run on
+  silicon. At 1.6 bytes/cycle and the 48.53 MHz measured for the last
+  64-bit pair, two cores are 155 MB/s = **~1.24 Gbps** added together,
+  which is a cycle budget and not a port cleared; the 2026-08-05
+  correction below is what it comes to per port. That clock was in any
+  case measured on RTL two rewrites older than this one, in a build
+  whose key store synthesis had silently deleted. **Two cores of the
+  current RTL have since been placed and routed, over four placer seeds
+  and with every seed routing** — `oca_dual` builds them, and the
+  paragraph below carries what they measure. One core of the current RTL
+  measures **12308 LUTs, 12033 FF, 4 DP16KD, 20 multipliers and 47.93
+  MHz at seed 1** (re-measured 2026-08-06; this read 11590 / 12043 /
+  48.52 MHz, which was the build from before the secret zeroisation),
   against the 11429 LUTs the two-core figure was scaled from — and that
   pair was already the tightest configuration in the study: two of its
   four placer seeds never routed, each stopped after 3 h 22 min still
   bouncing between 50 and 2300 unrouted arcs rather than descending. The
-  cycle budget is measured; the clock and the fit at two cores are not,
-  and routability rather than the clock is what was already marginal.
+  cycle budget is measured, and so now are the clock and the fit at two
+  cores; what was marginal on that older pair was routability rather
+  than the clock.
   **Both PHYs can be fed; neither can be saturated. Corrected
   2026-08-05, having previously read that the second PHY could not be
   fed at all.** The Colorlight i9 v7.2 carries two PHYs (`BOM-MVP.md`),
