@@ -150,10 +150,24 @@ appears once every few hours on a bench and never in simulation:
 | `clk_tx` | 125 MHz from the PLL, plus a 90° copy | RGMII transmit, MAC transmit |
 | `clk_sys` | ~48 MHz | UDP stack, `oca_core`, everything else |
 
-The MAC's own clock domain crossing is upstream's, inside
-`eth_mac_1g_rgmii_fifo`. **Ours is the boundary between that FIFO and the
-UDP stack**, and the answer is the same module upstream uses:
-`axis_async_fifo`. Nothing else in this design crosses a domain.
+The MAC's own clock domain crossing is upstream's, inside the MAC FIFO
+wrapper, and **it is the only one this design needs.**
+
+> **Corrected 2026-08-08, after reading the wrapper rather than its
+> description.** This paragraph read: "Ours is the boundary between that
+> FIFO and the UDP stack, and the answer is the same module upstream
+> uses: `axis_async_fifo`." That would have built a same-clock
+> asynchronous FIFO — block RAM and two synchroniser latencies for
+> nothing.
+>
+> The wrapper contains exactly two async FIFOs: a `tx_fifo` crossing
+> `logic_clk` to `tx_clk`, and an `rx_fifo` crossing `rx_clk` to
+> `logic_clk`. Its user-side AXI-Stream is **already on `logic_clk`**,
+> and its status outputs are already brought into that domain by toggle
+> synchronisers. So if `logic_clk` is `clk_sys` and `udp_complete_64`
+> runs on `clk_sys` too, there is no boundary left between the MAC and
+> the UDP stack. The crossing happens once, inside the wrapper, between
+> the 125 MHz wire and our slower fabric.
 
 ## 5. Where the width conversion goes, and why not where we said
 
@@ -162,7 +176,7 @@ AGENTS.md said the width converter belonged "between the MAC and
 so plainly: at 48 MHz an 8-bit stream carries **384 Mbps**, below the port
 it is supposed to feed. The conversion has to happen on the 125 MHz side.
 
-`eth_mac_1g_rgmii_fifo` with `AXIS_DATA_WIDTH = 64` does exactly that: it
+The MAC FIFO wrapper with `AXIS_DATA_WIDTH = 64` does exactly that: it
 instantiates `axis_async_fifo_adapter`, which upsizes before the FIFO in
 the source domain and downsizes after it in the destination domain. So
 receive converts 8→64 at 125 MHz, the asynchronous FIFO is already 64
@@ -171,6 +185,19 @@ bits wide, and our side never sees an 8-bit stream at all.
 That configuration is not exercised by upstream's testbench, which pins
 `AXIS_DATA_WIDTH = 8`, and no example uses it. **We would be the first,
 so it needs a cocotb testbench of ours before it is trusted.**
+
+> **Corrected 2026-08-08: the wrapper is `eth_mac_1g_fifo`, not
+> `eth_mac_1g_rgmii_fifo`.** This section, section 10 and `AGENTS.md`
+> all named the latter. It **embeds `rgmii_phy_if`**, so it cannot
+> accept an RGMII front end of ours without editing a pinned vendor
+> tree — and `rgmii_phy_if` is precisely the module that has no ECP5
+> target, which is why we wrote `oca_rgmii.sv` at all.
+>
+> `eth_mac_1g_fifo` is the same wrapper one layer down: it takes GMII
+> plus `rx_clk` and `tx_clk`, and carries the same two
+> `axis_async_fifo_adapter` instances, so the 8↔64 conversion and both
+> clock crossings are still upstream's. The area measurement is
+> unaffected — it counted the RGMII layer separately in any case.
 
 ## 6. Traps carried forward from the reconnaissance
 
@@ -290,3 +317,100 @@ as a sequence that checks one thing at a time.
 in the tree. It has native support for the i9 (`colorlight-i9`, cable
 `cmsisdap`), and it should be added to `scripts/build-toolchain.sh` with
 the same pinning as everything else, well before 2026-08-17.
+
+## 11. Amended 2026-08-08, from the toolchain rather than from memory
+
+Everything below was checked against the installed yosys, nextpnr and
+prjtrellis, or against a named line of a source file, before `oca_rgmii.sv`
+was written. Two of the items would have gone into the RTL as written.
+
+**Primitives that do not exist on this device.** `DELAYE` and `BUFG` are
+not ECP5 cells. There is no `BUFG` to instantiate: the global buffer is
+`DCCA` and nextpnr inserts it for any net with `IOLOGIC.CLK` or
+`TRELLIS_FF.CLK` users.
+
+**`IDDRX1F` has no `ECLK` port.** Its entire port list is `(D, SCLK, RST,
+Q0, Q1)`. `ECLK` belongs to the x2 gearing primitives, so the phrase "the
+RX clock delay and its ECLK routing" in `AGENTS.md` described a design we
+are not building. **x2 gearing is rejected**, and the reason is recorded
+so it is not rediscovered: the MAC wants 8-bit GMII at 125 MHz, so a
+4-bit-per-pin-per-cycle stream would have to be re-serialised for nothing,
+while `ECLKSYNCB`/`CLKDIVF` add two edge clocks per bank as a hard
+resource and an `ALIGNWD` word-alignment problem with no obvious answer
+here.
+
+**The static timing analysis is blind to the whole interface, not just to
+the delay elements.** Section 8 understates this. nextpnr never queries
+the trellis IOLOGIC timing at all: it hardcodes setup 0.1 ns, hold 0 ns
+and clock-to-Q 0.5 ns for IOLOGIC and SIOLOGIC, and `TRELLIS_IO` has no
+delay model. The real characterisation is sitting unused in the chipdb —
+`IDDRX1F` setup 401 ps and hold 235 ps, `ODDRX1F` clock-to-output about
+985 ps. **A green timing report on the receive or transmit clock says
+nothing whatsoever about RGMII capture or launch.** It covers fabric paths
+only.
+
+**The nibble order is settled, from source.** litex's `DDROutput(i1, i2)`
+becomes `ODDRX1F(D0=i1, D1=i2)` and `DDRInput(o1, o2)` becomes
+`IDDRX1F(Q0=o1, Q1=o2)`; LiteEth passes the low nibble as `i1`/`o1`. So
+`D0`/`Q0` carry GMII bits 3:0 on the rising edge and a recovered byte is
+`{Q1, Q0}`. Note also that RGMII has **four** data lines plus control, not
+eight — eight is GMII.
+
+**The receive delay is `DELAYF`, and it sits on the data lines.** `DELAYF`
+is the same element as `DELAYG` plus `LOADN`/`MOVE`/`DIRECTION`/`CFLAG`,
+and nextpnr moves all four onto the IOLOGIC and sets
+`IOLOGIC.LOADNMUX=LOADN` when `LOADN` is connected. The tap count is
+therefore movable while the design runs, which turns a bench search that
+would otherwise need one bitstream per candidate into a sweep. It is on
+the data and not the clock because a delay cell on `RXC` moves the clock
+net onto the IOLOGIC's `INDD` output, after which nextpnr re-runs its
+dedicated-routing test from there; failing it puts a 125 MHz clock on
+general fabric routing. Delaying data by +2 ns and delaying the clock by
+2 ns are congruent at a 4 ns unit interval, so nothing is lost.
+
+**A PLL cannot cleanly take the recovered clock.** The dedicated PLL
+reference inputs on CABGA381 are A4/A5, A6/B6, A19/B20, C18/D17, P3/P4 and
+U16/T17. Neither RX clock pin (H2, L19) is among them, so phase-shifting
+`RXC` with a PLL would drive `EHXPLLL.CLKI` from general routing for no
+benefit a delay element does not already give.
+
+**The transmit clock comes from LiteEth's arrangement, not upstream's.**
+An `ODDRX1F` fed from a constant rising/falling pair, clocked by the same
+transmit clock as the data, then delayed. One PLL output instead of two,
+and no `clk`-to-`clk90` handoff that nextpnr never analysed.
+
+**A falsifiable prediction about the PHY, answering open question 3.**
+litex-boards drives this board family with `tx_delay = 0` and
+`rx_delay = 2 ns` and that is reported working. For the FPGA-to-PHY
+direction this is only possible if the B50612D adds an internal delay on
+its own receive side, and symmetrically that it adds none on its transmit
+side. **Predicted bench outcome: with zero transmit taps the transmit
+direction works.** If instead transmit is dead while receive is fine, the
+prediction is wrong and the transmit taps are what to move. Stating it
+this way means the first hour at the bench resolves it rather than
+confusing it with a receive problem.
+
+**Two constraint facts that change how the `.lpf` must be read.** `BANK`
+and `BANK_VCC` in an `IOBUF` statement are parsed, stored and then never
+read again by nextpnr — there is **no way to declare a bank's VCCIO** from
+the `.lpf`, for any bank but bank 8. And a `LOCATE COMP` or `IOBUF PORT`
+naming a cell that does not exist is skipped **with no message at all**;
+only the separate unconstrained-IO check catches the consequence.
+
+**The bank 6 collision is created by the i9 revision itself.** On the i5
+the LED is U16, in bank 3. The v7.2 deep-copy moves it to L2, which is
+bank 6 — the same bank as Ethernet port 0. And because nextpnr's bank
+consistency check runs only over outputs and referenced types, the seven
+receive inputs in that bank neither vote nor are checked. **The blink test
+of bring-up step 2 therefore cannot detect a wrong bank declaration**: it
+already fixes bank 6's VCCIO from the LED, and the LED lights either way.
+
+**A toolchain limitation that shapes every future vendor integration.** A
+module that reaches `read_slang` by way of `read_verilog` arrives already
+elaborated, so a parameter override from SystemVerilog fails — including
+for yosys's own `DELAYF`, whose parameters `cells_bb.v` does declare. Two
+ways out: declare the blackbox ourselves so the parameters are in front of
+the frontend that elaborates our RTL (`oca/hw/rtl/ecp5_prims.sv` does this
+for the four IO primitives), or wrap the vendor module in a thin Verilog
+wrapper that fixes its parameters and instantiate the wrapper. Both were
+verified end to end by synthesising to an ECP5 netlist.

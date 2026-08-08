@@ -65,8 +65,14 @@ drives one register from two `always` blocks on opposite edges, and
 `synth_ecp5` reports conflicting drivers on every bit rather than
 inferring `ODDRX1F`. `iddr.v` does elaborate, into fabric flip-flops on
 both edges instead of `IDDRX1F`. **The RGMII front end — DDR
-primitives, the RX clock delay and its ECLK routing — is therefore ours
-to write, behind the wrapper SPEC.md's portability rule requires.**
+primitives and the receive delay — is therefore ours to write, behind
+the wrapper SPEC.md's portability rule requires**, and it now exists as
+`oca/hw/rtl/oca_rgmii.sv`. (This entry said "the RX clock delay and its
+ECLK routing" until 2026-08-08. `IDDRX1F` has no `ECLK` port — its port
+list is `D, SCLK, RST, Q0, Q1` — and `ECLK` belongs to the x2 gearing
+primitives, which this design rejects. The delay is on the five data
+lines, not on the clock, so that the recovered clock keeps its dedicated
+path to a global buffer.)
 (`example/RV901T` is a Linsn RV901T, a Spartan-6 board, not a
 Colorlight.)
 
@@ -79,11 +85,17 @@ And the stack has a **64-bit variant** (`udp_complete_64` and the `_64`
 modules below it) alongside the 8-bit one, which changes where the width
 conversion belongs: at 48 MHz an 8-bit stream carries 384 Mbps, under
 the port, so the conversion has to happen on the 125 MHz side rather
-than in our clock domain. `eth_mac_1g_rgmii_fifo` with
+than in our clock domain. `eth_mac_1g_fifo` with
 `AXIS_DATA_WIDTH = 64` does the width conversion and the clock domain
 crossing in one instance, on the correct side of each — that
 configuration is not exercised by the upstream testbench, so it needs
-one of ours.
+one of ours. (This said `eth_mac_1g_rgmii_fifo` until 2026-08-08. That
+one **embeds `rgmii_phy_if`**, the module with no ECP5 target, so it
+cannot take our front end without editing a pinned vendor tree.
+`eth_mac_1g_fifo` is the same wrapper one layer down, taking GMII plus
+its two clocks, and it carries the same pair of `axis_async_fifo_adapter`
+instances. Its user side is already in our domain, so no further
+asynchronous FIFO is needed between the MAC and the UDP stack.)
 
 ## Environment rules
 
@@ -527,7 +539,10 @@ core and never updated as the design grew by 3000 LUTs.
   **And one Ethernet port costs 8422 LUTs, 19.2% of the device**,
   measured out-of-context on this toolchain rather than estimated:
   `udp_complete_64` 7147, `eth_mac_1g_rgmii_fifo` at 64 bits 1214, and
-  ~61 for the RGMII front end. What that leaves:
+  ~61 for the RGMII front end. The MAC figure is that module as
+  measured; the build now uses `eth_mac_1g_fifo`, which is the same
+  wrapper without the `rgmii_phy_if` the ~61 accounts for, so the total
+  does not move. What that leaves:
 
   | configuration | LUTs | of device |
   |---|---|---|
@@ -613,15 +628,16 @@ core and never updated as the design grew by 3000 LUTs.
   per-file floors report ok in all three cases.
 - Next: **the Ethernet integration**, designed in
   `docs/design/2026-08-05-ethernet-integration.md` and needing the board
-  (expected ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII
-  front end written by us around the ECP5 DDR primitives with its RX
-  delay as a parameter rather than a constant, PLL, reset and the
-  Colorlight i9 pin constraints. **The 8-to-64-bit width conversion is
-  not in our clock domain**: at ~48 MHz an 8-bit stream carries
-  384 Mbps, under the port it is meant to feed, so it happens on the
-  125 MHz side inside `eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`,
-  which does the conversion and the clock domain crossing in one
-  instance. Upstream's testbench does not exercise that configuration,
+  (expected ~2026-08-17). `verilog-ethernet` is now a submodule at
+  `oca/hw/vendor/verilog-ethernet`, pinned to 77320a94, and the RGMII
+  front end is written: `oca/hw/rtl/oca_rgmii.sv`, with the receive
+  delay movable at run time rather than fixed in the bitstream. Still
+  to come: the PLL, reset, the Colorlight i9 pin constraints and the
+  top level. **The 8-to-64-bit width conversion is not in our clock
+  domain**: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port
+  it is meant to feed, so it happens on the 125 MHz side inside
+  `eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64`, which does the
+  conversion and the clock domain crossing in one instance. Upstream's testbench does not exercise that configuration,
   so it needs one of ours — as do the RGMII wrapper and the whole path
   from a synthetic frame back out to one, all three of them buildable
   without the board. `openFPGALoader` is not in `tools/` yet and there
