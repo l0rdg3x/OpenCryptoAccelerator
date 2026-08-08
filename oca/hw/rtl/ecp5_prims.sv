@@ -20,7 +20,19 @@
  * module is the one way to make this worse.
  */
 
+/*
+ * A blackbox has no body, so every port is unread and every output
+ * undriven and every parameter unused. Those four warnings are the
+ * declaration doing its job, and they are waived here rather than
+ * globally so that a real one elsewhere still stops the build. Without
+ * this the ECP5 branch of oca_rgmii.sv has no lint gate at all: the
+ * command AGENTS.md documents passes only because --top-module oca_core
+ * never reaches these two files.
+ */
 /* verilator lint_off DECLFILENAME */
+/* verilator lint_off UNUSEDSIGNAL */
+/* verilator lint_off UNUSEDPARAM */
+/* verilator lint_off UNDRIVEN */
 
 (* blackbox *)
 module DELAYF #(
@@ -66,4 +78,7 @@ module ODDRX1F (
 );
 endmodule
 
+/* verilator lint_on UNDRIVEN */
+/* verilator lint_on UNUSEDPARAM */
+/* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on DECLFILENAME */
