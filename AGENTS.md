@@ -250,6 +250,21 @@ core and never updated as the design grew by 3000 LUTs.
 - yosys reads these cores with `read_slang`, not `read_verilog -sv`:
   the Verilog-2005 frontend rejects functions with `return` and
   concatenation assignments, which the RTL uses throughout.
+- **Never invoke `yosys` or `nextpnr-ecp5` directly. Go through
+  `hw/syn/run_synth.py`**, which bounds every stage with a hard
+  wall-clock timeout and kills the whole process group when one is hit.
+  A build that has produced nothing after half an hour will not produce
+  anything by carrying on, and a synthesis nobody is watching is worse
+  than no synthesis: it saturates a core and hides whether anything is
+  progressing. This has happened twice — a stalled yosys that outlived
+  the agent that started it, and a caller that wrote its own two-hour
+  timeout and then had its orphaned shells relaunch the job after its
+  children were killed. If a build genuinely needs longer, raise it with
+  `--timeout`; do not route around the bound. The `Stop` hook in
+  `.claude/hooks/no-runaway-builds.sh` is the net under the cases that
+  bypass this anyway: it reports every live build at the end of a turn
+  and kills anything past an hour, identifying processes by
+  `/proc/PID/exe` because the command line may carry a relative path.
 - cocotb gotchas: runner import is `cocotb_tools.runner` on cocotb 2.x
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after

@@ -19,9 +19,12 @@ Usage, from oca/:
 
 import argparse
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -128,16 +131,73 @@ DEFAULT_DEVICE = "45k"
 DEFAULT_PACKAGE = "CABGA381"
 DEFAULT_SPEED = 6
 
+# Hard bound per stage. Generous enough for the whole Ethernet top, and
+# finite, which is the point: a build that has produced nothing after
+# this long has not produced anything by carrying on either. Raise it
+# deliberately with --timeout; never remove it.
+DEFAULT_TIMEOUT = 1800
 
-def run(cmd, log_path):
-    """Run cmd, tee-ing its output to log_path. Returns the exit code."""
-    print("+ " + " ".join(str(c) for c in cmd), flush=True)
+
+def run(cmd, log_path, timeout):
+    """Run cmd under a hard wall-clock bound. Returns the exit code.
+
+    The bound lives here, in the only thing that starts yosys and
+    nextpnr, and not in whoever calls it. Twice a build in this project
+    ran for tens of minutes to no result: once a stalled yosys that
+    outlived the agent that started it, once a caller that used a two
+    hour timeout where it had been told fifteen minutes. An instruction
+    to bound a command is a request; this is a control.
+
+    The child is started in its own session, so the kill can take the
+    whole process group. That is the part that failed before: yosys
+    spawns helpers, and killing the parent alone leaves them holding a
+    core each with nobody watching.
+    """
+    print(f"+ [<= {timeout}s] " + " ".join(str(c) for c in cmd), flush=True)
+    started = time.monotonic()
     with open(log_path, "w") as log:
-        proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
-    if proc.returncode != 0:
-        print(f"FAILED (rc={proc.returncode}), see {log_path}", file=sys.stderr)
+        # start_new_session: the child leads its own process group.
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = kill_group(proc, timeout, log_path)
+    if rc != 0:
+        elapsed = time.monotonic() - started
+        print(f"FAILED (rc={rc}) after {elapsed:.0f}s, see {log_path}",
+              file=sys.stderr)
         sys.stderr.write(log_path.read_text()[-4000:])
-    return proc.returncode
+    return rc
+
+
+def kill_group(proc, timeout, log_path):
+    """Take down a timed-out child and everything it started."""
+    pgid = os.getpgid(proc.pid)
+    print(f"\nTIMEOUT after {timeout}s — killing process group {pgid}.\n"
+          f"Nothing was measured. The log so far is {log_path}.\n"
+          f"If this build legitimately needs longer, say so with --timeout "
+          f"rather than removing the bound.", file=sys.stderr)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            break
+        try:
+            proc.wait(timeout=10)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    # Report what, if anything, outlived the kill: a silent survivor is
+    # exactly the failure this function exists to end.
+    try:
+        os.killpg(pgid, 0)
+        print(f"WARNING: process group {pgid} still exists after SIGKILL; "
+              f"check with `ps -eo pid,pgid,etime,comm | grep {pgid}`",
+              file=sys.stderr)
+    except ProcessLookupError:
+        pass
+    return 124
 
 
 def check_cmp2lut():
@@ -250,7 +310,7 @@ def check_netlist(top, netlist):
     return rc
 
 
-def synth(top, json_out, log):
+def synth(top, json_out, log, timeout):
     """Elaborate one design, through one or both yosys frontends.
 
     read_slang, not read_verilog -sv: the yosys Verilog-2005 frontend
@@ -274,7 +334,7 @@ def synth(top, json_out, log):
     cmds.append(f"read_slang --top {top} " + " ".join(str(RTL / s) for s in d.sv))
     cmds.append(f"synth_ecp5 -top {top} -json {json_out}")
     cmds.append("stat")
-    return run([YOSYS, "-p", "; ".join(cmds)], log)
+    return run([YOSYS, "-p", "; ".join(cmds)], log, timeout)
 
 
 def pnr(top, json_in, args, report, log):
@@ -304,7 +364,7 @@ def pnr(top, json_in, args, report, log):
         # package has balls, so the core is placed as a locked macro. The
         # numbers characterise the core and not a pinned-out design.
         cmd += ["--out-of-context"]
-    return run(cmd, log)
+    return run(cmd, log, args.timeout)
 
 
 def summarise(top, args, report_path):
@@ -352,6 +412,11 @@ def main():
                     help="clock constraint in MHz (default 100)")
     ap.add_argument("--seed", type=int, default=1,
                     help="nextpnr placer seed, fixed for reproducibility")
+    ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+                    help=f"hard wall-clock bound per stage in seconds "
+                         f"(default {DEFAULT_TIMEOUT}). A stage that hits it "
+                         f"is killed with its whole process group and nothing "
+                         f"is measured.")
     args = ap.parse_args()
 
     for tool in (YOSYS, NEXTPNR):
@@ -364,7 +429,7 @@ def main():
 
     check_cmp2lut()
 
-    rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log")
+    rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log", args.timeout)
     if rc != 0:
         return rc
     rc = check_netlist(args.top, netlist)
