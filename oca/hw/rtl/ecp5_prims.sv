@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CERN-OHL-P-2.0
 /*
- * Blackbox declarations for the ECP5 IO primitives this design instantiates.
+ * Blackbox declarations for the ECP5 hard primitives this design
+ * instantiates: the four IO cells of the RGMII front end, and the PLL.
  *
  * They exist in yosys already, in ecp5/cells_bb.v, complete with their
  * parameters — but that file has to be read by read_verilog, and a module
@@ -75,6 +76,82 @@ module ODDRX1F (
     input  SCLK,
     input  RST,
     output Q
+);
+endmodule
+
+/*
+ * The PLL. Same reason as the four above — its 37 parameters have to be
+ * in front of slang for oca_clkrst.sv to override any of them — plus one
+ * of its own: nextpnr reads five of the analogue settings from cell
+ * ATTRIBUTES rather than parameters (ecp5/bitstream.cc:1279-1286), and
+ * defaults every one of them to zero. ICP_CURRENT=0 is a charge pump
+ * with no current. So the instantiation carries those as attributes and
+ * they are not, and must not become, parameters here.
+ *
+ * Only the ports and parameters exist below; the analogue attributes
+ * belong to the instance.
+ */
+(* blackbox *)
+module EHXPLLL #(
+    parameter CLKI_DIV = 1,
+    parameter CLKFB_DIV = 1,
+    parameter CLKOP_DIV = 8,
+    parameter CLKOS_DIV = 8,
+    parameter CLKOS2_DIV = 8,
+    parameter CLKOS3_DIV = 8,
+    parameter CLKOP_ENABLE = "ENABLED",
+    parameter CLKOS_ENABLE = "DISABLED",
+    parameter CLKOS2_ENABLE = "DISABLED",
+    parameter CLKOS3_ENABLE = "DISABLED",
+    parameter CLKOP_CPHASE = 0,
+    parameter CLKOS_CPHASE = 0,
+    parameter CLKOS2_CPHASE = 0,
+    parameter CLKOS3_CPHASE = 0,
+    parameter CLKOP_FPHASE = 0,
+    parameter CLKOS_FPHASE = 0,
+    parameter CLKOS2_FPHASE = 0,
+    parameter CLKOS3_FPHASE = 0,
+    parameter FEEDBK_PATH = "CLKOP",
+    parameter CLKOP_TRIM_POL = "RISING",
+    parameter CLKOP_TRIM_DELAY = 0,
+    parameter CLKOS_TRIM_POL = "RISING",
+    parameter CLKOS_TRIM_DELAY = 0,
+    parameter OUTDIVIDER_MUXA = "DIVA",
+    parameter OUTDIVIDER_MUXB = "DIVB",
+    parameter OUTDIVIDER_MUXC = "DIVC",
+    parameter OUTDIVIDER_MUXD = "DIVD",
+    parameter PLL_LOCK_MODE = 0,
+    parameter PLL_LOCK_DELAY = 200,
+    parameter STDBY_ENABLE = "DISABLED",
+    parameter REFIN_RESET = "DISABLED",
+    parameter SYNC_ENABLE = "DISABLED",
+    parameter INT_LOCK_STICKY = "ENABLED",
+    parameter DPHASE_SOURCE = "DISABLED",
+    parameter PLLRST_ENA = "DISABLED",
+    parameter INTFB_WAKE = "DISABLED"
+) (
+    input  CLKI,
+    input  CLKFB,
+    input  PHASESEL1,
+    input  PHASESEL0,
+    input  PHASEDIR,
+    input  PHASESTEP,
+    input  PHASELOADREG,
+    input  STDBY,
+    input  PLLWAKESYNC,
+    input  RST,
+    input  ENCLKOP,
+    input  ENCLKOS,
+    input  ENCLKOS2,
+    input  ENCLKOS3,
+    output CLKOP,
+    output CLKOS,
+    output CLKOS2,
+    output CLKOS3,
+    output LOCK,
+    output INTLOCK,
+    output REFCLK,
+    output CLKINTFB
 );
 endmodule
 

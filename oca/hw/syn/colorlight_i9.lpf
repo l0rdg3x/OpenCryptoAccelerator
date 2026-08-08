@@ -1,0 +1,309 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — one oca_core behind one Ethernet port.
+# LFE5U-45F-6BG381C, CABGA381, speed grade 6 (BOM-MVP.md).
+#
+# PROVENANCE OF EVERY BALL. Each one was read out of prjtrellis's own IO
+# database for this device and package —
+# tools/trellis/share/trellis/database/ECP5/LFE5U-45F/iodb.json, package
+# CABGA381, 203 balls — for existence, bank and clock capability, then
+# cross-checked against two independent pin lists: litex-boards'
+# colorlight_i5.py (_io_v7_2, BSD-2-Clause) and the board vendor's own
+# colorlight_i9_v7.2.md. All three agree on all seventeen pins below.
+#
+# The vendor numbers the two PHYs the other way round from litex: the
+# bank 6 port constrained here is litex's eth0 and the vendor's
+# ETH-PHY1 (U30). litex says so itself, in a comment — the numbering
+# follows the PHYA[0] straps, not the silkscreen. Which RJ45 that is on
+# the board is a bench question, not a file question.
+#
+# ONE BANK DECIDES EVERYTHING. Every pin in this file is in bank 6: the
+# 25 MHz oscillator (P3), the LED (L2), the PHY reset (P4), MDIO and MDC
+# (P5, N5), and all twelve RGMII signals. The design document records
+# that Ethernet port 0 and the LED share bank 6; the clock, the reset
+# and the management pins are in it too, so this build has exactly one
+# VCCIO to get right and no second bank to hide a mistake in.
+#
+# And this file cannot set it. BANK and BANK_VCC are accepted by
+# nextpnr's LPF parser and stored on the cell (ecp5/lpf.cc:38) and then
+# never read by anything — a grep over the whole ecp5 backend finds that
+# one line and nothing else. The single exception is bank 8, the
+# configuration bank, whose VCCIO comes from SYSCONFIG CONFIG_IOVOLTAGE
+# (ecp5/bitstream.cc:684). Bank 6's VCCIO is a board rail. It is
+# measured, never declared.
+#
+# ----------------------------------------------------------------------
+# IO_TYPE: LVCMOS33, and what would follow from that being wrong
+# ----------------------------------------------------------------------
+#
+# Two sources, and they contradict each other. litex-boards drives every
+# clock, LED and Ethernet signal on this board family as LVCMOS33 —
+# checked line by line in colorlight_i5.py, all of clk25, user_led_n,
+# eth_clocks 0/1 and eth 0/1, on both the 7.0 map and the 7.2 deep copy.
+# The vendor's own src/i9/blink/blink.lpf declares the LED LVCMOS25.
+#
+# But read the vendor's file whole, because it is six lines long and it
+# contradicts itself:
+#
+#     LOCATE COMP "clk_i" SITE "P3";
+#     IOBUF PORT "clk_i" IO_TYPE=LVCMOS33;
+#     FREQUENCY PORT "clk_i" 25 MHZ;
+#     LOCATE COMP "led_o" SITE "L2";
+#     IOBUF PORT "led_o" IO_TYPE=LVCMOS25;
+#
+# P3 and L2 are both in bank 6. The vendor declares one of them 3V3 and
+# the other 2V5 in the same bank of the same file, and nextpnr builds it
+# without a murmur — because its bank consistency check runs only over
+# outputs and referenced types (ecp5/bitstream.cc:653), so the input at
+# P3 neither votes nor is checked, and the LED is the only voter there
+# is. The vendor's LVCMOS25 is therefore not evidence about the rail: it
+# is the one line in that file that nothing could have checked.
+#
+# So LVCMOS33 is taken here, on four grounds. Both sources agree on P3,
+# in bank 6, and only the LED is in dispute. litex's declaration covers
+# all seventeen pins and is what LiteEth designs on this board family
+# are built with, while the vendor's covers two. DRIVE can only be
+# written for LVCMOS33 (ecp5/bitstream.cc:888; anything else warns once
+# and drops the attribute), so choosing 2V5 would forfeit the one
+# constraint-file knob on transmit edge rate — the knob the design
+# document's falsifiable prediction about the transmit direction may
+# need. And a wrong declaration here damages nothing: the driver is
+# powered from VCCIO whatever it is called, so the FPGA cannot be made
+# to drive above the rail by a line of text.
+#
+# What each wrong combination actually does, since "it is wrong" is not
+# a symptom anyone can look for:
+#
+#  * Bank 6 is 3V3, declared LVCMOS33 (the assumption). Correct.
+#
+#  * Bank 6 is 2V5, declared LVCMOS33 — OUTPUTS. Builds, programs, runs.
+#    BASE_TYPE becomes OUTPUT_LVCMOS33 (ecp5/bitstream.cc:832) and the
+#    drive-strength codes are the 3V3 ladder applied to a 2V5 rail, so
+#    edge rate and output impedance are not what the codes say. TXD and
+#    TXC still swing 0..2.5 V, which the B50612D accepts on a 2V5
+#    OVDD_RGMII. Most likely works; margin unquantified.
+#
+#  * Bank 6 is 2V5, declared LVCMOS33 — INPUTS. THE SILENT CASE. A pure
+#    input never enters the bank consistency check at all — the
+#    condition is `dir != "INPUT" || is_referenced(...)`, and LVCMOS33
+#    is not a referenced standard — so the seven receive pins here vote
+#    on nothing and are checked against nothing. But their IO_TYPE is
+#    still written: BASE_TYPE becomes INPUT_LVCMOS33 unconditionally,
+#    which moves the receiver threshold to roughly half of 3.3 V against
+#    a signal that only reaches 2.5 V. High-side noise margin drops from
+#    about 1.25 V to about 0.85 V on five DDR lines at 125 MHz. There is
+#    no diagnostic anywhere in the flow. This is the combination that
+#    produces a link which comes up and drops packets, and it is why the
+#    rail is measured before the first bitstream and not after the first
+#    symptom.
+#
+#  * Bank 6 is 3V3, declared LVCMOS25. Builds. Receiver threshold sits
+#    near 1.25 V against a 3.3 V swing, which is generous on the high
+#    side and thin on the low side, and DRIVE is silently unavailable.
+#
+# The blink test of bring-up step 2 cannot resolve any of this. On the
+# i5 the LED was U16, in bank 3; the v7.2 deep copy moved it to L2, in
+# bank 6. A blink design contains one output, so that output alone fixes
+# bank 6's VCCIO in the bitstream and the LED lights on either rail.
+#
+# ----------------------------------------------------------------------
+# HOW THIS FILE CAN BE WRONG WITHOUT SAYING SO, AND WHAT CATCHES IT
+# ----------------------------------------------------------------------
+#
+# A LOCATE COMP or IOBUF PORT naming a cell that does not exist is
+# skipped with no message at all (ecp5/lpf.cc:144 and :155 — the whole
+# body is inside `if (fnd_cell != cells.end())`). Rename a port in the
+# top and its constraint here stops applying, silently.
+#
+# Three things do catch it, and they are the reason this file is
+# checkable at all:
+#
+#  1. Any top-level IO with no LOCATE is a hard error naming the port —
+#     "IO '<name>' is unconstrained in LPF" (ecp5/main.cc:287).
+#     run_synth.py deliberately does not pass --lpf-allow-unconstrained.
+#  2. Therefore, COUNTING IS A PROOF. This file constrains 17 ports. If
+#     the design also has 17 top-level IO and the build does not raise
+#     the unconstrained error, then no LOCATE here is stale: a stale one
+#     would leave one real port unconstrained. Both halves are needed;
+#     neither alone says anything.
+#  3. A FREQUENCY line naming a net that does not exist DOES warn —
+#     "net '<name>' does not exist in design, ignoring clock
+#     constraint" (common/kernel/basectx.cc:107). The two FREQUENCY
+#     lines below therefore double as a spelling check on clk25 and
+#     rgmii_rx_clk.
+#
+# The top-level port list this file requires, exactly:
+#
+#     clk25, led_n, phy_rst_n, phy_mdio, phy_mdc,
+#     rgmii_rx_clk, rgmii_rxd[3:0], rgmii_rx_ctl,
+#     rgmii_tx_clk, rgmii_txd[3:0], rgmii_tx_ctl
+#
+# The RGMII names are oca_rgmii.sv's own pad-side port names, so the top
+# can pass them straight through. Vector bits are constrained per bit
+# because that is how nextpnr names them; a one-bit vector would also be
+# matched by its scalar name (ecp5/lpf.cc:139).
+#
+# The two vectors must be declared [3:0] and not [0:3]. nextpnr builds a
+# buffer name per port bit as base + '[' + (offset + index) + ']' for a
+# downto port and offset + length - index - 1 for an upto one
+# (frontend/frontend_base.h:367-381). Both declarations produce the same
+# four names, wired to opposite bits. Nothing would complain and the
+# nibbles would be reversed on the wire.
+#
+# ----------------------------------------------------------------------
+# WHAT IS DELIBERATELY ABSENT
+# ----------------------------------------------------------------------
+#
+# Ethernet port 1 (bank 3: U19 U20 T19 T20 R20 P19 L19 P20 N19 N20 M19
+# M20) is not here. The area measurement says two ports do not fit —
+# 94.5% of the device with two cores, and this device stopped routing at
+# 76.4%. Adding those twelve lines would also put a second, independent
+# VCCIO in play.
+#
+# The reset button at K18 is not here either: it is in bank 2, and this
+# build takes its reset from the PLL lock (oca_clkrst.sv). Adding it
+# means adding a bank.
+#
+# No SYSCONFIG. Nothing in this build boots from flash — bring-up loads
+# over JTAG — so ecppack's defaults stand, and the only VCCIO SYSCONFIG
+# could set is bank 8's.
+#
+# No BLOCK RESETPATHS or BLOCK ASYNCPATHS. LiteX emits both into every
+# .lpf it writes and nextpnr accepts both and then does nothing with
+# them (ecp5/lpf.cc:86-89 has no action, only a warning for the forms it
+# does not know). They would be cargo.
+#
+# No DRIVE, PULLMODE or SLEWRATE. litex sets none of them on these
+# seventeen pins either, so the ecppack defaults are what this board
+# family is known to run with. DRIVE remains available on every pin
+# here, which is a consequence of the LVCMOS33 choice above.
+#
+# ----------------------------------------------------------------------
+# CLOCKS
+# ----------------------------------------------------------------------
+#
+# Only two clocks enter the chip through a pin, and only those two are
+# declared here. The other two — clk_sys and clk_tx — come out of the
+# PLL, and nextpnr DERIVES their constraints from the EHXPLLL
+# parameters: it reads the constraint on CLKI, multiplies by
+# CLKFB_DIV * CLKOP_DIV / CLKI_DIV to get the VCO, divides by each
+# output divider, and logs "Derived frequency constraint of X MHz for
+# net Y" (ecp5/pack.cc:2982-3032). Constraining them here as well would
+# need their post-synthesis hierarchical net names, which this file
+# cannot know, and would only be able to disagree with the derivation.
+#
+# So the check on the PLL is to read those two log lines. With
+# oca_clkrst.sv's parameters they must say 125.0 MHz and 48.1 MHz. Note
+# that nextpnr reports a VCO outside the legal 400-800 MHz range with
+# log_info and nothing stronger (ecp5/pack.cc:3006), which is why
+# oca_clkrst.sv carries its own elaboration guard on it.
+#
+# rgmii_rx_clk is constrained at its gigabit rate. The PHY drives it at
+# 25 MHz at 100BASE-TX and 2.5 MHz at 10BASE-T, so 125 MHz is the worst
+# case and the one worth constraining — but note that it is not present
+# at all until the link is up.
+
+FREQUENCY PORT "clk25" 25 MHZ;
+FREQUENCY PORT "rgmii_rx_clk" 125 MHZ;
+
+# ----------------------------------------------------------------------
+# Bank 6 — oscillator, LED, PHY management
+# ----------------------------------------------------------------------
+#
+# P3 is LLC_GPLL0T_IN, a dedicated PLL reference input: the twelve such
+# balls on CABGA381 are A4/A5, A6/B6, A19/B20, C18/D17, P3/P4 and
+# U16/T17, and P3 is one of them. That is what lets oca_clkrst.sv drive
+# EHXPLLL.CLKI without general routing.
+#
+# P4, the PHY reset, is LLC_GPLL0C_IN — the complement half of P3's own
+# pair. It is an ordinary PIO and driving it as an output is fine, but
+# it does mean the differential form of this PLL input is spoken for.
+#
+# L2 is the LED. Active low, from litex's user_led_n; unverified on
+# silicon. It moved here from U16 in the v7.2 revision, which is what
+# put it in the same bank as Ethernet port 0.
+
+LOCATE COMP "clk25"     SITE "P3";
+IOBUF  PORT "clk25"     IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n"     SITE "L2";
+IOBUF  PORT "led_n"     IO_TYPE=LVCMOS33;
+
+LOCATE COMP "phy_rst_n" SITE "P4";
+IOBUF  PORT "phy_rst_n" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "phy_mdio"  SITE "P5";
+IOBUF  PORT "phy_mdio"  IO_TYPE=LVCMOS33;
+
+LOCATE COMP "phy_mdc"   SITE "N5";
+IOBUF  PORT "phy_mdc"   IO_TYPE=LVCMOS33;
+
+# ----------------------------------------------------------------------
+# Bank 6 — RGMII, receive
+# ----------------------------------------------------------------------
+#
+# H2 is PCLKT6_0, a primary clock input for this half of the bank, which
+# is what lets the recovered clock reach a global without going through
+# fabric. No PLL can clean it up: the dedicated PLL reference inputs are
+# the twelve balls listed above and H2 is not among them.
+#
+# All five receive pins are on the left edge (column 0, rows 35-68), so
+# each has a full IOLOGIC rather than the reduced SIOLOGIC that top and
+# bottom IO get (nextpnr chooses by row, ecp5/pack.cc:1988) — DELAYF and
+# IDDRX1F both need it. They are also why these LOCATEs are load
+# bearing: nextpnr refuses to absorb a delay or a DDR register into a
+# PIO that is not pin-constrained, with "IOLOGIC functionality (DDR,
+# DELAY, DQS, etc) can only be used with pin-constrained PIO"
+# (ecp5/pack.cc:1975). Delete one of these five lines and the build
+# stops with that message rather than placing the cell somewhere else.
+
+LOCATE COMP "rgmii_rx_clk" SITE "H2";
+IOBUF  PORT "rgmii_rx_clk" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_rx_ctl" SITE "P2";
+IOBUF  PORT "rgmii_rx_ctl" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_rxd[0]" SITE "K2";
+IOBUF  PORT "rgmii_rxd[0]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_rxd[1]" SITE "L1";
+IOBUF  PORT "rgmii_rxd[1]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_rxd[2]" SITE "N1";
+IOBUF  PORT "rgmii_rxd[2]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_rxd[3]" SITE "P1";
+IOBUF  PORT "rgmii_rxd[3]" IO_TYPE=LVCMOS33;
+
+# ----------------------------------------------------------------------
+# Bank 6 — RGMII, transmit
+# ----------------------------------------------------------------------
+#
+# G1, which the vendor's table calls GTXCLK, is PCLKC6_0 — the
+# complement of the very pair whose true half, H2, carries the receive
+# clock. Two 125 MHz clocks on one differential pair of balls, one in
+# and one out. Nothing in the flow objects and nothing about it is our
+# choice, but it is worth knowing before blaming the delay value for
+# marginal receive.
+#
+# G2 is PCLKT6_1 and J3 is GR_PCLK6_1: clock-capable balls carrying
+# plain data here, which costs nothing but does spend two of the bank's
+# clock inputs.
+
+LOCATE COMP "rgmii_tx_clk" SITE "G1";
+IOBUF  PORT "rgmii_tx_clk" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_tx_ctl" SITE "K1";
+IOBUF  PORT "rgmii_tx_ctl" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_txd[0]" SITE "G2";
+IOBUF  PORT "rgmii_txd[0]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_txd[1]" SITE "H1";
+IOBUF  PORT "rgmii_txd[1]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_txd[2]" SITE "J1";
+IOBUF  PORT "rgmii_txd[2]" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "rgmii_txd[3]" SITE "J3";
+IOBUF  PORT "rgmii_txd[3]" IO_TYPE=LVCMOS33;
