@@ -5,11 +5,12 @@ Runs the project-local open toolchain (`tools/yosys`, `tools/nextpnr`,
 `tools/trellis`) on one of the RTL cores and reports area and Fmax.
 
 The cores expose wide internal buses (512-bit data blocks), far more
-signals than the package has pins, so nextpnr runs with
-`--out-of-context`: no IO buffers are inserted and the design is placed
-as a locked macro. The numbers therefore characterise the core itself,
-not a pinned-out design; a top level with a real host interface will add
-its own IO and routing pressure.
+signals than the package has pins, so a design with no pin constraints
+runs with `--out-of-context`: no IO buffers are inserted and it is
+placed as a locked macro. Those numbers characterise the core itself and
+not a pinned-out design. A design that carries an `.lpf` is built the
+other way, with real IO and the routing pressure that comes with it, and
+the two are not comparable.
 
 Usage, from oca/:
     .venv/bin/python hw/syn/run_synth.py chacha20_poly1305
@@ -22,6 +23,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[3]
 RTL = ROOT / "oca" / "hw" / "rtl"
@@ -32,17 +34,41 @@ YOSYS = ROOT / "tools" / "yosys" / "bin" / "yosys"
 NEXTPNR = ROOT / "tools" / "nextpnr" / "bin" / "nextpnr-ecp5"
 
 # Sources per top module, in dependency order.
+#
+# sv       SystemVerilog of ours, read by read_slang, relative to hw/rtl/.
+# verilog  Verilog read by yosys's own frontend before it, relative to the
+#          repository root: the vendored Ethernet stack and the wrappers
+#          that fix its parameters.
+# incdirs  include paths for that Verilog, relative to the repository root.
+# lpf      pin constraints, relative to hw/syn/. A design with one is
+#          built with real IO; a design without one is built
+#          out-of-context.
+class Design(NamedTuple):
+    sv: list
+    verilog: list = []
+    incdirs: list = []
+    lpf: str = ""
+
+
+ENGINE = ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"]
+CORE = ENGINE + ["oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+                 "oca_core.sv"]
+
 DESIGNS = {
-    "chacha20": ["chacha20.sv"],
-    "poly1305": ["poly1305.sv"],
-    "chacha20_poly1305": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"],
-    "oca_core": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
-                 "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
-                 "oca_core.sv"],
-    "oca_dual": ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
-                 "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
-                 "oca_core.sv", "oca_dual.sv"],
+    "chacha20": Design(sv=["chacha20.sv"]),
+    "poly1305": Design(sv=["poly1305.sv"]),
+    "chacha20_poly1305": Design(sv=ENGINE),
+    "oca_core": Design(sv=CORE),
+    "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
 }
+
+# oca_rgmii is deliberately not a target of its own. It cannot be built
+# out-of-context: nextpnr absorbs a DELAYF or DELAYG into a pin's IOLOGIC
+# and refuses one that does not reach a top-level port —
+# "DELAYG 'gen_ecp5.u_tx_clk_delay' must be connected directly to top
+# level input or output" — and out-of-context inserts no IO at all. It is
+# built as part of a pinned top, which is the only place its numbers mean
+# anything anyway, since the delay elements cost no fabric.
 
 # Minimum live flip-flops a netlist must contain, keyed by the RTL file
 # the cells are attributed to. Simulation cannot see synthesis, so these
@@ -224,28 +250,41 @@ def check_netlist(top, netlist):
     return rc
 
 
-def synth(top, sources, json_out, log):
-    # read_slang, not read_verilog -sv: the yosys Verilog-2005 frontend
-    # rejects the SystemVerilog used by the cores (functions with return,
-    # concatenation assignments).
-    script = "; ".join(
-        [
-            f"read_slang --top {top} " + " ".join(str(RTL / s) for s in sources),
-            f"synth_ecp5 -top {top} -json {json_out}",
-            "stat",
-        ]
-    )
-    return run([YOSYS, "-p", script], log)
+def synth(top, json_out, log):
+    """Elaborate one design, through one or both yosys frontends.
+
+    read_slang, not read_verilog -sv: the yosys Verilog-2005 frontend
+    rejects the SystemVerilog used by the cores (functions with return,
+    concatenation assignments).
+
+    A design that also carries Verilog — the vendored Ethernet stack and
+    the wrappers that fix its parameters — reads that first. The order is
+    not cosmetic: read_slang can see modules already in the design and
+    checks its instantiations against them, but a module that arrives
+    through read_verilog arrives already elaborated, so a parameter
+    override from the SystemVerilog side fails with "parameter 'X' does
+    not exist". That is why the vendor modules are instantiated from
+    Verilog wrappers and never from our own RTL directly.
+    """
+    d = DESIGNS[top]
+    cmds = []
+    if d.verilog:
+        incs = " ".join(f"-I{ROOT / i}" for i in d.incdirs)
+        cmds.append(f"read_verilog {incs} " + " ".join(str(ROOT / v) for v in d.verilog))
+    cmds.append(f"read_slang --top {top} " + " ".join(str(RTL / s) for s in d.sv))
+    cmds.append(f"synth_ecp5 -top {top} -json {json_out}")
+    cmds.append("stat")
+    return run([YOSYS, "-p", "; ".join(cmds)], log)
 
 
 def pnr(top, json_in, args, report, log):
+    d = DESIGNS[top]
     cmd = [
         NEXTPNR,
         f"--{args.device}",
         "--package", args.package,
         "--speed", str(args.speed),
         "--json", str(json_in),
-        "--out-of-context",
         "--freq", str(args.freq),
         "--seed", str(args.seed),
         # Characterisation run: a missed target must be reported, not fatal.
@@ -253,6 +292,18 @@ def pnr(top, json_in, args, report, log):
         "--report", str(report),
         "--write", str(BUILD / f"{top}_pnr.json"),
     ]
+    if d.lpf:
+        # A design with real pins. Every IO must be constrained: nextpnr
+        # skips a LOCATE naming a cell that does not exist without a word,
+        # so the unconstrained-IO check is the only thing that catches a
+        # misspelled port, and passing --lpf-allow-unconstrained would
+        # disable exactly that.
+        cmd += ["--lpf", str(SYN_DIR / d.lpf)]
+    else:
+        # No pins: the wide internal buses have far more signals than the
+        # package has balls, so the core is placed as a locked macro. The
+        # numbers characterise the core and not a pinned-out design.
+        cmd += ["--out-of-context"]
     return run(cmd, log)
 
 
@@ -313,7 +364,7 @@ def main():
 
     check_cmp2lut()
 
-    rc = synth(args.top, DESIGNS[args.top], netlist, BUILD / f"{args.top}.yosys.log")
+    rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log")
     if rc != 0:
         return rc
     rc = check_netlist(args.top, netlist)
