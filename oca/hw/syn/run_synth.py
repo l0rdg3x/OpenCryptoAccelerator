@@ -283,6 +283,11 @@ def check_netlist(top, netlist):
     floors = NETLIST_FF_FLOOR.get(top, {})
     total_floor = NETLIST_FF_TOTAL.get(top)
     if not floors and total_floor is None:
+        print(f"WARNING: {top} has no NETLIST_FF_FLOOR or NETLIST_FF_TOTAL "
+              f"entry — this run checked nothing about its netlist storage. "
+              f"Not fatal: measure a floor and add one once this top carries "
+              f"state worth guarding (see README.md, 'The cmp2lut trap').",
+              file=sys.stderr)
         return 0
     census = live_ff_census(top, netlist)
     print("\nlive flip-flops by source file:")
@@ -347,7 +352,14 @@ def pnr(top, json_in, args, report, log):
         "--json", str(json_in),
         "--freq", str(args.freq),
         "--seed", str(args.seed),
-        # Characterisation run: a missed target must be reported, not fatal.
+        # Always on, for both paths, so nextpnr runs to completion and
+        # writes its report either way. For --out-of-context that is the
+        # end of it: a missed target is characterisation, not failure.
+        # For a design with real pins, check_timing() below re-reads the
+        # same report and log and turns a missed *real* constraint into a
+        # build failure; this flag only stops nextpnr failing the build
+        # itself, which it would do for every clock it could not
+        # otherwise constrain too (common/kernel/timing_log.cc:230-235).
         "--timing-allow-fail",
         "--report", str(report),
         "--write", str(BUILD / f"{top}_pnr.json"),
@@ -365,6 +377,89 @@ def pnr(top, json_in, args, report, log):
         # numbers characterise the core and not a pinned-out design.
         cmd += ["--out-of-context"]
     return run(cmd, log, args.timeout)
+
+
+# Matches nextpnr's own log wording for a constraint that came from this
+# design rather than from --freq: a FREQUENCY line in the .lpf
+# (ecp5/lpf.cc:121, logged by BaseCtx::addClock as "constraining clock
+# net '%s' to %.02f MHz") and a constraint nextpnr propagated from one,
+# typically a PLL or clock-divider output (ecp5/pack.cc:2824/2853,
+# "Derived frequency constraint of %.1f MHz for net %s"). Every other
+# clock in the report still gets a "constraint" field — nextpnr applies
+# --freq to any net without a ClockConstraint
+# (common/kernel/timing.cc:1111) — but that number is nextpnr's
+# fallback, not a target this design set for itself.
+REAL_CONSTRAINT_PATTERNS = [
+    re.compile(r"constraining clock net '([^']+)' to [\d.]+ MHz"),
+    re.compile(r"Derived frequency constraint of [\d.]+ MHz for net (\S+)"),
+]
+
+
+def real_clock_constraints(nextpnr_log):
+    """Net names nextpnr constrained for real, read back from its own log."""
+    text = nextpnr_log.read_text()
+    names = set()
+    for pattern in REAL_CONSTRAINT_PATTERNS:
+        names |= set(pattern.findall(text))
+    return names
+
+
+def check_timing(top, report_path, nextpnr_log):
+    """Fail a pinned build that misses a constraint it actually carries.
+
+    A design with no `.lpf` is characterisation (see the module
+    docstring): there is no real constraint to check, so this returns 0
+    without reading anything, same as before this function existed.
+
+    A design with real pins gets checked: a clock nextpnr promotes to a
+    global buffer is renamed '$glbnet$<net>' in the report
+    (ecp5/globals.cc:465), which is why the match below tries both
+    forms. A clock nextpnr could not otherwise constrain still gets
+    --freq applied and printed by summarise() above; that is reported,
+    same as always, not failed here, because it is not a target this
+    design set for itself — see REAL_CONSTRAINT_PATTERNS.
+    """
+    if not DESIGNS[top].lpf:
+        return 0
+    real = real_clock_constraints(nextpnr_log)
+    fmax = json.loads(report_path.read_text()).get("fmax", {})
+    rc = 0
+    fallback = []
+    print("\ntiming check (pinned build, constraints this design carries):")
+    for clock, data in sorted(fmax.items()):
+        bare = clock[len("$glbnet$"):] if clock.startswith("$glbnet$") else clock
+        if clock not in real and bare not in real:
+            fallback.append(clock)
+            continue
+        achieved = data.get("achieved", 0.0)
+        constraint = data.get("constraint", 0.0)
+        status = "ok" if achieved >= constraint else "FAILED"
+        print(f"  {clock:<24} {achieved:>8.2f} MHz achieved "
+              f"(>= {constraint:.2f} MHz required) — {status}")
+        if achieved < constraint:
+            rc = 1
+    if fallback:
+        print(f"  no .lpf constraint reached these clocks, nextpnr's --freq "
+              f"default applied instead, not checked: {', '.join(fallback)}",
+              file=sys.stderr)
+    # A pinned build where nothing was checked is the failure this
+    # function exists to remove, not a quiet pass: it means every
+    # FREQUENCY line in the .lpf failed to reach a clock -- a misspelled
+    # net, a clock nextpnr renamed, or an .lpf that carries none at all
+    # -- and the fmax figures printed above are all --freq's default.
+    # Reporting that on stderr and returning 0 would be the same silent
+    # green this whole check was written to end.
+    if not any(c in real or c[len("$glbnet$"):] in real for c in fmax):
+        print("\nTiming NOT CHECKED: this design carries an .lpf, but not one "
+              "of its FREQUENCY constraints reached a clock in the report. "
+              "Every figure above is nextpnr's --freq default. Fix the .lpf "
+              "or the net names before trusting this build.", file=sys.stderr)
+        return 1
+    if rc:
+        print("\nTiming FAILED: a constraint this design's .lpf carries was "
+              "missed. This is a pinned build, not characterisation — see "
+              "hw/syn/README.md.", file=sys.stderr)
+    return rc
 
 
 def summarise(top, args, report_path):
@@ -435,12 +530,13 @@ def main():
     rc = check_netlist(args.top, netlist)
     if rc != 0:
         return rc
-    rc = pnr(args.top, netlist, args, report, BUILD / f"{args.top}.nextpnr.log")
+    nextpnr_log = BUILD / f"{args.top}.nextpnr.log"
+    rc = pnr(args.top, netlist, args, report, nextpnr_log)
     if rc != 0:
         return rc
 
     summarise(args.top, args, report)
-    return 0
+    return check_timing(args.top, report, nextpnr_log)
 
 
 if __name__ == "__main__":
