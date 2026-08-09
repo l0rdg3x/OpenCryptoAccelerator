@@ -79,11 +79,16 @@ And the stack has a **64-bit variant** (`udp_complete_64` and the `_64`
 modules below it) alongside the 8-bit one, which changes where the width
 conversion belongs: at 48 MHz an 8-bit stream carries 384 Mbps, under
 the port, so the conversion has to happen on the 125 MHz side rather
-than in our clock domain. `eth_mac_1g_rgmii_fifo` with
+than in our clock domain. `eth_mac_1g_fifo` with
 `AXIS_DATA_WIDTH = 64` does the width conversion and the clock domain
 crossing in one instance, on the correct side of each — that
 configuration is not exercised by the upstream testbench, so it needs
-one of ours.
+one of ours. (This named `eth_mac_1g_rgmii_fifo` until 2026-08-09. That
+wrapper **embeds `rgmii_phy_if`**, the module with no ECP5 target, so it
+cannot take our front end without editing a pinned vendor tree.
+`eth_mac_1g_fifo` is the same wrapper one layer down, taking GMII plus
+its two clocks, and it carries the same pair of
+`axis_async_fifo_adapter` instances.)
 
 ## Environment rules
 
@@ -717,18 +722,43 @@ core and never updated as the design grew by 3000 LUTs.
   per-file floors report ok in all three cases.
 - Next: **the Ethernet integration**, designed in
   `docs/design/2026-08-05-ethernet-integration.md` and needing the board
-  (expected ~2026-08-17): `verilog-ethernet` as a submodule, the RGMII
-  front end written by us around the ECP5 DDR primitives with its RX
-  delay as a parameter rather than a constant, PLL, reset and the
-  Colorlight i9 pin constraints. **The 8-to-64-bit width conversion is
-  not in our clock domain**: at ~48 MHz an 8-bit stream carries
-  384 Mbps, under the port it is meant to feed, so it happens on the
-  125 MHz side inside `eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`,
-  which does the conversion and the clock domain crossing in one
-  instance. Upstream's testbench does not exercise that configuration,
-  so it needs one of ours — as do the RGMII wrapper and the whole path
-  from a synthetic frame back out to one, all three of them buildable
-  without the board. `openFPGALoader` is not in `tools/` yet and there
-  is no programmer of any kind in the tree. What the board alone can
-  settle is listed in that document: the RGMII delay value and the IO
-  bank voltages above all.
+  (expected ~2026-08-17). **Half of it is written and lives on
+  `feat/ethernet-integration`, not here**: `verilog-ethernet` as a
+  submodule, `oca_rgmii.sv` (the RGMII front end around the ECP5 DDR
+  primitives, RX delay a parameter, 10 cocotb tests), `oca_clkrst.sv`
+  (PLL, three domains, reset — no testbench yet), `ecp5_prims.sv`,
+  `colorlight_i9.lpf`, and the parameter-fixing wrappers under
+  `oca/hw/rtl/vendor/` that the 8422-LUT port measurement was taken on.
+  **The 8-to-64-bit width conversion is not in our clock domain**: at
+  ~48 MHz an 8-bit stream carries 384 Mbps, under the port it is meant
+  to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
+  `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
+  crossing in one instance. (This said `eth_mac_1g_rgmii_fifo` until
+  2026-08-09; that wrapper embeds `rgmii_phy_if`, which has no ECP5
+  target, so it cannot take our front end without editing a pinned
+  vendor tree.) Upstream's testbench does not exercise the 64-bit
+  configuration, so it needs one of ours.
+
+  **What is missing, in the order it blocks things** (whole-project
+  review, 2026-08-09):
+  1. **No top level.** Nothing instantiates the pieces together, so
+     there has never been a place & route with real IO: no in-context
+     Fmax, no DP16KD budget, no bitstream, and no bench step past
+     "blink". `colorlight_i9.lpf` already fixes the port list.
+  2. **The seam between the UDP stack and `oca_core` is undesigned.**
+     `oca_core` presents a bare 64-bit AXI-Stream pair;
+     `udp_complete_64` presents a payload stream plus a header sideband
+     and expects one back. That is logic with its own failure modes, not
+     wiring, and it needs its own testbench.
+  3. **No programmer in the tree.** Bring-up step 1 is
+     `openFPGALoader --detect`, and `openFPGALoader` is in neither
+     branch nor in `scripts/build-toolchain.sh`.
+  4. `oca_clkrst.sv` has no testbench, and reset synchronisers are
+     exactly the thing that works in simulation and not on silicon.
+
+  What the board alone can settle is listed in the design document: the
+  RGMII delay value and the IO bank voltages above all. One trap is now
+  written down in `oca_rgmii.sv` and in the bring-up skill: the receive
+  delay is on the data lines by LiteEth precedent and not by geometry,
+  and a one-unit-interval misalignment cannot be repaired by any tap
+  value. `link_up` low while the PHY's own link LED is lit is the tell.

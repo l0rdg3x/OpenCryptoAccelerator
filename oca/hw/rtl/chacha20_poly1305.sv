@@ -23,10 +23,16 @@
  * the MAC FSM cannot terminate such a block (it counts 16-byte
  * sub-blocks in two bits, and mac_len + 15 wraps in seven). Presenting
  * one raises `err` instead: the message is abandoned there and then —
- * `busy` drops, `done` never pulses, no ciphertext or tag is produced —
- * and `err` stays high until the next `start`, which clears it and
- * begins a fresh message. A caller that ignores `err` loses the message,
- * never the engine.
+ * `busy` drops, `done` never pulses, no tag and no further ciphertext
+ * are produced — and `err` stays high until the next `start`, which
+ * clears it and begins a fresh message. A caller that ignores `err`
+ * loses the message, never the engine.
+ *
+ * `len_bad` is evaluated in S_ACCEPT only, so a message aborted at block
+ * N has already emitted the ciphertext of blocks 1..N-1 on `out_valid`.
+ * A retry must therefore use a fresh nonce: the same (key, nonce) with
+ * any change to the plaintext puts two plaintexts under one keystream.
+ * This header said "no ciphertext or tag is produced" until 2026-08-09.
  *
  * Decryption (dec=1): feed the ciphertext instead of the plaintext;
  * the output stream is the recovered plaintext and the MAC is computed
