@@ -310,7 +310,9 @@ us around the ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
 constraints. The 8-to-64-bit width conversion is not in our clock
 domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
 is meant to feed, so it happens on the 125 MHz side inside
-`eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`. Upstream has no
+`eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64` — not
+`eth_mac_1g_rgmii_fifo`, which embeds the `rgmii_phy_if` that has no
+ECP5 target. Upstream has no
 testbench for that configuration, so it needs one of ours — that
 testbench, one for the RGMII wrapper and one for the whole path from a
 synthetic frame back out to one are the work that does not need the
