@@ -170,6 +170,43 @@ static void run_tamper(const oca_ctx *ctx)
     }
 }
 
+/* A NULL pointer with a non-zero length must be rejected, never
+ * silently treated as empty: aad = NULL with aad_len > 0 used to
+ * produce a valid tag covering no AAD at all. The NULL, 0 pair must
+ * stay legal. */
+static void run_bad_args(const oca_ctx *ctx)
+{
+    const oca_vec_aead *v = &vecs_chacha20_poly1305[0];
+    uint8_t out[MAX_BUF], tag[16];
+    int rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                              v->key, v->key_len, v->nonce, v->nonce_len,
+                              NULL, 5, v->pt, v->pt_len, out, tag, sizeof(tag));
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt aad=NULL, aad_len=5 gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_decrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          NULL, 5, v->ct, v->pt_len, v->tag, 16, out);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: decrypt aad=NULL, aad_len=5 gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          NULL, 0, v->pt, v->pt_len, out, tag, sizeof(tag));
+    if (rc == OCA_OK) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt aad=NULL, aad_len=0 gave rc=%d\n", rc);
+        failures++;
+    }
+}
+
 int main(void)
 {
     oca_ctx *ctx = oca_init(OCA_BACKEND_SOFTWARE);
@@ -186,6 +223,7 @@ int main(void)
     run_aead_negative(ctx, OCA_AEAD_AES_128_GCM, 16, vecs_aes_gcm, N_VECS_AES_GCM);
     run_aead_negative(ctx, OCA_AEAD_AES_256_GCM, 32, vecs_aes_gcm, N_VECS_AES_GCM);
     run_tamper(ctx);
+    run_bad_args(ctx);
     run_mac(ctx, OCA_MAC_POLY1305, vecs_poly1305, N_VECS_POLY1305, 16);
     run_mac(ctx, OCA_MAC_HMAC_SHA256, vecs_hmac_sha256, N_VECS_HMAC_SHA256, 32);
     run_mac(ctx, OCA_MAC_BLAKE2S256, vecs_blake2s_keyed, N_VECS_BLAKE2S_KEYED, 32);

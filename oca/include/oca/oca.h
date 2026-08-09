@@ -64,6 +64,11 @@ const char *oca_strerror(int status);
  * tag_len bytes. Decrypt returns OCA_ERR_AUTH if the tag does not
  * verify; in that case the contents of `out` are undefined and must
  * be discarded.
+ *
+ * A NULL data pointer is valid only with a zero length: aad = NULL
+ * with aad_len > 0 is OCA_ERR_INVALID_ARG, not an empty AAD. Lengths
+ * above INT_MAX are rejected the same way (the backend interface
+ * takes int lengths).
  */
 int oca_aead_encrypt(const oca_ctx *ctx, oca_aead_alg alg,
                      const uint8_t *key, size_t key_len,

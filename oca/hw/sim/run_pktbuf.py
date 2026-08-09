@@ -22,8 +22,23 @@ try:
     from cocotb.runner import get_runner  # cocotb 1.x  # noqa: E402
 except ModuleNotFoundError:
     from cocotb_tools.runner import get_runner  # cocotb 2.x  # noqa: E402
+from cocotb_tools.check_results import get_results  # noqa: E402
 
 SIM_DIR = Path(__file__).resolve().parent
+
+
+def failed_tests() -> int:
+    """Red tests in the run that just finished.
+
+    runner.test() only inspects results.xml under pytest, and Verilator
+    exits 0 on $finish even with failing tests: without this check the
+    process exits 0 however the suite went, and anything driving these
+    runners by exit code would call a red suite green.
+    """
+    num_tests, num_failed = get_results(SIM_DIR / "results.xml")
+    if num_tests == 0:
+        raise RuntimeError("results.xml records no tests")
+    return num_failed
 
 # BYTES the module implements, and BYTES it must refuse. 1536 is the one
 # that matters: eight times 192 is not a power of two, so the bank base
@@ -80,7 +95,7 @@ CLEAR_TESTS = [
 SMALL_BYTES = 16
 
 
-def run_at(nbytes: int, tag: str, testcase=None) -> None:
+def run_at(nbytes: int, tag: str, testcase=None) -> int:
     os.environ["OCA_PKTBUF_BYTES"] = str(nbytes)
     runner = get_runner("verilator")
     runner.build(
@@ -90,6 +105,7 @@ def run_at(nbytes: int, tag: str, testcase=None) -> None:
         parameters={"BYTES": nbytes},
         always=True,
     )
+    (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
     runner.test(
         hdl_toplevel="oca_pktbuf",
         test_module="test_pktbuf",
@@ -97,6 +113,7 @@ def run_at(nbytes: int, tag: str, testcase=None) -> None:
         build_dir=SIM_DIR / f"sim_build_pktbuf{tag}",
         testcase=testcase,
     )
+    return failed_tests()
 
 
 def main() -> int:
@@ -104,9 +121,9 @@ def main() -> int:
     if rc != 0:
         return rc
 
-    run_at(2048, "")
-    run_at(SMALL_BYTES, "_small", testcase=CLEAR_TESTS)
-    return 0
+    failed = run_at(2048, "")
+    failed += run_at(SMALL_BYTES, "_small", testcase=CLEAR_TESTS)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

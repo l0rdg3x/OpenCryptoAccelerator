@@ -29,9 +29,24 @@ try:
     from cocotb.runner import get_runner  # cocotb 1.x  # noqa: E402
 except ModuleNotFoundError:
     from cocotb_tools.runner import get_runner  # cocotb 2.x  # noqa: E402
+from cocotb_tools.check_results import get_results  # noqa: E402
 
 SIM_DIR = Path(__file__).resolve().parent
 BUILD = SIM_DIR / "sim_build_keystore_gate"
+
+
+def failed_tests() -> int:
+    """Red tests in the run that just finished.
+
+    runner.test() only inspects results.xml under pytest, and Verilator
+    exits 0 on $finish even with failing tests: without this check the
+    process exits 0 however the suite went, and anything driving these
+    runners by exit code would call a red suite green.
+    """
+    num_tests, num_failed = get_results(SIM_DIR / "results.xml")
+    if num_tests == 0:
+        raise RuntimeError("results.xml records no tests")
+    return num_failed
 
 
 def synth(netlist: Path) -> None:
@@ -58,13 +73,14 @@ def main() -> int:
                     "-Wno-lint", "-Wno-style", "-Wno-MULTITOP", "-Wno-fatal"],
         always=True,
     )
+    (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
     runner.test(
         hdl_toplevel="oca_keystore",
         test_module="test_keystore",
         test_dir=SIM_DIR,
         build_dir=BUILD,
     )
-    return 0
+    return 1 if failed_tests() else 0
 
 
 if __name__ == "__main__":
