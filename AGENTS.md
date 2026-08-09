@@ -784,11 +784,30 @@ core and never updated as the design grew by 3000 LUTs.
   configuration, so it needs one of ours, as does the whole path from a
   synthetic frame back out to one.
 
-  **What is left is the top level**, and everything downstream waits on
-  it: no place & route with real IO has ever run, so there is no
-  in-context Fmax, no block RAM budget for the whole design, no
-  bitstream, and no bench step past "blink". `colorlight_i9.lpf` already
-  fixes the port list it must present.
+  **A pinned place & route now runs**, on `oca_top_stub`: 17 TRELLIS_IO
+  (every pad the `.lpf` names, and the flow passes no
+  `--lpf-allow-unconstrained`, so 17 is the proof), 1 EHXPLLL, 11
+  IOLOGIC, and four clocks all constrained for real — `clk_sys` 243 MHz
+  against 48.08 required, `clk_tx` 315 against 125, `rgmii_rx_clk` 332
+  against 125, `clk25` 417 against 25. The stub carries no crypto: it
+  exists so that the clocking and the pads are known to place before the
+  real top is written.
+
+  **What is left is the top level**, and two things stand in front of it:
+
+  1. **`eth_axis_rx` and `eth_axis_tx` are missing from the design.**
+     The MAC wrapper hands out a raw AXI-Stream with the Ethernet header
+     still in the data; `udp_complete_64` wants it already parsed and
+     does not contain the parser. Both are parametric at
+     `DATA_WIDTH = 8`, so they need a third 64-bit wrapper of the kind
+     the other two vendor modules already have. Nothing elaborates
+     without it. This was absent from the plan, from both probe file
+     lists and from the 8422-LUT port measurement until 2026-08-09.
+  2. Then `oca_top.sv` itself, whose port list `colorlight_i9.lpf`
+     already fixes.
+
+  Everything downstream waits on those: no in-context Fmax for the whole
+  design, no block RAM budget, no bitstream, no bench step past "blink".
 
   What the board alone can settle is listed in the design document: the
   RGMII delay value and the IO bank voltages above all. One trap is

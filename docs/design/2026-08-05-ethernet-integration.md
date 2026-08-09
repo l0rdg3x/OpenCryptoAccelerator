@@ -73,6 +73,24 @@ end. Against two cores at 24602 (56.1%):
 Two ports are out. Two cores behind one port land at 75.3%, against the
 76.4% at which this device stopped routing in the occupancy study.
 
+**Two modules are missing from that figure, and from this document until
+2026-08-09.** `oca_eth_mac_1g_fifo_64` hands out a raw AXI-Stream with
+the Ethernet header still in the data; `udp_complete_64` expects the
+header already parsed, on `s_eth_hdr_valid` and friends. What sits
+between them upstream is `eth_axis_rx.v` and `eth_axis_tx.v`, which
+`udp_complete_64` does not instantiate — it contains `ip_complete_64`
+and `udp_64` and nothing else — and which upstream's own examples read
+alongside the stack. Neither appears in the 8422 LUTs, in the file lists
+of either probe, or anywhere in this document's plan.
+
+They are also parametric, `DATA_WIDTH` defaulting to 8 with
+`KEEP_ENABLE` and `KEEP_WIDTH` derived from it, so they fall on the same
+side of the `read_verilog` / `read_slang` boundary that forced the two
+wrappers we already have. **A third wrapper is needed**, fixing them at
+64 bits, before any top level can elaborate. Found by an adversarial
+review of a top level that had not been written yet, which is the
+cheapest place this could have been found.
+
 Turning off the UDP checksum generator recovers less than hoped:
 `UDP_CHECKSUM_GEN_ENABLE=0` gives 6419 LUTs against 7147, three fewer
 block RAMs — but 288 TRELLIS_RAMW appear, which is LUT fabric spent as
