@@ -14,5 +14,13 @@ Critical points in short:
   Python 3.14).
 - Test vectors only from official sources in
   `oca/tests/vectors/sources/` — never hand-typed expected values.
+- A test suite's exit code is the contract: a runner that always exits
+  0 is a runner that never fails. Prove a new check by mutation — make
+  it fail once on purpose — before trusting its green.
+- A correction edits the figure in place, everywhere it appears, in the
+  same commit — never stack a dated amendment on top of text that still
+  says the old thing.
+- Measured numbers carry their toolchain: only figures measured on the
+  pinned toolchain reproduce; re-measure before publishing.
 - Product in English (code, commits, docs).
 - Git: work on branches, never commit/push without explicit go-ahead.

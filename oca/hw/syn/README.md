@@ -926,7 +926,7 @@ Two engines, at the two-core mean of 49.28 MHz and the 40 cycles per
 | per engine | 49.28e6 x 1.6 = 78.8 MB/s = ~0.63 Gbps |
 | **two engines** | **158 MB/s = ~1.26 Gbps of crypto capacity** |
 | one GbE port | 125 MB/s = 1 Gbps |
-| margin over one port | **26%** |
+| margin over one port | **26%** — retracted 2026-08-06, see below |
 
 **~1.26 Gbps of aggregate crypto capacity is the ceiling of this
 silicon.** The MVP board carries two GbE PHYs (`BOM-MVP.md`), so
@@ -1254,6 +1254,22 @@ difference is whether yosys's `cmp2lut.v` carries the patch in
 Seeds are 1 and 2 for the stock row; 1, 2, 4, 5 and 6 for the patched
 row.
 
+**Re-measured 2026-08-09 on the pinned toolchain**
+(`scripts/build-toolchain.sh`, RTL at `ee54b06`): the area columns
+reproduce — 11590 / 12043 patched and 8311 FF stock exactly, 8616
+against 8620 TRELLIS_COMB being nextpnr's packing, not yosys — but **no
+Fmax figure above does**: every seed moved, so the nextpnr that measured
+them was not the pinned one (the pin arrived 2026-08-06, two days after
+this table). On the pinned tools the rows read: patched 48.52, 51.26,
+47.59, 50.05, 49.23 (mean **49.33**); stock 51.93, 51.63, 46.84, 50.32,
+54.08 (mean **50.96**). The conclusion below survives: -3.2% on the
+means against a 46.84-54.08 stock spread is still "unchanged within the
+seed spread". The same caution covers every Fmax this file dates
+2026-08-04 or earlier — area reproduces on the pinned toolchain,
+placement does not. Everything dated 2026-08-05 or later has been
+spot-checked and does reproduce (48.52 above; the committed core's
+47.93; the two-core 48.89 mean, all four seeds exact).
+
 **This is not a regression in area; it is the cost of having a key store
 at all** — but read the two rows as what they are, which is one netlist
 against the other and not against anything published earlier. The
@@ -1278,7 +1294,10 @@ see below.
 
 **Fmax is unchanged within the seed spread**: 49.31 MHz mean before,
 48.84 MHz after — **-1.0%**, against a spread of 4.8% across the five
-patched seeds alone (47.48 to 49.76). That is the expected result — the
+patched seeds alone (47.48 to 49.76). Those are the pre-pin figures the
+note above re-measures: on the pinned toolchain it is 50.96 -> 49.33,
+**-3.2%** against the stock row's 46.84-54.08 spread — the same
+conclusion, on numbers that reproduce. That is the expected result — the
 critical path lives in `poly1305.sv`'s DSP products and `chacha20.sv`,
 not in a register file read through a mux — but it had to be measured
 rather than assumed. The stock row is only two seeds, so treat its mean
@@ -1357,8 +1376,10 @@ here, because the same figure written down twice is how this file and
 that one came to disagree about the single-core numbers.
 
 And one seed is one sample. 47.93 MHz here is a single draw from a
-spread this design measures at 4.8% across seeds, so it bounds nothing
-on its own; the four-seed figures are the ones to quote. The comparison
+spread this design measures at several percent across seeds (4.7% on
+the two-core pair, 7.4% on one core, both on the pinned toolchain), so
+it bounds nothing on its own; the four-seed figures are the ones to
+quote. The comparison
 this paragraph used to make — against 49.76 MHz at seed 1 on a netlist
 yosys reported cell for cell identical — no longer applies: the secret
 zeroisation changed the netlist (11590 -> 12308 TRELLIS_COMB), so the

@@ -6,8 +6,10 @@
 #
 # tools/ is not committed, so a fresh clone has none of this. Everything
 # is fetched into tools/src/<name> and installed into tools/<name>;
-# nothing is written outside the repository and nothing is installed
-# system-wide. System libraries are used as found and never installed.
+# nothing is installed system-wide. System libraries are used as found
+# and never installed. Outside the repository it touches only transient
+# state: a scratch directory under /tmp, removed on exit, and pip's
+# download cache.
 #
 # The pins are the point. yosys in particular carries a local patch
 # without which synthesis silently deletes the key store from the

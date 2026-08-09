@@ -139,7 +139,7 @@ Software (Phase 1), from `oca/`:
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build          # 114/114 vectors must pass
+ctest --test-dir build          # 117/117 vectors must pass
 ./build/oca_bench               # benchmarks
 ```
 
@@ -286,11 +286,45 @@ core and never updated as the design grew by 3000 LUTs.
   whenever correctness depends on something only synthesis decides,
   assert it against the netlist in `NETLIST_FF_FLOOR`, because no test
   in `hw/sim/` can. Cost the MVP bitstream; see `hw/syn/README.md`.
+- **A test runner's exit code is the contract, not its log.** cocotb's
+  `runner.test()` only inspects `results.xml` under pytest, and
+  Verilator exits 0 on `$finish` even with red tests — every `run_*.py`
+  here once returned 0 unconditionally, and anything driving the suites
+  by exit code would have called a red suite green. They now parse
+  `results.xml` and exit 1 on any failure (and on no tests at all: a
+  suite that ran nothing is not a pass). Prove the check by mutation —
+  a deliberately red test must exit non-zero — not by reading the code.
+  Found by audit on 2026-08-09.
+- **Pointer and length are validated as a pair, for every pointer, at
+  the API boundary.** A NULL with a non-zero length is
+  `OCA_ERR_INVALID_ARG`, never a silent empty input: `aad = NULL` with
+  `aad_len > 0` produced a valid tag covering no AAD at all, and no
+  vector caught it because none passes the pair — `in` had its guard,
+  `aad` did not. A new pointer argument to the C API arrives with its
+  `(!p && len)` guard and its bad-args test in the same change. Same
+  audit.
+- **A correction edits the figure in place, everywhere it stands, in
+  the same commit.** This project's documentation errors of record were
+  not wrong measurements but right ones written next to the stale ones:
+  the two-port target corrected in one bullet and still current in the
+  next, the same netlist's seed-1 Fmax recorded as 48.52 in one file
+  and 49.76 in another, a "not yet measured" caveat left standing below
+  the measurement. When a number changes, grep for it and for
+  everything derived from it — `AGENTS.md`, `SPEC.md`, both READMEs,
+  `hw/syn/README.md` — and amend every occurrence, dated. Same audit.
+- **A measured number carries its toolchain.** Area is yosys and
+  reproduces; Fmax is nextpnr and does not across binaries, even at a
+  fixed seed: the rows recorded before the toolchain pin (2026-08-06)
+  miss their recorded values by several percent, seed for seed, on the
+  pinned build — while netlists and cell counts match exactly. Quote an
+  Fmax with its date and toolchain, and treat a disagreement between a
+  recorded figure and a fresh run as a finding to resolve, never as
+  noise to average over. Same audit.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
 
-- Phase 1: done, 114/114 vectors pass, zero warnings. Baseline on the
+- Phase 1: done, 117/117 vectors pass, zero warnings. Baseline on the
   dev machine: AES-128-GCM 26.6 GB/s (AES-NI), ChaCha20-Poly1305
   5.9 GB/s (large blocks).
 - Phase 2: `chacha20.sv`, `poly1305.sv`, `chacha20_poly1305.sv` (AEAD,
@@ -389,11 +423,14 @@ core and never updated as the design grew by 3000 LUTs.
   `poly1305.sv:140` (the registered DSP products), routing-dominated
   because the third engine fills 83% of the DSP columns.
   **Corrected MVP target: two ports at 56% of line rate each, not one
-  port saturated.** The board has two PHYs (`BOM-MVP.md`) and
+  port saturated** — superseded in turn on 2026-08-09, when the cost of
+  an Ethernet port was measured and two ports turned out not to fit; the
+  standing target is in the two-core bullet below. The board has two PHYs (`BOM-MVP.md`) and
   `oca_dual` wires the two engines as two independent AXI-Stream pairs,
   one per core — so this is **0.561 Gbps per port at a 1500-byte MTU,
   1.121 Gbps aggregated across both**, and **neither port is
-  saturated**. Both PHYs can be fed; saturating one of them would need
+  saturated**. Both PHYs can be fed in cycle budget; whether two MACs
+  fit beside the cores is settled below — they do not. Saturating one of them would need
   both cores behind it, hence a distributor and a collector that do not
   exist (the two-core bullet below, and commit 23742dc, which retracted
   the "one port saturated with margin" reading this passage carried).
@@ -446,7 +483,7 @@ core and never updated as the design grew by 3000 LUTs.
   maps through `dsp_map_18x18.v`, which connects no clock or reset, so
   those registers were already in fabric — but the LUT bill is real and
   it is logic, not routing. Fmax moves in both directions across the
-  three points and stays inside the 4.8% seed spread documented below,
+  three points and stays inside the seed spread documented below,
   so there is no clock signal in it either way; a multi-seed sweep would
   be needed to claim otherwise.
 
@@ -481,11 +518,15 @@ core and never updated as the design grew by 3000 LUTs.
   cost an engine) and was **not on the critical path** of that build:
   seeds 1, 3 and 4 cite no RTL file but `chacha20.sv`, lines 58-64; seed
   2, the slowest, lands on `poly1305.sv:140`. **No protocol module
-  appears on any of the four** — but on the committed netlist at seed 1
-  the worst path is `oca_proto`'s `data_off` adder, dominated by one
-  route across the die. First time the protocol layer has shown up
-  there; one seed, so watch it rather than conclude from it
-  (`hw/syn/README.md`, "Where the committed design stands").
+  appears on any of the four**. The protocol layer did reach the worst
+  path once — `oca_proto`'s `data_off` adder, dominated by one route
+  across the die — but on the pre-zeroisation netlist, not the committed
+  one: at seed 1 the committed netlist's worst path is back inside the
+  engine, `poly1305.sv:159`'s multiply. This entry previously attributed
+  the `data_off` sighting to the committed netlist; the record it cited
+  (`hw/syn/README.md`, "Where the committed design stands") says the
+  opposite. One seed either way is a placement result, not a property of
+  the design.
 - **End-to-end throughput: 415 cycles per 64-byte block down to 40**,
   which is the engine's own cost — the protocol layer now adds nothing
   on top of it. Three steps, each measured differentially in simulation
@@ -499,8 +540,8 @@ core and never updated as the design grew by 3000 LUTs.
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
   datapath.
-- **The MVP target: two ports at 56% of line rate each, not one port
-  saturated.** `run_synth.py oca_dual` builds two `oca_core` and four
+- **Two cores measured, and the standing target: one core on one port.**
+  `run_synth.py oca_dual` builds two `oca_core` and four
   placer seeds give **23191 LUTs (52.9%), 24086 FF (54.9%), 40
   MULT18X18D (55.6%), 8 DP16KD, Fmax 47.07 / 49.61 / 47.99 / 47.98,
   mean 48.16 MHz** (spread 5.4%). Replication is linear to eleven LUTs
@@ -567,12 +608,9 @@ core and never updated as the design grew by 3000 LUTs.
   is established: both key stores are present in this netlist, 4626
   live flip-flops attributed to `oca_keystore.sv`, exactly twice 2313.
 
-  Two caveats. These figures **predate the secret zeroisation**, which
-  costs 718 LUTs per core — two cores should land near 24600 (56% of
-  the device), and the two-core Fmax with it is not measured. And
-  **nothing here has run on silicon**: Verilator cycle counts and
-  `--out-of-context` synthesis, with no IO, no pin constraints, no MAC
-  and no PLL.
+  One caveat stands. **Nothing here has run on silicon**: Verilator
+  cycle counts and `--out-of-context` synthesis, with no IO, no pin
+  constraints, no MAC and no PLL.
 - **The key store was missing from every netlist this project ever
   produced**, and is now present: a mis-mapping in yosys's
   `cmp2lut.v` folded `oca_keystore.sv`'s index bounds check to constant
@@ -592,11 +630,18 @@ core and never updated as the design grew by 3000 LUTs.
   for the tag comparison, which is combinational and so invisible to any
   cell count. Cost:
   8620 -> 11590 TRELLIS_COMB and 8311 -> 12043 TRELLIS_FF, DP16KD and
-  MULT18X18D unchanged at 4 and 20, Fmax 49.31 -> 48.84 MHz mean
-  (-1.0%, inside a 4.8% seed spread over five seeds). This is the price
-  of having a key store at all, not a regression in area — what it does
-  cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
-  "The cmp2lut trap".
+  MULT18X18D unchanged at 4 and 20. The Fmax this entry carried (49.31
+  -> 48.84 MHz mean, -1.0%) was measured 2026-08-04, two days before
+  the toolchain was pinned, and does not reproduce on the pinned one —
+  every seed moved, so the nextpnr behind it was another binary.
+  Re-measured 2026-08-09 on the pinned toolchain, same RTL (`ee54b06`),
+  same five seeds: 50.96 -> 49.33 MHz mean (-3.2%, inside the stock
+  row's 46.84-54.08 spread). The conclusion stands: having a key store
+  costs area, not clock. Area is unaffected by the move — yosys is
+  deterministic, 11590 / 12043 reproduce exactly, and the stock row is
+  8616 / 8311 where it read 8620 (nextpnr's packing, not yosys). What
+  the change does cost is router effort, at least 2.5x. See
+  `oca/hw/syn/README.md`, "The cmp2lut trap".
 - **The AEAD engine is guarded too, by a floor on the whole netlist**
   (2026-08-06). The two per-file floors left `chacha20.sv`,
   `poly1305.sv` and `chacha20_poly1305.sv` with no netlist assertion at

@@ -113,14 +113,24 @@ Hardware accelerator for:
   2026-08-05, having previously read that the second PHY could not be
   fed at all.** The Colorlight i9 v7.2 carries two PHYs (`BOM-MVP.md`),
   so 2 Gbps of wire is present and >= 2 Gbps was the honest thing to aim
-  at. Two cores place and route at 48.16 MHz mean, and `oca_dual` wires
-  them as two independent streams — one core per port. That gives
-  **0.561 Gbps per port at a 1500-byte MTU, 56% of line rate, 1.121 Gbps
-  across both**. Saturating a single port needs both cores behind it,
-  which needs a distributor, a collector and an answer to the per-core
-  key store; saturating both needs four cores, and three do not route.
-  Full line rate on any port stays out of reach until the Artix-7
-  phase.
+  at. Two cores of the current RTL place and route at 48.89 MHz mean
+  over four seeds (24602 LUTs, 56.1% of the device — re-measured on the
+  pinned toolchain 2026-08-09; this read 48.16 MHz, the pair from before
+  the secret zeroisation), and `oca_dual` wires them as two independent
+  streams — one core per port. That gives **0.561 Gbps per port at a
+  1500-byte MTU, 56% of line rate, 1.121 Gbps across both**. Saturating
+  a single port needs both cores behind it, which needs a distributor, a
+  collector and an answer to the per-core key store; saturating both
+  needs four cores, and three do not route. Full line rate on any port
+  stays out of reach until the Artix-7 phase.
+  **Amended 2026-08-09: the MAC question the next paragraph leaves open
+  is settled, and it settles against two ports.** One GbE port costs
+  8422 LUTs measured (19.2% of the device), so two cores with two ports
+  would take 94.5% and two cores behind one port 75.3% — against the
+  76.4% at which this device stopped routing in the study above. **The
+  MVP that fits the current RTL is one core on one port, 0.561 Gbps at
+  MTU.** The 1.121 Gbps stands as the fabric's cycle budget, not a
+  configuration the board carries.
   Both figures are projections from measurement rather than silicon
   results: the builds are `--out-of-context`, with no IO, no pin
   constraints and no Ethernet MAC, and the MAC still has to fit

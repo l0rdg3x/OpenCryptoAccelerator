@@ -7,10 +7,13 @@ description: Synthesise an OCA target across several placer seeds, report area a
 
 Place and route one target on several seeds, then say what moved.
 
-A single seed cannot distinguish a real change from placer noise: the
-documented spread on this design is **4.8%** across seeds, and readings
-in both directions inside that band have already been mistaken for
-signal. So the unit of measurement here is a sweep, not a run.
+A single seed cannot distinguish a real change from placer noise: on
+the pinned toolchain this design spreads **4.7% across seeds as a pair
+and 7.4% as a single core** (measured 2026-08-09 — the 4.8% figure this
+line used to cite was measured before the toolchain was pinned and does
+not reproduce on it), and readings in both directions inside that band
+have already been mistaken for signal. So the unit of measurement here
+is a sweep, not a run.
 
 ## Usage
 
@@ -39,7 +42,7 @@ directory a concurrent agent had been told it could clean.
 **Area is deterministic; treat any difference as a defect in the
 measurement.** Clock is not: report the mean over the sweep, and do not
 claim a Fmax change smaller than the spread. If the sweep's own spread
-is wider than 4.8%, say so — the design may have become harder to place,
+is wider than 8%, say so — the design may have become harder to place,
 which is itself the finding.
 
 Compare against the figures in `AGENTS.md`'s status section. If they

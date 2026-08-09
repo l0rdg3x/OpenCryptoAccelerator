@@ -43,8 +43,9 @@
   `rd_valid = 0` instead of handing back a key of zeros: a host mistake
   becomes a protocol error rather than a message encrypted under a key
   an attacker can guess. Keys and loaded bits are cleared on reset.
-- `hw/rtl/oca_pktbuf.sv` — one 64-bit packet buffer (default 2048 bytes,
-  256 words), written sequentially from the stream with a 1..8 byte count
+- `hw/rtl/oca_pktbuf.sv` — a two-bank 64-bit packet buffer (`BYTES` =
+  2048 per bank, 256 words each), one bank filled from the stream while
+  the other is read back, written sequentially with a 1..8 byte count
   and read at random word offsets. Writes past capacity are dropped and
   `wr_full` is raised, so a truncated packet becomes a length error rather
   than a silent wrap. The read port is registered and single, and the
@@ -141,6 +142,7 @@ Python 3.14).
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 .venv/bin/python hw/sim/run_dirty_pad.py
+.venv/bin/python hw/sim/run_secret_zeroise.py
 .venv/bin/python hw/sim/run_keystore.py
 .venv/bin/python hw/sim/run_pktbuf.py
 .venv/bin/python hw/sim/run_oca_core.py
@@ -158,8 +160,10 @@ does with it, which is how a mis-mapped key store survived every green
 test run this project ever had.
 
 Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 12/12, oca_core
-29/29, attack 16/16, and post-synthesis keystore 4/4 and oca_proto 2/2;
+7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
+pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16 — 81 plus
+the three at the smallest `BYTES` — and post-synthesis keystore 4/4 and
+oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,
@@ -213,7 +217,14 @@ neither port is saturated, and saturating one would need both cores
 behind it — a distributor and a collector that do not exist. This
 supersedes the 1.97-2.07 Gbps three-engine projection, and
 `SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
-occupancy study").
+occupancy study"). **Amended 2026-08-09: whether two ports fit was still
+open here, and it is settled — they do not.** One GbE port costs 8422
+LUTs measured (19.2% of the device), so two cores with two ports would
+take 94.5%, and two cores behind one port 75.3% against the 76.4% at
+which this device stopped routing above. The configuration that fits the
+current RTL is **one core on one port, 0.561 Gbps at MTU**; the two-port
+figures above stand as a cycle budget, not a configuration the board
+carries.
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
@@ -246,11 +257,12 @@ layer still adds no multipliers, so it does not cost an engine, and it
 was not on the critical path of that build: across all four seed
 reports, no entry cites `oca_proto.sv`, `oca_pktbuf.sv`,
 `oca_keystore.sv` or `oca_core.sv`. The path is inside `chacha20.sv` on
-three seeds and inside `poly1305.sv` on the fourth. On the committed
-netlist at seed 1 it is inside `oca_proto` for the first time — the
-`data_off` adder, most of its delay one route across the die — which is
-one seed and a placement result, not a property of the design
-(`hw/syn/README.md`).
+three seeds and inside `poly1305.sv` on the fourth. The protocol layer
+did reach the worst path once — the `data_off` adder, most of its delay
+one route across the die — but on the pre-zeroisation netlist, not the
+committed one: at seed 1 the committed netlist's worst path is back
+inside the engine, `poly1305.sv`'s multiply. One seed either way is a
+placement result, not a property of the design (`hw/syn/README.md`).
 
 **Throughput: 415 cycles per 64-byte block down to 40**, in three steps,
 each measured differentially in simulation and exactly linear. Widening
