@@ -73,6 +73,65 @@ DESIGNS = {
             "oca_top_stub.sv"],
         lpf="colorlight_i9.lpf",
     ),
+    # The board. Vendor Verilog is read first, by yosys's own frontend,
+    # because a module that reaches read_slang through read_verilog
+    # arrives already elaborated -- which is why the three oca_* wrappers
+    # exist and why our SystemVerilog can instantiate them with no
+    # parameters at all.
+    #
+    # The file list is the union of the two probe lists plus eth_axis_rx
+    # and eth_axis_tx, which nothing in this project needed until there
+    # was a top level to join the MAC to the stack. lfsr.v is the only
+    # file both probes name; yosys must not read it twice.
+    "oca_top": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
+            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+            "oca_core.sv", "oca_udp_seam.sv", "oca_top.sv"],
+        verilog=[
+            # AXI-Stream library
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/arbiter.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/priority_encoder.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_fifo.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_adapter.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo_adapter.v",
+            # MAC
+            "oca/hw/vendor/verilog-ethernet/rtl/lfsr.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_rx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_tx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g_fifo.v",
+            # Ethernet header parse and build
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_axis_rx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_axis_tx.v",
+            # ARP, IP, UDP
+            "oca/hw/vendor/verilog-ethernet/rtl/arp_cache.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/arp_eth_rx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/arp_eth_tx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/arp.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_arb_mux.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/ip_eth_rx_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/ip_eth_tx_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/ip_arb_mux.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/ip_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/ip_complete_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/udp_checksum_gen_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/udp_ip_rx_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/udp_ip_tx_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/udp_64.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/udp_complete_64.v",
+            # ours, fixing their parameters
+            "oca/hw/rtl/vendor/oca_eth_mac_1g_fifo_64.v",
+            "oca/hw/rtl/vendor/oca_eth_axis_64.v",
+            "oca/hw/rtl/vendor/oca_udp_complete_64.v",
+        ],
+        incdirs=[
+            "oca/hw/vendor/verilog-ethernet/rtl",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
+        ],
+        lpf="colorlight_i9.lpf",
+    ),
 }
 
 # oca_rgmii is deliberately not a target of its own. It cannot be built
@@ -110,6 +169,13 @@ DESIGNS = {
 NETLIST_FF_FLOOR = {
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
+    # The board build. Same two floors as oca_core, since it contains
+    # one, plus the seam: 276 live at this RTL, floored at 270. The seam
+    # is worth its own floor because its header queue is the one place
+    # in this design where losing storage does not break anything
+    # visible -- it just starts addressing replies to the wrong peer.
+    "oca_top": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
+                "oca_udp_seam.sv": 270},
 }
 
 # The AEAD engine's own storage — ChaCha20's block state, Poly1305's
@@ -134,7 +200,13 @@ NETLIST_FF_FLOOR = {
 # storage is free — this only ever fails downwards.
 #
 # oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
-NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800}
+#
+# oca_top measures 16840, of which 12043 are attributed to our RTL and
+# 4797 to the vendor stack, which read_verilog gives no src attribute
+# this census can key on. The total is floored rather than those two
+# separately for the same reason as above, and because the vendor's
+# share is the part most likely to move if a parameter changes.
+NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
 DEFAULT_DEVICE = "45k"
