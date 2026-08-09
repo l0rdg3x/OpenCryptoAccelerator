@@ -7,6 +7,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TARGET="${1:?usage: sweep.sh <target> [seeds]}"
 SEEDS="${2:-4}"
 REPORT="$ROOT/oca/hw/syn/build/${TARGET}.report.json"
+# The transient per-seed log lives in the syn build dir, not /tmp: a
+# shared scratch directory is exactly where a sweep once lost three of
+# four seeds to a concurrent cleanup.
+LOG="$ROOT/oca/hw/syn/build/.sweep-$$.log"
+# run_synth.py only creates this directory once it starts, inside
+# main(), after bash has already tried to open the redirect below.
+mkdir -p "$(dirname "$LOG")"
 
 cd "$ROOT/oca"
 
@@ -15,18 +22,18 @@ area=""
 for ((s = 1; s <= SEEDS; s++)); do
     printf 'seed %d ... ' "$s" >&2
     if ! .venv/bin/python hw/syn/run_synth.py "$TARGET" --seed "$s" \
-            >/tmp/synth-sweep-$$.log 2>&1; then
+            >"$LOG" 2>&1; then
         echo "FAILED" >&2
-        tail -20 /tmp/synth-sweep-$$.log >&2
-        rm -f /tmp/synth-sweep-$$.log
+        tail -20 "$LOG" >&2
+        rm -f "$LOG"
         exit 1
     fi
     # The floors are the only thing standing between a mapper bug and a
     # netlist that builds and does not work. Never let a sweep pass one.
-    if grep -q "FAILED" /tmp/synth-sweep-$$.log; then
+    if grep -q "FAILED" "$LOG"; then
         echo "NETLIST CHECK FAILED" >&2
-        grep "netlist check" /tmp/synth-sweep-$$.log >&2
-        rm -f /tmp/synth-sweep-$$.log
+        grep "netlist check" "$LOG" >&2
+        rm -f "$LOG"
         exit 1
     fi
     # Rounded in python: this locale uses a decimal comma and bash
@@ -51,7 +58,7 @@ PY
     fi
     echo "$f MHz" >&2
 done
-rm -f /tmp/synth-sweep-$$.log
+rm -f "$LOG"
 
 python3 - "$TARGET" "$area" "${fmax[@]}" <<'PY'
 import sys
@@ -64,7 +71,9 @@ for k in area.split(","):
     print(f"  {k}")
 print(f"  Fmax  {' / '.join(f'{x:.2f}' for x in v)}")
 print(f"  mean  {mean:.2f} MHz   spread {spread:.1f}%")
-if spread > 4.8:
-    print("  NOTE: spread exceeds the documented 4.8% — the design may have"
-          "\n        become harder to place. That is a finding, not noise.")
+if spread > 8.0:
+    print("  NOTE: spread exceeds every seed spread recorded on the"
+          "\n        committed design (6.5% one core, 4.8% the pair) - it"
+          "\n        may have become harder to place. That is a finding,"
+          "\n        not noise.")
 PY

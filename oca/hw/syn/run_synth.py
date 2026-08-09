@@ -253,18 +253,25 @@ def live_ff_census(top, netlist):
     A cell whose DI is its own Q is storage in name only: that is the
     signature the cmp2lut defect left behind, 2056 of the key store's
     2313 registers still present and each holding itself.
+
+    Returns the per-file census and the total counted on cells, not on
+    the census buckets: a cell whose src attribute cites two files lands
+    in both buckets, and a total summed over the buckets would count it
+    twice and could hide a real loss by the size of the overlap.
     """
     design = json.loads(netlist.read_text())
     census = {}
+    total = 0
     for c in design["modules"][top]["cells"].values():
         if "FF" not in c["type"] or "Q" not in c["connections"]:
             continue
         if c["connections"].get("DI") == c["connections"]["Q"]:
             continue
+        total += 1
         src = c.get("attributes", {}).get("src", "")
         for f in sorted(set(re.findall(r"([\w.]+\.sv):", src))) or ["(none)"]:
             census[f] = census.get(f, 0) + 1
-    return census
+    return census, total
 
 
 def check_netlist(top, netlist):
@@ -289,7 +296,7 @@ def check_netlist(top, netlist):
               f"state worth guarding (see README.md, 'The cmp2lut trap').",
               file=sys.stderr)
         return 0
-    census = live_ff_census(top, netlist)
+    census, live_total = live_ff_census(top, netlist)
     print("\nlive flip-flops by source file:")
     for src, n in sorted(census.items(), key=lambda kv: -kv[1]):
         print(f"  {src:<24} {n:>6}")
@@ -302,7 +309,7 @@ def check_netlist(top, netlist):
         if live < want:
             rc = 1
     if total_floor is not None:
-        live = sum(census.values())
+        live = live_total
         status = "ok" if live >= total_floor else "FAILED"
         print(f"netlist check (whole netlist): {live} live flip-flops "
               f"(>= {total_floor} required) — {status}")

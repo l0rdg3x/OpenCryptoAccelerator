@@ -110,9 +110,14 @@ asynchronous FIFO is needed between the MAC and the UDP stack.)
   scripts/build-toolchain.sh yosys     # or one component
   ```
 
-  It fetches into `tools/src/<name>`, installs into `tools/<name>`, and
-  writes nothing else. It never installs a system package: missing build
-  tools are reported together and it stops.
+  It fetches into `tools/src/<name>` and installs into `tools/<name>`.
+  It never installs a system package: missing build tools are reported
+  together and it stops. Outside the repository it leaves three things,
+  none of them a package: a scratch directory under `/tmp` removed on
+  exit, pip's download cache, and one entry in the user's CMake package
+  registry (`~/.cmake/packages/Eigen3/`), which eigen's own
+  `export(PACKAGE Eigen3)` writes at configure time and nothing removes
+  — it points into `tools/src/eigen/build` and outlives it.
 
 - `tools/` is gitignored, so the script and the patch beside it are the
   only record of how to get one. **A yosys built without
@@ -127,10 +132,17 @@ asynchronous FIFO is needed between the MAC and the UDP stack.)
 
 - Pins, for reference: help2man 1.49.3, Verilator `3d2421f3` (v5.050),
   Eigen `3147391d` (3.4.0), prjtrellis `56bb1704`, yosys `41a4b5a0`
-  (0.67+), nextpnr `89454078`, cocotb `82d0eed5`. cocotb comes from git
-  because its PyPI releases (<= 2.0.1) reject Python >= 3.14, and it is
-  pinned to a commit rather than `@master`, which drifts under the pin
-  without saying so.
+  (0.67+), nextpnr `89454078`, openFPGALoader `85be4fa0` (v1.1.1),
+  cocotb `82d0eed5`. cocotb comes from git because its PyPI releases
+  (<= 2.0.1) reject Python >= 3.14, and it is pinned to a commit rather
+  than `@master`, which drifts under the pin without saying so.
+  openFPGALoader links libftdi1, hidapi, libusb, zlib and libudev from
+  the system through pkg-config. **It does not install
+  `99-openfpgaloader.rules`**, and there is no CMake option to ask it
+  to: upstream has no CMake-driven udev rule install at all, and its own
+  documentation has the operator copy the file to `/etc/udev/rules.d/`
+  by hand. So a JTAG cable is reachable either after copying that rule
+  or by running the tool with sudo.
 
 - Developed on CachyOS with Python 3.14. System dependencies are used as
   found and never installed: boost 1.91, ICU 78, tcl 8.6, readline,
@@ -151,15 +163,16 @@ Software (Phase 1), from `oca/`:
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build          # 114/114 vectors must pass
+ctest --test-dir build          # one test, and it wraps 126 checks
+./build/test_vectors            # prints the 126/126 that must pass
 ./build/oca_bench               # benchmarks
 ```
 
 RTL (Phase 2), from `oca/`:
 
 ```sh
-.venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass
-.venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
+.venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass, + 5 at ROUNDS_PER_CYCLE=2
+.venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass, + 4 at ROWS_PER_CYCLE=5
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
@@ -171,8 +184,17 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-81 RTL tests, three of them run a second time at the smallest BYTES
-oca_pktbuf accepts, plus 6 on a synthesised netlist.
+81 RTL tests, twelve of them run a second time at a non-default
+parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
+`poly1305` at `ROWS_PER_CYCLE` = 5 and three for `oca_pktbuf` at the
+smallest `BYTES` it accepts — plus 6 on a synthesised netlist.
+
+**A parameter with one tested value is a parameter that does not work.**
+Both of these switch the datapath rather than sizing it, and both went
+untested outside their default until 2026-08-09. What the second value
+catches is not hypothetical: mutating `poly1305.sv`'s `CSH` to a
+constant is a no-op at one value and wrong at the other, in both
+directions, and each mutation is caught only by the run it breaks.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because
@@ -313,11 +335,67 @@ core and never updated as the design grew by 3000 LUTs.
   whenever correctness depends on something only synthesis decides,
   assert it against the netlist in `NETLIST_FF_FLOOR`, because no test
   in `hw/sim/` can. Cost the MVP bitstream; see `hw/syn/README.md`.
+- **A test runner's exit code is the contract, not its log.** cocotb's
+  `runner.test()` only inspects `results.xml` under pytest, and
+  Verilator exits 0 on `$finish` even with red tests — every cocotb
+  runner in `hw/sim/` once returned 0 whatever the tests did, and
+  anything driving the suites by exit code would have called a red
+  suite green. (`run_pktbuf.py` could already exit non-zero, but only
+  from its elaboration guard, never from a result; `run_synth.py` is
+  not a cocotb runner and always propagated its failures.) They now
+  parse
+  `results.xml` and exit 1 on any failure (and on no tests at all: a
+  suite that ran nothing is not a pass). Prove the check by mutation —
+  a deliberately red test must exit non-zero — not by reading the code.
+  Found by audit on 2026-08-09.
+- **Pointer and length are validated as a pair, for every pointer, at
+  the API boundary.** A NULL with a non-zero length is
+  `OCA_ERR_INVALID_ARG`, never a silent empty input: `aad = NULL` with
+  `aad_len > 0` produced a valid tag covering no AAD at all, and no
+  vector caught it because none passes the pair — `in` had its guard,
+  `aad` did not. A new pointer argument to the C API arrives with its
+  `(!p && len)` guard and its bad-args test in the same change. Same
+  audit.
+- **A correction edits the figure in place, everywhere it stands, in
+  the same commit.** This project's documentation errors of record were
+  not wrong measurements but right ones written next to the stale ones:
+  the two-port target corrected in one bullet and still current in the
+  next, the same netlist's seed-1 Fmax recorded as 48.52 in one file
+  and 49.76 in another, a "not yet measured" caveat left standing below
+  the measurement. When a number changes, grep for it and for
+  everything derived from it — `AGENTS.md`, `SPEC.md`, both READMEs,
+  `hw/syn/README.md` — and amend every occurrence, dated. Same audit.
+- **Equal cell counts are not the same netlist, and an Fmax belongs to
+  the commit it was measured on.** Treat a disagreement between a
+  recorded figure and a fresh run as a finding to resolve, never as
+  noise to average over — but resolve it by finding what changed, not
+  by naming the first suspect. The 2026-08-09 audit found the cmp2lut
+  table's clocks (2026-08-04, RTL `bf3930f`) irreproducible on a re-run
+  at `ee54b06` and concluded "the nextpnr behind them was another
+  binary". It was not: `tools/nextpnr` holds one binary, built
+  2026-08-03 and never rebuilt, and the pin (`49691a4`) landed six
+  hours after that table on the same day, recording the revisions of an
+  already-built toolchain. What differed was the RTL — `oca_pktbuf.sv`
+  and `oca_proto.sv` moved between those two commits — and `5492e3a`
+  had already measured exactly that: two netlists **matching on every
+  per-type cell total (7768 LUT4, 12043 TRELLIS_FF, 1687 CCU2C, 4
+  DP16KD, 20 MULT18X18D) and still placing differently at the same
+  seed**, the worst path moving out of `chacha20.sv` into `oca_proto`.
+  Equal totals are not an equal netlist — the connectivity differs, or
+  the path could not move — so matching area is no evidence that
+  placement should repeat, and it is the step from "the cell counts
+  match" to "therefore the tools changed" that has to be refused.
+  nextpnr at a fixed seed is deterministic; that is why a seed sweep
+  measures anything at all. Quote an Fmax with the commit it was taken
+  on, and diff the RTL before blaming the toolchain.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
 
-- Phase 1: done, 114/114 vectors pass, zero warnings. Baseline on the
+- Phase 1: done, 126/126 checks pass, zero warnings — 113 of them
+  driven by official vectors, plus one tamper case and twelve
+  argument-validation cases, which have no vector to come from.
+  Baseline on the
   dev machine: AES-128-GCM 26.6 GB/s (AES-NI), ChaCha20-Poly1305
   5.9 GB/s (large blocks).
 - Phase 2: `chacha20.sv`, `poly1305.sv`, `chacha20_poly1305.sv` (AEAD,
@@ -416,11 +494,17 @@ core and never updated as the design grew by 3000 LUTs.
   `poly1305.sv:140` (the registered DSP products), routing-dominated
   because the third engine fills 83% of the DSP columns.
   **Corrected MVP target: two ports at 56% of line rate each, not one
-  port saturated.** The board has two PHYs (`BOM-MVP.md`) and
+  port saturated** (56% being that figure at the 48.16 MHz of the day)
+  — superseded in turn on 2026-08-05, when `d4ee09f` measured the cost
+  of an Ethernet port and two ports turned out not to fit; the standing
+  target is in the two-core bullet below. The board has two PHYs
+  (`BOM-MVP.md`) and
   `oca_dual` wires the two engines as two independent AXI-Stream pairs,
-  one per core — so this is **0.561 Gbps per port at a 1500-byte MTU,
-  1.121 Gbps aggregated across both**, and **neither port is
-  saturated**. Both PHYs can be fed; saturating one of them would need
+  one per core — so this is **0.569 Gbps per port at a 1500-byte MTU,
+  1.138 Gbps aggregated across both** on the committed pair's 48.89 MHz,
+  and **neither port is saturated**. Both PHYs can be fed in cycle
+  budget; whether two MACs
+  fit beside the cores is settled below — they do not. Saturating one of them would need
   both cores behind it, hence a distributor and a collector that do not
   exist (the two-core bullet below, and commit 23742dc, which retracted
   the "one port saturated with margin" reading this passage carried).
@@ -460,9 +544,14 @@ core and never updated as the design grew by 3000 LUTs.
   `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
   error is not a header drop.
 - **`oca_core` as committed: 12308 LUTs (28.1%), 12033 FF (27.4%), 20
-  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, 47.93 MHz at seed 1 — the
-  figures `run_synth.py oca_core` reproduces today, on a netlist whose
-  key store is present (see the `cmp2lut` bullet below).
+  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, and **Fmax 47.93 / 50.91 /
+  51.03 / 49.76, mean 49.91 MHz** over four placer seeds (measured
+  2026-08-09; area identical on all four, as it must be). The figures
+  `run_synth.py oca_core` reproduces today, on a netlist whose key
+  store is present (see the `cmp2lut` bullet below). The spread is
+  **6.5%** — wider than the pair's 4.8%, which is why a single seed
+  from this design settles nothing. This entry carried only seed 1
+  (47.93) until the sweep was run.
 
   **What secret zeroisation cost**, measured seed 1 against the same
   toolchain, one step at a time from 11590 / 12043 / 48.52 MHz:
@@ -473,7 +562,7 @@ core and never updated as the design grew by 3000 LUTs.
   maps through `dsp_map_18x18.v`, which connects no clock or reset, so
   those registers were already in fabric — but the LUT bill is real and
   it is logic, not routing. Fmax moves in both directions across the
-  three points and stays inside the 4.8% seed spread documented below,
+  three points and stays inside the seed spread documented below,
   so there is no clock signal in it either way; a multi-seed sweep would
   be needed to claim otherwise.
 
@@ -508,11 +597,15 @@ core and never updated as the design grew by 3000 LUTs.
   cost an engine) and was **not on the critical path** of that build:
   seeds 1, 3 and 4 cite no RTL file but `chacha20.sv`, lines 58-64; seed
   2, the slowest, lands on `poly1305.sv:140`. **No protocol module
-  appears on any of the four** — but on the committed netlist at seed 1
-  the worst path is `oca_proto`'s `data_off` adder, dominated by one
-  route across the die. First time the protocol layer has shown up
-  there; one seed, so watch it rather than conclude from it
-  (`hw/syn/README.md`, "Where the committed design stands").
+  appears on any of the four**. The protocol layer did reach the worst
+  path once — `oca_proto`'s `data_off` adder, dominated by one route
+  across the die — but on the pre-zeroisation netlist, not the committed
+  one: at seed 1 the committed netlist's worst path is back inside the
+  engine, `poly1305.sv:159`'s multiply. This entry previously attributed
+  the `data_off` sighting to the committed netlist; the record it cited
+  (`hw/syn/README.md`, "Where the committed design stands") says the
+  opposite. One seed either way is a placement result, not a property of
+  the design.
 - **End-to-end throughput: 415 cycles per 64-byte block down to 40**,
   which is the engine's own cost — the protocol layer now adds nothing
   on top of it. Three steps, each measured differentially in simulation
@@ -526,27 +619,42 @@ core and never updated as the design grew by 3000 LUTs.
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
   datapath.
-- **The MVP target: two ports at 56% of line rate each, not one port
-  saturated.** `run_synth.py oca_dual` builds two `oca_core` and four
-  placer seeds give **23191 LUTs (52.9%), 24086 FF (54.9%), 40
-  MULT18X18D (55.6%), 8 DP16KD, Fmax 47.07 / 49.61 / 47.99 / 47.98,
-  mean 48.16 MHz** (spread 5.4%). Replication is linear to eleven LUTs
-  of glue against 2 x 11590, and the second core costs 0.7% of clock,
-  inside that spread.
+- **Two cores measured, and the standing target: one core on one port.**
+  `run_synth.py oca_dual` builds two `oca_core`. **On the RTL of
+  `c1c6556` (2026-08-05), before the secret zeroisation**, four placer
+  seeds gave **23191 LUTs (52.9%), 24086 FF (54.9%), 40 MULT18X18D
+  (55.6%), 8 DP16KD, Fmax 47.07 / 49.61 / 47.99 / 47.98, mean 48.16
+  MHz** (spread 5.4%). Replication is linear to eleven LUTs of glue
+  against 2 x 11590, and the second core costs 0.7% of clock, inside
+  that spread. **That row is superseded by the committed pair below**
+  and is kept because the replication argument was measured on it.
 
   **What that buys depends on how the cores are wired to the ports, and
   `oca_dual` answers it: two independent AXI-Stream pairs, one per
-  core.** One core per port is therefore **0.561 Gbps at a 1500-byte
-  MTU — 56% of line rate — and 0.222 Gbps on 64-byte packets**, with
-  1.121 Gbps aggregated across both ports. Neither port is saturated.
+  core.** Throughput follows from the measured cycle model — 40 cycles
+  per 64-byte block plus 71 per packet, so 1031 cycles for a 1500-byte
+  MTU and 111 for a 64-byte packet — divided into the clock of the
+  netlist being described, **and it moves when that clock does**. On
+  the committed pair (48.89 MHz mean, below) one core per port is
+  **0.569 Gbps at a 1500-byte MTU — 56.9% of line rate — and 0.226 Gbps
+  on 64-byte packets**, with 1.138 Gbps aggregated across both ports.
+  Neither port is saturated. (This read 0.561 / 0.222 / 1.121 until
+  2026-08-09: those are the same formula at 48.16 MHz, the
+  pre-zeroisation pair, left standing when the clock above was
+  corrected to 48.89.)
   Saturating one would need both cores behind it, which needs a
   distributor and a collector that do not exist, and which the per-core
   key store makes non-trivial: a slot is loaded into one core and only
   that core can use it.
 
-  **With the secret zeroisation merged, four seeds give 24602 LUTs
-  (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8 DP16KD, Fmax 50.37 /
-  48.12 / 48.05 / 49.03, mean 48.89 MHz.** That is +1411 LUTs over the
+  **With the secret zeroisation merged — the pair as committed — four
+  seeds give 24602 LUTs (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8
+  DP16KD, Fmax 50.37 / 48.12 / 48.05 / 49.03, mean 48.89 MHz**
+  (spread 4.8%), measured 2026-08-05 in `d4ee09f`. The 2026-08-09 audit
+  reports re-running all four and getting them exactly; what survives
+  in `hw/syn/build/` is the last of them, `oca_dual.report.json` at
+  02:22 that day reading 49.029 MHz, which matches seed 4. That is
+  +1411 LUTs over the
   pre-zeroisation pair — 705 per core, against the 718 measured on one
   core alone — and the clock is 1.5% *better*, which is inside the seed
   spread and means the zeroisation costs area and not time.
@@ -569,8 +677,12 @@ core and never updated as the design grew by 3000 LUTs.
   port land at 75.3%, against the 76.4% at which this device stopped
   routing in the occupancy study — and would additionally need a
   distributor, a collector and an answer to the per-core key store. **On
-  the current RTL the MVP that fits is one core on one port, 0.561 Gbps
-  at MTU.**
+  the current RTL the MVP that fits is one core on one port, 0.581 Gbps
+  at MTU** — the single core's own mean of 49.91 MHz through the same
+  cycle model, 58.1% of line rate, 0.230 Gbps on 64-byte packets. That
+  clock is the core placed **alone and out of context**: no MAC beside
+  it, no IO, no PLL, so it is the ceiling that configuration could
+  reach and not a measurement of it.
 
   **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
   Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
@@ -597,12 +709,9 @@ core and never updated as the design grew by 3000 LUTs.
   is established: both key stores are present in this netlist, 4626
   live flip-flops attributed to `oca_keystore.sv`, exactly twice 2313.
 
-  Two caveats. These figures **predate the secret zeroisation**, which
-  costs 718 LUTs per core — two cores should land near 24600 (56% of
-  the device), and the two-core Fmax with it is not measured. And
-  **nothing here has run on silicon**: Verilator cycle counts and
-  `--out-of-context` synthesis, with no IO, no pin constraints, no MAC
-  and no PLL.
+  One caveat stands. **Nothing here has run on silicon**: Verilator
+  cycle counts and `--out-of-context` synthesis, with no IO, no pin
+  constraints, no MAC and no PLL.
 - **The key store was missing from every netlist this project ever
   produced**, and is now present: a mis-mapping in yosys's
   `cmp2lut.v` folded `oca_keystore.sv`'s index bounds check to constant
@@ -622,11 +731,22 @@ core and never updated as the design grew by 3000 LUTs.
   for the tag comparison, which is combinational and so invisible to any
   cell count. Cost:
   8620 -> 11590 TRELLIS_COMB and 8311 -> 12043 TRELLIS_FF, DP16KD and
-  MULT18X18D unchanged at 4 and 20, Fmax 49.31 -> 48.84 MHz mean
-  (-1.0%, inside a 4.8% seed spread over five seeds). This is the price
-  of having a key store at all, not a regression in area — what it does
-  cost is router effort, at least 2.5x. See `oca/hw/syn/README.md`,
-  "The cmp2lut trap".
+  MULT18X18D unchanged at 4 and 20. **Two Fmax readings exist and they
+  are not the same measurement.** The one this entry carried (49.31 ->
+  48.84 MHz mean, -1.0%) was taken 2026-08-04 on the RTL of `bf3930f`,
+  the stock row over seeds 1-2 and the patched row over five. Re-run
+  2026-08-09 on `ee54b06` with five seeds on both rows: 50.96 -> 49.33
+  MHz mean (-3.2%, inside the stock row's 46.84-54.08 spread). What
+  separates them is the RTL and the seed sets, not the tools: `tools/`
+  holds one nextpnr, built 2026-08-03 and never rebuilt, and `5492e3a`
+  had already measured these two netlists placing differently at the
+  same seed while being cell for cell identical. Both readings support
+  the same conclusion, which is the point: having a key store costs
+  area, not clock. Area is unaffected either way — yosys is
+  deterministic, 11590 / 12043 reproduce exactly, and the stock row is
+  8616 / 8311 where it read 8620 (nextpnr's packing, not yosys). What
+  the change does cost is router effort, at least 2.5x. See
+  `oca/hw/syn/README.md`, "The cmp2lut trap".
 - **The AEAD engine is guarded too, by a floor on the whole netlist**
   (2026-08-06). The two per-file floors left `chacha20.sv`,
   `poly1305.sv` and `chacha20_poly1305.sv` with no netlist assertion at
@@ -643,19 +763,36 @@ core and never updated as the design grew by 3000 LUTs.
   per-file floors report ok in all three cases.
 - Next: **the Ethernet integration**, designed in
   `docs/design/2026-08-05-ethernet-integration.md` and needing the board
-  (expected ~2026-08-17). `verilog-ethernet` is now a submodule at
-  `oca/hw/vendor/verilog-ethernet`, pinned to 77320a94, and the RGMII
-  front end is written: `oca/hw/rtl/oca_rgmii.sv`, with the receive
-  delay movable at run time rather than fixed in the bitstream. Still
-  to come: the PLL, reset, the Colorlight i9 pin constraints and the
-  top level. **The 8-to-64-bit width conversion is not in our clock
-  domain**: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port
-  it is meant to feed, so it happens on the 125 MHz side inside
-  `eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64`, which does the
-  conversion and the clock domain crossing in one instance. Upstream's testbench does not exercise that configuration,
-  so it needs one of ours — as do the RGMII wrapper and the whole path
-  from a synthetic frame back out to one, all three of them buildable
-  without the board. `openFPGALoader` is not in `tools/` yet and there
-  is no programmer of any kind in the tree. What the board alone can
-  settle is listed in that document: the RGMII delay value and the IO
-  bank voltages above all.
+  (expected ~2026-08-17), and most of it is now written **here**.
+
+  What exists on this branch: `verilog-ethernet` as a submodule at
+  `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
+  front end around the ECP5 DDR primitives, with the receive delay
+  movable at run time rather than fixed in the bitstream (10 tests);
+  `oca_clkrst.sv`, one PLL and three clock domains with a reset
+  synchroniser each (7 tests); `ecp5_prims.sv`; `colorlight_i9.lpf`;
+  the parameter-fixing wrappers under `oca/hw/rtl/vendor/` that the
+  8422-LUT port measurement was taken on; and `oca_udp_seam.sv`, the
+  join between the UDP stack and `oca_core` (10 tests, run at two queue
+  depths).
+
+  **The 8-to-64-bit width conversion is not in our clock domain**: at
+  ~48 MHz an 8-bit stream carries 384 Mbps, under the port it is meant
+  to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
+  `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
+  crossing in one instance. Upstream's testbench does not exercise that
+  configuration, so it needs one of ours, as does the whole path from a
+  synthetic frame back out to one.
+
+  **What is left is the top level**, and everything downstream waits on
+  it: no place & route with real IO has ever run, so there is no
+  in-context Fmax, no block RAM budget for the whole design, no
+  bitstream, and no bench step past "blink". `colorlight_i9.lpf` already
+  fixes the port list it must present.
+
+  What the board alone can settle is listed in the design document: the
+  RGMII delay value and the IO bank voltages above all. One trap is
+  written down in `oca_rgmii.sv` and in the bring-up skill: the receive
+  delay sits on the data lines by LiteEth precedent and not by geometry,
+  and a one-unit-interval misalignment cannot be repaired by any tap
+  value. `link_up` low while the PHY's own link LED is lit is the tell.

@@ -38,13 +38,17 @@
   into Poly1305, which is the only place the padding is ever read, rather
   than on the 512-bit buses feeding it.
 - `hw/rtl/oca_keystore.sv` — key slots for the host protocol, `NUM_SLOTS`
-  of them (default 8). The only place key material lives. Each slot
+  of them (default 8). The only place key material is retained by
+  design: loading one also passes it through the receive buffer and
+  `oca_proto`'s argument registers, which the secret zeroisation
+  clears. Each slot
   carries a loaded bit, so reading a slot that was never written reports
   `rd_valid = 0` instead of handing back a key of zeros: a host mistake
   becomes a protocol error rather than a message encrypted under a key
   an attacker can guess. Keys and loaded bits are cleared on reset.
-- `hw/rtl/oca_pktbuf.sv` — one 64-bit packet buffer (default 2048 bytes,
-  256 words), written sequentially from the stream with a 1..8 byte count
+- `hw/rtl/oca_pktbuf.sv` — a two-bank 64-bit packet buffer (`BYTES` =
+  2048 per bank, 256 words each), one bank filled from the stream while
+  the other is read back, written sequentially with a 1..8 byte count
   and read at random word offsets. Writes past capacity are dropped and
   `wr_full` is raised, so a truncated packet becomes a length error rather
   than a silent wrap. The read port is registered and single, and the
@@ -141,6 +145,7 @@ Python 3.14).
 .venv/bin/python hw/sim/run_poly1305.py
 .venv/bin/python hw/sim/run_chacha20_poly1305.py
 .venv/bin/python hw/sim/run_dirty_pad.py
+.venv/bin/python hw/sim/run_secret_zeroise.py
 .venv/bin/python hw/sim/run_keystore.py
 .venv/bin/python hw/sim/run_pktbuf.py
 .venv/bin/python hw/sim/run_oca_core.py
@@ -157,9 +162,12 @@ everything else elaborates the SystemVerilog and is blind to what yosys
 does with it, which is how a mis-mapped key store survived every green
 test run this project ever had.
 
-Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
-7/7 tests pass, dirty-padding 2/2, keystore 4/4, pktbuf 12/12, oca_core
-29/29, attack 16/16, and post-synthesis keystore 4/4 and oca_proto 2/2;
+Current status: chacha20 5/5 tests pass at both `ROUNDS_PER_CYCLE`
+values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
+7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
+pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16 — 81 plus
+the three at the smallest `BYTES` — and post-synthesis keystore 4/4 and
+oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,
@@ -207,13 +215,27 @@ two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
 arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
 is congestion, not timing. What two engines are worth depends on how
 they are wired to the ports, and `oca_dual` gives each core its own
-AXI-Stream pair, one per PHY: **0.561 Gbps per port at a 1500-byte MTU,
-56% of line rate, and 1.121 Gbps across both**. Both PHYs can be fed;
+AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
+56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
+48.89 MHz mean through the measured cycle model, 1031 cycles for an
+MTU-sized packet. Both PHYs can be fed in cycle budget — whether two
+MACs fit beside the cores is settled below, and they do not — and
 neither port is saturated, and saturating one would need both cores
 behind it — a distributor and a collector that do not exist. This
 supersedes the 1.97-2.07 Gbps three-engine projection, and
 `SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
-occupancy study").
+occupancy study"). **Amended 2026-08-09: whether two ports fit was still
+open here, and it is settled — they do not.** One GbE port costs 8422
+LUTs measured (19.2% of the device), so two cores with two ports would
+take 94.5%, and two cores behind one port 75.3% against the 76.4% at
+which this device stopped routing above. The configuration that fits the
+current RTL is **one core on one port, 0.581 Gbps at MTU** — one core
+alone means the single core's own 49.91 MHz mean, not the pair's. That
+clock was measured on the core placed **alone and out of context**: no
+MAC beside it, no IO, no PLL, so it is the ceiling that configuration
+could reach rather than a measurement of it, and no such netlist has
+been built. The two-port figures above stand as a cycle budget, not a
+configuration the board carries.
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
@@ -222,10 +244,11 @@ datapath is **64 bits end to end inside `oca_core`**, which is the sixth
 rework and the one that made the protocol layer stop being the limit.
 
 As committed, `oca_core` synthesises to **12308 LUTs (28.1%), 12033 FF
-(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)**, 47.93 MHz at seed
-1 — reproducible with `hw/syn/run_synth.py oca_core`, and re-measured
-2026-08-06 because this read 11590 / 12043 / 48.52 MHz, which was the
-build from before the secret zeroisation. That netlist has a
+(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **49.91 MHz
+mean over four seeds** (47.93 / 50.91 / 51.03 / 49.76, measured
+2026-08-09, spread 6.5%) — reproducible with `hw/syn/run_synth.py
+oca_core`, and re-measured because this read 11590 / 12043 / 48.52 MHz,
+which was the build from before the secret zeroisation. That netlist has a
 working key store in it; the 11429 / 11228 / 51.71 MHz figures below,
 and every earlier area figure in this file, were measured before the
 `cmp2lut` defect was found, when `oca_keystore.sv` was being deleted
@@ -246,11 +269,12 @@ layer still adds no multipliers, so it does not cost an engine, and it
 was not on the critical path of that build: across all four seed
 reports, no entry cites `oca_proto.sv`, `oca_pktbuf.sv`,
 `oca_keystore.sv` or `oca_core.sv`. The path is inside `chacha20.sv` on
-three seeds and inside `poly1305.sv` on the fourth. On the committed
-netlist at seed 1 it is inside `oca_proto` for the first time — the
-`data_off` adder, most of its delay one route across the die — which is
-one seed and a placement result, not a property of the design
-(`hw/syn/README.md`).
+three seeds and inside `poly1305.sv` on the fourth. The protocol layer
+did reach the worst path once — the `data_off` adder, most of its delay
+one route across the die — but on the pre-zeroisation netlist, not the
+committed one: at seed 1 the committed netlist's worst path is back
+inside the engine, `poly1305.sv`'s multiply. One seed either way is a
+placement result, not a property of the design (`hw/syn/README.md`).
 
 **Throughput: 415 cycles per 64-byte block down to 40**, in three steps,
 each measured differentially in simulation and exactly linear. Widening
@@ -267,9 +291,9 @@ it, and that is the floor until the engine changes.
 1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit pair,
 two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
 added together, and `oca_dual` wires them to two ports, one core each.
-One port therefore sees one core, **0.561 Gbps at a 1500-byte MTU**, and
-is not saturated. **Read the aggregate as a cycle budget, not as a port
-cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
+One port therefore sees one core, **0.569 Gbps at a 1500-byte MTU** on
+the committed pair's clock, and is not saturated. **Read the aggregate
+as a cycle budget, not as a port cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
 (55.6%) and 8 DP16KD beside it were measured on RTL from before the
 packet overlap, in a build whose key store the mapper had deleted. That
 older pair was also the tightest configuration in the study: two of its
@@ -287,7 +311,9 @@ us around the ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
 constraints. The 8-to-64-bit width conversion is not in our clock
 domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
 is meant to feed, so it happens on the 125 MHz side inside
-`eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH = 64`. Upstream has no
+`eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64` — not
+`eth_mac_1g_rgmii_fifo`, which embeds the `rgmii_phy_if` that has no
+ECP5 target. Upstream has no
 testbench for that configuration, so it needs one of ours — that
 testbench, one for the RGMII wrapper and one for the whole path from a
 synthetic frame back out to one are the work that does not need the

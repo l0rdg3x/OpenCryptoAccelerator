@@ -46,9 +46,24 @@ try:
     from cocotb.runner import get_runner  # cocotb 1.x  # noqa: E402
 except ModuleNotFoundError:
     from cocotb_tools.runner import get_runner  # cocotb 2.x  # noqa: E402
+from cocotb_tools.check_results import get_results  # noqa: E402
 
 SIM_DIR = Path(__file__).resolve().parent
 BUILD = SIM_DIR / "sim_build_proto_gate"
+
+
+def failed_tests() -> int:
+    """Red tests in the run that just finished.
+
+    runner.test() only inspects results.xml under pytest, and Verilator
+    exits 0 on $finish even with failing tests: without this check the
+    process exits 0 however the suite went, and anything driving these
+    runners by exit code would call a red suite green.
+    """
+    num_tests, num_failed = get_results(SIM_DIR / "results.xml")
+    if num_tests == 0:
+        raise RuntimeError("results.xml records no tests")
+    return num_failed
 
 # Everything except oca_proto.sv, which arrives as cells.
 RTL_SOURCES = ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
@@ -104,6 +119,7 @@ def main() -> int:
         always=True,
     )
     t2 = time.monotonic()
+    (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
     runner.test(
         hdl_toplevel="oca_core",
         # Netlist plus RTL is a mixed-language build as far as the runner
@@ -116,7 +132,7 @@ def main() -> int:
     t3 = time.monotonic()
     print(f"gate-level oca_proto: yosys {t1 - t0:.0f} s, "
           f"verilator build {t2 - t1:.0f} s, tests {t3 - t2:.0f} s")
-    return 0
+    return 1 if failed_tests() else 0
 
 
 if __name__ == "__main__":
