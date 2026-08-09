@@ -224,7 +224,10 @@ Four modules, one responsibility each, all under `oca/hw/rtl/`:
   response header. Knows nothing about cryptography.
 - **`oca_keystore.sv`** — `NUM_SLOTS` key slots (default 8, a
   parameter). Written only by the load-key command, read by index. The
-  only place key material lives. Cleared on reset, and each slot carries
+  only place key material is retained by design; loading one also puts
+  it through the receive buffer and this layer's argument registers,
+  which the secret zeroisation clears. Cleared on reset, and each slot
+  carries
   a loaded bit so that using a slot that was never written is an error
   (status `04`) rather than encrypting under a key of zeros.
 - **`oca_pktbuf.sv`** — the two ~2 KB BRAM buffers, receive and

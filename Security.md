@@ -76,9 +76,14 @@ redundancy or fault detection. SPEC.md places this out of scope for v1
 and this document states it as such.
 
 The practical consequence: **do not deploy OCA where an attacker can
-measure the power consumption or the EM emissions of the FPGA.** The
-intended v1 deployment is a host-attached accelerator inside a machine
-the operator controls.
+measure the power consumption or the EM emissions of the FPGA.** The v1
+MVP is an external board on a bench or in a rack, reached over an
+Ethernet cable and carrying an attached JTAG debugger (`BOM-MVP.md`),
+so nothing about its form factor mitigates this: for v1 the physical
+access exclusion of section 1 is accepted, not addressed. "A
+host-attached accelerator inside a machine the operator controls" —
+which this paragraph asserted until 2026-08-09 — describes the Phase 3
+PCIe card, not the board being built.
 
 **"Constant time" in this project means timing invariance, and nothing
 more.** A reader coming from software cryptography will usually read
@@ -289,14 +294,28 @@ around a limitation it has not been told about.
    not fit the 64-byte datapath and cannot be terminated by the MAC
    FSM, so presenting one raises the `err` output. The recovery
    contract is: the message is abandoned on the spot — `busy` drops,
-   `in_ready` drops, `done` never pulses, and no ciphertext or tag is
-   produced for it. `err` is sticky and stays high until the next
-   `start`, which clears it and begins a fresh message. While `err` is
-   high the Poly1305 core is held in reset, so the abandoned message's
-   one-time key and accumulator cannot leak into the next one. A caller
-   that ignores `err` loses the message, never the engine — but it will
-   wait forever for a `done` that is not coming, so `err` must be
-   monitored alongside `done`.
+   `in_ready` drops, `done` never pulses, and **no tag and no further
+   ciphertext** are produced for it. `err` is sticky and stays high
+   until the next `start`, which clears it and begins a fresh message.
+   While `err` is high the Poly1305 core is held in reset, so the
+   abandoned message's one-time key and accumulator cannot leak into
+   the next one. A caller that ignores `err` loses the message, never
+   the engine — but it will wait forever for a `done` that is not
+   coming, so `err` must be monitored alongside `done`.
+
+   **The blocks accepted before the illegal one have already left the
+   engine, and that governs how a message may be retried.** `len_bad`
+   is evaluated in `S_ACCEPT` only, so a message aborted at block *N*
+   has already pulsed `out_valid` with the ciphertext of blocks 1 to
+   *N*−1. This entry read "no ciphertext or tag is produced for it"
+   until 2026-08-09, which invited the reading that an aborted message
+   left nothing behind. **A retry after an abort must use a fresh
+   nonce.** Retrying under the same (key, nonce) with any difference in
+   the plaintext — a corrected length, different padding, a
+   re-serialised record — puts two plaintexts under one keystream,
+   which is the failure item 2 of section 4 exists to prevent. Nothing
+   in the engine enforces this; it is the caller's obligation, and the
+   protocol layer above does not retry on its own.
 
 ## 6. The host protocol: what it exposes
 

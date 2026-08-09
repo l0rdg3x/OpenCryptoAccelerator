@@ -38,7 +38,10 @@
   into Poly1305, which is the only place the padding is ever read, rather
   than on the 512-bit buses feeding it.
 - `hw/rtl/oca_keystore.sv` — key slots for the host protocol, `NUM_SLOTS`
-  of them (default 8). The only place key material lives. Each slot
+  of them (default 8). The only place key material is retained by
+  design: loading one also passes it through the receive buffer and
+  `oca_proto`'s argument registers, which the secret zeroisation
+  clears. Each slot
   carries a loaded bit, so reading a slot that was never written reports
   `rd_valid = 0` instead of handing back a key of zeros: a host mistake
   becomes a protocol error rather than a message encrypted under a key

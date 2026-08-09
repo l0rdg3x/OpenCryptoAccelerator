@@ -3,7 +3,12 @@
  * Key slots for the OCA host protocol.
  *
  * NUM_SLOTS one-time keys, written by the load-key command and read by
- * index. This is the only place key material lives.
+ * index. This is the only place key material is *retained by design*,
+ * which is not the same as the only place it exists: a key being loaded
+ * also passes through the receive buffer's block RAM and oca_proto's
+ * argument registers, and a key in use is held in the engine. Those are
+ * transient and are what the secret zeroisation walks; this store is
+ * what survives a command on purpose.
  *
  * A slot carries a loaded bit: reading a slot that was never written
  * reports rd_valid = 0 rather than handing back a key of zeros, so a
