@@ -19,13 +19,34 @@
  * {Q1, Q0}. Getting this backwards produces a link that comes up and passes
  * garbage, which is why it is written down.
  *
- * The receive delay sits on the five data lines and not on the clock. Both
- * are geometrically equivalent — the RX unit interval is 4 ns, so delaying
- * data by +2 ns is congruent to delaying the clock by 2 ns — but a DELAY
- * cell on RXC moves the clock net off the PIO's own output onto the
- * IOLOGIC's INDD, and nextpnr then re-runs its dedicated-routing test from
- * there. If that test fails the 125 MHz clock falls back to general fabric
- * routing with skew this flow does not characterise.
+ * The receive delay sits on the five data lines and not on the clock,
+ * because a DELAY cell on RXC moves the clock net off the PIO's own output
+ * onto the IOLOGIC's INDD, and nextpnr then re-runs its dedicated-routing
+ * test from there. If that test fails the 125 MHz clock falls back to
+ * general fabric routing with skew this flow does not characterise.
+ *
+ * The two are NOT interchangeable, and an earlier version of this comment
+ * said they were ("congruent at a 4 ns unit interval"). Delaying data by +D
+ * is delaying the clock by -D, and the modulus that decides which nibble
+ * lands in Q0 is the 8 ns clock period, not the 4 ns UI: +2 ns and -2 ns are
+ * 4 ns apart, which is exactly the Q0-to-Q1 spacing. Both arrangements
+ * centre the sample in an eye; they disagree about which nibble is the
+ * rising one. What makes this side the right one is not geometry but
+ * precedent: LiteEth delays rx_ctl and rx_data[0..3] and leaves the receive
+ * clock alone, decodes in-band status from the rising captures exactly as
+ * below, and runs at 1 Gbps on this board family.
+ *
+ * If that precedent does not hold here, the failure is one unit interval of
+ * skew and no tap value repairs it: 0..127 taps at LiteEth's 25 ps is
+ * 3.175 ns, less than one UI, and it moves the sample the wrong way. The
+ * fixes are inverting the SCLK into the IDDRX1F, or moving the delay onto
+ * RXC and accepting the INDD routing question above. Swapping the two
+ * nibbles does not repair it: the capture would still straddle two bytes.
+ *
+ * The bench discriminator, so the sweep is not run for nothing: with a
+ * one-UI error link_up below decodes the falling in-band nibble, which
+ * RGMII holds at 0000 during a normal inter-frame gap. **link_up low while
+ * the PHY's own link LED is on means nibble alignment, not tap count.**
  *
  * DELAYF rather than DELAYG, which is where this departs from LiteEth. It is
  * the same delay element plus LOADN/MOVE/DIRECTION/CFLAG, and nextpnr moves

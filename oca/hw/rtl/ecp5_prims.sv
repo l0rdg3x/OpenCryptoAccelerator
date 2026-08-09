@@ -80,10 +80,10 @@ module ODDRX1F (
 endmodule
 
 /*
- * The PLL. Same reason as the four above — its 37 parameters have to be
+ * The PLL. Same reason as the four above — its 36 parameters have to be
  * in front of slang for oca_clkrst.sv to override any of them — plus one
- * of its own: nextpnr reads five of the analogue settings from cell
- * ATTRIBUTES rather than parameters (ecp5/bitstream.cc:1279-1286), and
+ * of its own: nextpnr reads four of the analogue settings from cell
+ * ATTRIBUTES rather than parameters (ecp5/bitstream.cc:1278-1300), and
  * defaults every one of them to zero. ICP_CURRENT=0 is a charge pump
  * with no current. So the instantiation carries those as attributes and
  * they are not, and must not become, parameters here.

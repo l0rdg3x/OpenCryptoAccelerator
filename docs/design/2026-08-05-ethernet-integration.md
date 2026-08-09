@@ -365,8 +365,26 @@ would otherwise need one bitstream per candidate into a sweep. It is on
 the data and not the clock because a delay cell on `RXC` moves the clock
 net onto the IOLOGIC's `INDD` output, after which nextpnr re-runs its
 dedicated-routing test from there; failing it puts a 125 MHz clock on
-general fabric routing. Delaying data by +2 ns and delaying the clock by
-2 ns are congruent at a 4 ns unit interval, so nothing is lost.
+general fabric routing.
+
+**Corrected 2026-08-09: the two are not interchangeable.** This paragraph
+read "delaying data by +2 ns and delaying the clock by 2 ns are congruent
+at a 4 ns unit interval, so nothing is lost". Delaying data by +D is
+delaying the clock by −D, and what decides which nibble reaches `Q0` is
+the 8 ns clock period rather than the 4 ns UI: the two choices sit 4 ns
+apart, exactly the `Q0`-to-`Q1` spacing, so they centre the sample in an
+eye equally well and disagree about which nibble is the rising one. The
+data side is right by precedent, not by geometry: LiteEth delays
+`rx_ctl` and `rx_data[0..3]`, leaves the receive clock alone, decodes
+in-band status from the rising captures as we do, and runs at 1 Gbps on
+this board family. If that precedent does not carry, no tap value repairs
+it — 0..127 taps span 3.175 ns, under one UI, and in the wrong direction
+— and the fixes are inverting the `SCLK` into the `IDDRX1F` or moving the
+delay onto `RXC`. The discriminator at the bench is `link_up`: with a
+one-UI error it decodes the falling in-band nibble, which RGMII holds at
+0000 during an inter-frame gap, so **`link_up` low while the PHY's own
+link LED is on means nibble alignment, not tap count**, and the sweep can
+be skipped.
 
 **A PLL cannot cleanly take the recovered clock.** The dedicated PLL
 reference inputs on CABGA381 are A4/A5, A6/B6, A19/B20, C18/D17, P3/P4 and

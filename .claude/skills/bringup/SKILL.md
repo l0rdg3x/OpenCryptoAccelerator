@@ -1,6 +1,6 @@
 ---
 name: bringup
-description: The order to bring up the Colorlight i9 board, and what must be verified before each step. Use when the board is on the bench for the first time, or when a bitstream that should work does not.
+description: Use when the board is on the bench for the first time, or when a bitstream that should work does not. Gives the order to bring up the Colorlight i9 board, and what must be verified before each step.
 ---
 
 # Board bring-up
@@ -21,8 +21,8 @@ bitstream drives those pins.
 
 Ethernet port 0 and the LED share **bank 6**; port 1 is entirely in
 **bank 3**. Our two sources for this board contradict each other exactly
-on the LED's standard — the vendor's `blink.lpf` says `LVCMOS25`, litex
-says the RGMII pins are `LVCMOS33` — and nextpnr enforces one VCCIO per
+on the LED's standard (the vendor's `blink.lpf` says `LVCMOS25`, litex
+says the RGMII pins are `LVCMOS33`), and nextpnr enforces one VCCIO per
 bank across outputs, so the wrong combination is a fatal build error.
 
 The corollary is worse and silent: **an input declared at the wrong
@@ -40,7 +40,7 @@ openFPGALoader --detect
 
 Read the IDCODE and confirm it is the part you think you have. There is
 a documented case in this family of modules silkscreened as one revision
-carrying a different die and package entirely — a 256-pin part where the
+carrying a different die and package entirely: a 256-pin part where the
 pinout assumes 381. If the IDCODE disagrees with `BOM-MVP.md`, stop:
 every pin constraint downstream is wrong.
 
@@ -58,9 +58,12 @@ does not blink, nothing after this is diagnosable.
 
 ## 3. The PLL
 
-Add `ecppll`'s 125 MHz and its 90-degree copy, and divide one down to
-something visible. Proves the PLL locks from a 25 MHz input on the
-dedicated `LLC_GPLL0T_IN` pin before any logic depends on it.
+Add `oca_clkrst`'s two outputs, 125 MHz and 48 MHz, and divide one down
+to something visible. Proves the PLL locks from a 25 MHz input on the
+dedicated `LLC_GPLL0T_IN` pin before any logic depends on it. There is
+no 90-degree copy to build: this step asked for one until 2026-08-09,
+and `oca_rgmii.sv` makes the transmit clock from an `ODDRX1F` fed by a
+constant edge pair instead.
 
 ## 4. RGMII, and the delay sweep
 
@@ -74,7 +77,7 @@ empirical and must be found at the bench.
 Start where the field is: **RX 2 ns (80 taps at LiteEth's 25 ps per
 tap), TX 0**. Then sweep the RX delay and find the window where the link
 is stable, rather than accepting the first value that brings the link
-up — a link that works at exactly one tap is a link that will fail on a
+up. A link that works at exactly one tap is a link that will fail on a
 warm day.
 
 Two traps: `DEL_VALUE` is a 7-bit field, so **128 wraps silently to 0**;
@@ -85,6 +88,20 @@ Also unverified: whether the B50612D applies an internal delay by
 default. Its datasheet is a scanned image. If the PHY delays and we
 delay too, the link will not come up and nothing in the FPGA will say
 why.
+
+**Before sweeping, decide whether a sweep can help at all.** Our delay
+is on the data lines and not on the clock, which is LiteEth's
+arrangement and is right by their precedent rather than by geometry: the
+two choices sit one unit interval apart, so they disagree about which
+nibble the `IDDRX1F` captures on the rising edge. If that alignment is
+wrong, no tap value repairs it. 0 to 127 taps span about 3.2 ns, under
+one 4 ns UI, and in the wrong direction.
+
+The tell is `link_up`. With a one-UI error it decodes the falling
+in-band nibble, which RGMII holds at 0000 between frames. **`link_up`
+reading 0 while the PHY's own link LED is lit means nibble alignment,
+not tap count**, and the fix is to invert the `SCLK` into the `IDDRX1F`
+or move the delay onto `RXC`, not to keep sweeping.
 
 ## 5. Traffic
 

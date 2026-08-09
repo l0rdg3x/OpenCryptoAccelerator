@@ -40,7 +40,7 @@
  * EHXPLLL IS DECLARED IN ecp5_prims.sv, for the reason that file gives:
  * a module that reaches read_slang by way of read_verilog arrives
  * already elaborated, so overriding CLKOS_DIV from here against yosys's
- * own cells_bb.v would fail. Declaring it ourselves puts the 36
+ * own cells_bb.v would fail. Declaring it ourselves puts all 36
  * parameters in front of the frontend that elaborates this file. It has
  * a second effect worth knowing: the blackbox's declared defaults are
  * emitted into the netlist even where this instance does not override
@@ -52,7 +52,7 @@
  * THE FOUR ANALOGUE SETTINGS ARE ATTRIBUTES, NOT PARAMETERS, and that
  * is not a stylistic choice. nextpnr reads ICP_CURRENT, LPF_RESISTOR,
  * MFG_ENABLE_FILTEROPAMP and MFG_GMCREF_SEL from the cell's attribute
- * map (ecp5/bitstream.cc:1279-1286) and defaults every one of them to
+ * map (ecp5/bitstream.cc:1278-1300) and defaults every one of them to
  * zero. Written as parameters they would be ignored and the bitstream
  * would carry a charge pump with no current. The values are ecppll's
  * for this VCO.
