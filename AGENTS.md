@@ -164,8 +164,8 @@ ctest --test-dir build          # one test, and it wraps 126 checks
 RTL (Phase 2), from `oca/`:
 
 ```sh
-.venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass
-.venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass
+.venv/bin/python hw/sim/run_chacha20.py           # 5/5 pass, + 5 at ROUNDS_PER_CYCLE=2
+.venv/bin/python hw/sim/run_poly1305.py           # 4/4 pass, + 4 at ROWS_PER_CYCLE=5
 .venv/bin/python hw/sim/run_chacha20_poly1305.py  # 7/7 pass
 .venv/bin/python hw/sim/run_dirty_pad.py          # 2/2 pass
 .venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
@@ -177,8 +177,17 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-81 RTL tests, three of them run a second time at the smallest BYTES
-oca_pktbuf accepts, plus 6 on a synthesised netlist.
+81 RTL tests, twelve of them run a second time at a non-default
+parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
+`poly1305` at `ROWS_PER_CYCLE` = 5 and three for `oca_pktbuf` at the
+smallest `BYTES` it accepts — plus 6 on a synthesised netlist.
+
+**A parameter with one tested value is a parameter that does not work.**
+Both of these switch the datapath rather than sizing it, and both went
+untested outside their default until 2026-08-09. What the second value
+catches is not hypothetical: mutating `poly1305.sv`'s `CSH` to a
+constant is a no-op at one value and wrong at the other, in both
+directions, and each mutation is caught only by the run it breaks.
 
 `run_keystore_gate.py` and `run_proto_gate.py` are the only suites that
 run on a synthesised netlist rather than on the RTL; they exist because

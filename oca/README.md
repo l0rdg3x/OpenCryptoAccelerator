@@ -162,7 +162,8 @@ everything else elaborates the SystemVerilog and is blind to what yosys
 does with it, which is how a mis-mapped key store survived every green
 test run this project ever had.
 
-Current status: chacha20 5/5 tests pass, poly1305 4/4 tests pass, AEAD
+Current status: chacha20 5/5 tests pass at both `ROUNDS_PER_CYCLE`
+values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
 pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16 — 81 plus
 the three at the smallest `BYTES` — and post-synthesis keystore 4/4 and
