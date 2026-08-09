@@ -125,10 +125,17 @@ its two clocks, and it carries the same pair of
 
 - Pins, for reference: help2man 1.49.3, Verilator `3d2421f3` (v5.050),
   Eigen `3147391d` (3.4.0), prjtrellis `56bb1704`, yosys `41a4b5a0`
-  (0.67+), nextpnr `89454078`, cocotb `82d0eed5`. cocotb comes from git
-  because its PyPI releases (<= 2.0.1) reject Python >= 3.14, and it is
-  pinned to a commit rather than `@master`, which drifts under the pin
-  without saying so.
+  (0.67+), nextpnr `89454078`, openFPGALoader `85be4fa0` (v1.1.1),
+  cocotb `82d0eed5`. cocotb comes from git because its PyPI releases
+  (<= 2.0.1) reject Python >= 3.14, and it is pinned to a commit rather
+  than `@master`, which drifts under the pin without saying so.
+  openFPGALoader links libftdi1, hidapi, libusb, zlib and libudev from
+  the system through pkg-config. **It does not install
+  `99-openfpgaloader.rules`**, and there is no CMake option to ask it
+  to: upstream has no CMake-driven udev rule install at all, and its own
+  documentation has the operator copy the file to `/etc/udev/rules.d/`
+  by hand. So a JTAG cable is reachable either after copying that rule
+  or by running the tool with sudo.
 
 - Developed on CachyOS with Python 3.14. System dependencies are used as
   found and never installed: boost 1.91, ICU 78, tcl 8.6, readline,
@@ -750,9 +757,10 @@ core and never updated as the design grew by 3000 LUTs.
      `udp_complete_64` presents a payload stream plus a header sideband
      and expects one back. That is logic with its own failure modes, not
      wiring, and it needs its own testbench.
-  3. **No programmer in the tree.** Bring-up step 1 is
-     `openFPGALoader --detect`, and `openFPGALoader` is in neither
-     branch nor in `scripts/build-toolchain.sh`.
+  3. ~~No programmer in the tree.~~ **Done 2026-08-09**:
+     `scripts/build-toolchain.sh openfpgaloader` builds openFPGALoader
+     v1.1.1 into `tools/`. `--detect` runs and reports no cable, which
+     is as far as this can be tested without the board.
   4. `oca_clkrst.sv` has no testbench, and reset synchronisers are
      exactly the thing that works in simulation and not on silicon.
 
