@@ -66,9 +66,9 @@ const char *oca_strerror(int status);
  * be discarded.
  *
  * A NULL data pointer is valid only with a zero length: aad = NULL
- * with aad_len > 0 is OCA_ERR_INVALID_ARG, not an empty AAD. Lengths
- * above INT_MAX are rejected the same way (the backend interface
- * takes int lengths).
+ * with aad_len > 0 is OCA_ERR_INVALID_ARG, not an empty AAD. in_len
+ * and aad_len above INT_MAX are rejected the same way (the backend
+ * casts them to int).
  */
 int oca_aead_encrypt(const oca_ctx *ctx, oca_aead_alg alg,
                      const uint8_t *key, size_t key_len,
@@ -91,7 +91,8 @@ int oca_hash(const oca_ctx *ctx, oca_hash_alg alg,
              const uint8_t *in, size_t in_len,
              uint8_t *out, size_t out_len);
 
-/* One-shot MAC (keyed). */
+/* One-shot MAC (keyed). key_len above INT_MAX is OCA_ERR_INVALID_ARG
+ * (HMAC casts it to int). */
 int oca_mac(const oca_ctx *ctx, oca_mac_alg alg,
             const uint8_t *key, size_t key_len,
             const uint8_t *in, size_t in_len,

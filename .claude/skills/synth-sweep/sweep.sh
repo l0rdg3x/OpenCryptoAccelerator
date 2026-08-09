@@ -11,6 +11,9 @@ REPORT="$ROOT/oca/hw/syn/build/${TARGET}.report.json"
 # shared scratch directory is exactly where a sweep once lost three of
 # four seeds to a concurrent cleanup.
 LOG="$ROOT/oca/hw/syn/build/.sweep-$$.log"
+# run_synth.py only creates this directory once it starts, inside
+# main(), after bash has already tried to open the redirect below.
+mkdir -p "$(dirname "$LOG")"
 
 cd "$ROOT/oca"
 
@@ -69,7 +72,8 @@ for k in area.split(","):
 print(f"  Fmax  {' / '.join(f'{x:.2f}' for x in v)}")
 print(f"  mean  {mean:.2f} MHz   spread {spread:.1f}%")
 if spread > 8.0:
-    print("  NOTE: spread exceeds the 7.4% the single core measures across"
-          "\n        seeds on the pinned toolchain — the design may have"
-          "\n        become harder to place. That is a finding, not noise.")
+    print("  NOTE: spread exceeds every seed spread recorded on the"
+          "\n        committed design (6.5% one core, 4.8% the pair) - it"
+          "\n        may have become harder to place. That is a finding,"
+          "\n        not noise.")
 PY

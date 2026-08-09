@@ -211,8 +211,11 @@ two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
 arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
 is congestion, not timing. What two engines are worth depends on how
 they are wired to the ports, and `oca_dual` gives each core its own
-AXI-Stream pair, one per PHY: **0.561 Gbps per port at a 1500-byte MTU,
-56% of line rate, and 1.121 Gbps across both**. Both PHYs can be fed;
+AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
+56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
+48.89 MHz mean through the measured cycle model, 1031 cycles for an
+MTU-sized packet. Both PHYs can be fed in cycle budget — whether two
+MACs fit beside the cores is settled below, and they do not — and
 neither port is saturated, and saturating one would need both cores
 behind it — a distributor and a collector that do not exist. This
 supersedes the 1.97-2.07 Gbps three-engine projection, and
@@ -222,9 +225,13 @@ open here, and it is settled — they do not.** One GbE port costs 8422
 LUTs measured (19.2% of the device), so two cores with two ports would
 take 94.5%, and two cores behind one port 75.3% against the 76.4% at
 which this device stopped routing above. The configuration that fits the
-current RTL is **one core on one port, 0.561 Gbps at MTU**; the two-port
-figures above stand as a cycle budget, not a configuration the board
-carries.
+current RTL is **one core on one port, 0.581 Gbps at MTU** — one core
+alone means the single core's own 49.91 MHz mean, not the pair's. That
+clock was measured on the core placed **alone and out of context**: no
+MAC beside it, no IO, no PLL, so it is the ceiling that configuration
+could reach rather than a measurement of it, and no such netlist has
+been built. The two-port figures above stand as a cycle budget, not a
+configuration the board carries.
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
@@ -233,10 +240,11 @@ datapath is **64 bits end to end inside `oca_core`**, which is the sixth
 rework and the one that made the protocol layer stop being the limit.
 
 As committed, `oca_core` synthesises to **12308 LUTs (28.1%), 12033 FF
-(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)**, 47.93 MHz at seed
-1 — reproducible with `hw/syn/run_synth.py oca_core`, and re-measured
-2026-08-06 because this read 11590 / 12043 / 48.52 MHz, which was the
-build from before the secret zeroisation. That netlist has a
+(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **49.91 MHz
+mean over four seeds** (47.93 / 50.91 / 51.03 / 49.76, measured
+2026-08-09, spread 6.5%) — reproducible with `hw/syn/run_synth.py
+oca_core`, and re-measured because this read 11590 / 12043 / 48.52 MHz,
+which was the build from before the secret zeroisation. That netlist has a
 working key store in it; the 11429 / 11228 / 51.71 MHz figures below,
 and every earlier area figure in this file, were measured before the
 `cmp2lut` defect was found, when `oca_keystore.sv` was being deleted
@@ -279,9 +287,9 @@ it, and that is the floor until the engine changes.
 1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit pair,
 two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
 added together, and `oca_dual` wires them to two ports, one core each.
-One port therefore sees one core, **0.561 Gbps at a 1500-byte MTU**, and
-is not saturated. **Read the aggregate as a cycle budget, not as a port
-cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
+One port therefore sees one core, **0.569 Gbps at a 1500-byte MTU** on
+the committed pair's clock, and is not saturated. **Read the aggregate
+as a cycle budget, not as a port cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
 (55.6%) and 8 DP16KD beside it were measured on RTL from before the
 packet overlap, in a build whose key store the mapper had deleted. That
 older pair was also the tightest configuration in the study: two of its

@@ -938,10 +938,18 @@ accordingly.
 with 26% margin is the ceiling of this silicon" and "**the second port
 cannot be fed on an LFE5U-45F**". Both readings add the two engines
 together against a single port. `oca_dual` wires each core to its own
-AXI-Stream pair, so a port sees one core: **0.561 Gbps at a 1500-byte
-MTU, 56% of line rate**, and both PHYs can be fed. Commit 23742dc
-retracted this for `AGENTS.md` and `SPEC.md` and did not reach this
-file; see `AGENTS.md` for the measured figures.
+AXI-Stream pair, so a port sees one core, and both PHYs can be fed in
+cycle budget. Commit 23742dc retracted this for `AGENTS.md` and
+`SPEC.md` and did not reach this file; see `AGENTS.md` for the measured
+figures.
+
+**Amended again 2026-08-09**, and this time it is the "both PHYs" half
+that goes: one GbE port costs 8422 LUTs measured (19.2% of the device),
+so two cores with two ports is 94.5% of it and two cores behind one port
+75.3% — against the 76.4% at which this device stopped routing in the
+occupancy study. Feeding both PHYs is a cycle budget, not a
+configuration that fits. **The MVP that fits the current RTL is one core
+on one port.**
 
 Three qualifications, none of them in the project's favour:
 
@@ -1203,7 +1211,9 @@ reaching it means the protocol layer must cost nothing on top of the
 engine — not merely little.** Amended 2026-08-06: this read "24% of
 headroom" and "24% of margin rather than 26%", both of which measure the
 two engines together against one port. `oca_dual` gives each core its
-own port, so the per-port figure is 0.561 Gbps at a 1500-byte MTU.
+own port, so the per-port figure is 0.569 Gbps at a 1500-byte MTU on
+the committed pair's 48.89 MHz mean (0.561 at the 48.16 MHz this line
+quoted until 2026-08-09).
 
 The cost of pipelining is buffers, and it is affordable: a second receive
 and a second transmit buffer per core takes block RAM from 4 DP16KD per
@@ -1254,21 +1264,33 @@ difference is whether yosys's `cmp2lut.v` carries the patch in
 Seeds are 1 and 2 for the stock row; 1, 2, 4, 5 and 6 for the patched
 row.
 
-**Re-measured 2026-08-09 on the pinned toolchain**
-(`scripts/build-toolchain.sh`, RTL at `ee54b06`): the area columns
-reproduce — 11590 / 12043 patched and 8311 FF stock exactly, 8616
-against 8620 TRELLIS_COMB being nextpnr's packing, not yosys — but **no
-Fmax figure above does**: every seed moved, so the nextpnr that measured
-them was not the pinned one (the pin arrived 2026-08-06, two days after
-this table). On the pinned tools the rows read: patched 48.52, 51.26,
-47.59, 50.05, 49.23 (mean **49.33**); stock 51.93, 51.63, 46.84, 50.32,
-54.08 (mean **50.96**). The conclusion below survives: -3.2% on the
-means against a 46.84-54.08 stock spread is still "unchanged within the
-seed spread". The same caution covers every Fmax this file dates
-2026-08-04 or earlier — area reproduces on the pinned toolchain,
-placement does not. Everything dated 2026-08-05 or later has been
-spot-checked and does reproduce (48.52 above; the committed core's
-47.93; the two-core 48.89 mean, all four seeds exact).
+**Run again 2026-08-09, on the RTL of `ee54b06` and five seeds on both
+rows**: patched 48.52, 51.26, 47.59, 50.05, 49.23 (mean **49.33**);
+stock 51.93, 51.63, 46.84, 50.32, 54.08 (mean **50.96**). The area
+columns come back unchanged — 11590 / 12043 patched and 8311 FF stock
+exactly, 8616 against 8620 TRELLIS_COMB being nextpnr's packing, not
+yosys.
+
+**That run is not a re-measurement of this table, and the clocks were
+never going to repeat across it.** This table is the RTL of `bf3930f`,
+its stock row on two seeds; that one is `ee54b06`, five seeds on each
+row. `5492e3a` had already measured what the RTL move alone does: the
+two netlists match on every per-type cell total and still place
+differently at seed 1 — `bf3930f` 49.76 MHz, the later RTL 48.52 — with
+the worst path leaving `chacha20.sv` for `oca_proto`. Equal totals are
+not an equal netlist, so the area columns repeating says nothing about
+placement. The tools are not in it: `tools/` holds one nextpnr, built
+2026-08-03 and never rebuilt, and the toolchain pin (`49691a4`,
+2026-08-04 22:11) recorded the revisions of that already-built
+toolchain six hours after this table was written. Read as its own
+measurement on its own RTL, the 2026-08-09 run reaches the conclusion
+below by itself: -3.2% on the means against a 46.84-54.08 stock spread
+is "unchanged within the seed spread".
+
+An earlier version of this note read the same numbers as proof that
+"the nextpnr behind them was another binary" and dated the pin
+2026-08-06. Both were wrong, and the second is what made the first look
+supported.
 
 **This is not a regression in area; it is the cost of having a key store
 at all** — but read the two rows as what they are, which is one netlist
@@ -1294,10 +1316,9 @@ see below.
 
 **Fmax is unchanged within the seed spread**: 49.31 MHz mean before,
 48.84 MHz after — **-1.0%**, against a spread of 4.8% across the five
-patched seeds alone (47.48 to 49.76). Those are the pre-pin figures the
-note above re-measures: on the pinned toolchain it is 50.96 -> 49.33,
-**-3.2%** against the stock row's 46.84-54.08 spread — the same
-conclusion, on numbers that reproduce. That is the expected result — the
+patched seeds alone (47.48 to 49.76). The 2026-08-09 run on `ee54b06`
+reaches it independently: 50.96 -> 49.33, **-3.2%** against that run's
+46.84-54.08 stock spread. That is the expected result — the
 critical path lives in `poly1305.sv`'s DSP products and `chacha20.sv`,
 not in a register file read through a mux — but it had to be measured
 rather than assumed. The stock row is only two seeds, so treat its mean
@@ -1327,13 +1348,26 @@ a decode, so neither the block RAMs nor the DSPs move.
 
 ### Where the committed design stands
 
-Same flow, same device, seed 1, 100 MHz constraint. This is what
+Same flow, same device, 100 MHz constraint. This is what
 `run_synth.py oca_core` reproduces on the RTL as merged, and what the
 netlist checks now cover:
 
-| | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax (seed 1) |
-|---|---|---|---|---|---|
-| `oca_core`, as committed | 12308 | 12033 | 4 | 20 | 47.93 MHz |
+| | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax mean | seeds |
+|---|---|---|---|---|---|---|
+| `oca_core`, as committed | 12308 | 12033 | 4 | 20 | 49.91 MHz | 47.93, 50.91, 51.03, 49.76 |
+
+Four seeds, measured 2026-08-09; area is identical on all four, as
+synthesis being deterministic requires. Spread **6.5%** on
+`sweep.sh`'s definition, `(max-min)/min`. This table carried seed 1
+alone (47.93 MHz) until that sweep was run, which made the single core
+the one figure in this file quoted from a single draw.
+
+**Two definitions of spread live in this file.** The seed tables above
+divide by the mean; `sweep.sh` and every figure dated 2026-08-09
+divide by the minimum. On these data they differ by a few tenths of a
+point — the 64-bit row's 5.8% is 6.1% by the minimum — so never compare
+a percentage from one against a percentage from the other without
+recomputing.
 
 Live flip-flops by source file, printed by `check_netlist` on every run:
 `oca_proto.sv` 3645, `chacha20_poly1305.sv` 2479, `oca_keystore.sv`
@@ -1375,11 +1409,11 @@ of the committed RTL has since been placed and routed over four seeds;
 here, because the same figure written down twice is how this file and
 that one came to disagree about the single-core numbers.
 
-And one seed is one sample. 47.93 MHz here is a single draw from a
-spread this design measures at several percent across seeds (4.7% on
-the two-core pair, 7.4% on one core, both on the pinned toolchain), so
-it bounds nothing on its own; the four-seed figures are the ones to
-quote. The comparison
+And one seed is one sample. The 47.93 MHz this section used to carry
+alone is the lowest of the four above, drawn from a **6.5%** spread —
+wider than the pair's 4.8%, both on `(max-min)/min`, the definition
+`sweep.sh` prints. Quote the mean, and quote it with its seed count.
+The comparison
 this paragraph used to make — against 49.76 MHz at seed 1 on a netlist
 yosys reported cell for cell identical — no longer applies: the secret
 zeroisation changed the netlist (11590 -> 12308 TRELLIS_COMB), so the

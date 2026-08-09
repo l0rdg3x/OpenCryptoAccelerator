@@ -20,7 +20,10 @@ Critical points in short:
 - A correction edits the figure in place, everywhere it appears, in the
   same commit — never stack a dated amendment on top of text that still
   says the old thing.
-- Measured numbers carry their toolchain: only figures measured on the
-  pinned toolchain reproduce; re-measure before publishing.
+- An Fmax belongs to the commit it was measured on. Equal cell counts
+  are not the same netlist — two builds can match on every per-type
+  total and still place differently — so matching area proves nothing
+  about clock. Re-measure before publishing, and find what changed
+  before blaming the toolchain.
 - Product in English (code, commits, docs).
 - Git: work on branches, never commit/push without explicit go-ahead.

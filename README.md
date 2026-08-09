@@ -16,8 +16,9 @@ The full project specification is in [SPEC.md](SPEC.md).
 ## Repository status
 
 - **Phase 1 (done)** — abstract crypto API in C11 + OpenSSL 3 software
-  backend, 117/117 official test vectors passing, benchmark harness.
-  In [oca/](oca/).
+  backend, 126/126 checks passing — 113 driven by official test
+  vectors, plus a tamper case and twelve bad-argument cases, which have
+  no vector to come from — and a benchmark harness. In [oca/](oca/).
 - **Phase 2 (in progress)** — SystemVerilog cores verified with
   cocotb + Verilator against the same official vectors: ChaCha20,
   Poly1305, AEAD ChaCha20-Poly1305 (encrypt + decrypt), plus the host
@@ -56,9 +57,11 @@ cd oca
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 ```
 
-The last two need the project-local yosys as well: they replay tests on
-ECP5 primitives, because every other suite elaborates the SystemVerilog
-and cannot see what synthesis did to it.
+The two `*_gate.py` runners need the project-local yosys as well: they
+replay tests on ECP5 primitives, because every other suite elaborates
+the SystemVerilog and cannot see what synthesis did to it. The last line
+is not a simulation at all — the protocol model has no DUT and runs as
+plain Python.
 
 ## Documentation
 

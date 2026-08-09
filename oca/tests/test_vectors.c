@@ -3,6 +3,7 @@
 #include <oca/oca.h>
 #include "vectors/vectors.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -178,6 +179,7 @@ static void run_bad_args(const oca_ctx *ctx)
 {
     const oca_vec_aead *v = &vecs_chacha20_poly1305[0];
     uint8_t out[MAX_BUF], tag[16];
+    size_t huge_len = (size_t)INT_MAX + 1;
     int rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
                               v->key, v->key_len, v->nonce, v->nonce_len,
                               NULL, 5, v->pt, v->pt_len, out, tag, sizeof(tag));
@@ -203,6 +205,102 @@ static void run_bad_args(const oca_ctx *ctx)
         passed++;
     } else {
         fprintf(stderr, "FAIL bad-args: encrypt aad=NULL, aad_len=0 gave rc=%d\n", rc);
+        failures++;
+    }
+
+    /* key and nonce must never be NULL: AEAD key/nonce sizes are
+     * fixed, so unlike aad there is no NULL-with-zero-length case
+     * to keep legal.
+     *
+     * These four cannot fail while the software backend is the only
+     * one: it rejects the same inputs itself, so deleting the guard in
+     * oca.c leaves them green. They pin the public contract for the
+     * backend that does not repeat the check, and become load-bearing
+     * then. Measured, not assumed: with the boundary guard removed the
+     * suite still passes 126/126. */
+    rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          NULL, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, v->aad_len, v->pt, v->pt_len, out, tag, sizeof(tag));
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt key=NULL gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, NULL, v->nonce_len,
+                          v->aad, v->aad_len, v->pt, v->pt_len, out, tag, sizeof(tag));
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt nonce=NULL gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_decrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          NULL, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, v->aad_len, v->ct, v->pt_len, v->tag, 16, out);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: decrypt key=NULL gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_decrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, NULL, v->nonce_len,
+                          v->aad, v->aad_len, v->ct, v->pt_len, v->tag, 16, out);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: decrypt nonce=NULL gave rc=%d\n", rc);
+        failures++;
+    }
+
+    /* A length above INT_MAX must be rejected before the backend
+     * casts it to int. The guard compares the length alone, so
+     * pairing a real small buffer with a bogus huge length is safe:
+     * the pointer is never dereferenced past the guard. */
+    rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, huge_len, v->pt, v->pt_len, out, tag, sizeof(tag));
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt aad_len>INT_MAX gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_encrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, v->aad_len, v->pt, huge_len, out, tag, sizeof(tag));
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: encrypt in_len>INT_MAX gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_decrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, huge_len, v->ct, v->pt_len, v->tag, 16, out);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: decrypt aad_len>INT_MAX gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_aead_decrypt(ctx, OCA_AEAD_CHACHA20_POLY1305,
+                          v->key, v->key_len, v->nonce, v->nonce_len,
+                          v->aad, v->aad_len, v->ct, huge_len, v->tag, 16, out);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: decrypt in_len>INT_MAX gave rc=%d\n", rc);
+        failures++;
+    }
+    rc = oca_mac(ctx, OCA_MAC_HMAC_SHA256, v->key, huge_len,
+                v->pt, v->pt_len, out, 32);
+    if (rc == OCA_ERR_INVALID_ARG) {
+        passed++;
+    } else {
+        fprintf(stderr, "FAIL bad-args: mac key_len>INT_MAX gave rc=%d\n", rc);
         failures++;
     }
 }

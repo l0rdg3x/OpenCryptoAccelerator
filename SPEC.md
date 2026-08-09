@@ -48,7 +48,7 @@ Hardware accelerator for:
   port.** This bullet read "high enough to saturate one GbE host port
   with margin" until 2026-08-06, which added the two engines together
   against a single port: `oca_dual` gives each core its own stream, so a
-  port sees one core and carries 0.561 Gbps at a 1500-byte MTU. The
+  port sees one core and carries 0.569 Gbps at a 1500-byte MTU. The
   2026-08-05 correction further down this bullet is the one that holds.
   This bullet asked for ">= 2 Gbps aggregate (multiple parallel cores)"
   until 2026-08-04, on the estimate that an LFE5U-45F would hold three
@@ -71,7 +71,11 @@ Hardware accelerator for:
   bytes/cycle each, measured in simulation) are 158 MB/s = **~1.26 Gbps
   of crypto capacity**, against the 125 MB/s a GbE port carries. That is
   what the fabric holds, so that is where the target sits — as a sum
-  over both engines. This paragraph read "one port saturated with **26%
+  over both engines. The 49.28 MHz is the 2026-08-04 occupancy study's
+  two-core clock, measured before the key store was restored; the
+  committed pair's 48.89 MHz puts the same sum at ~1.25 Gbps, which is
+  why this target is left where it is rather than chased by a
+  hundredth. This paragraph read "one port saturated with **26%
   margin**" until 2026-08-06; the sum only clears a port if both engines
   sit behind that port, which `oca_dual` does not do.
   **Corrected 2026-08-04, then amended the same day: the cycle budget
@@ -99,9 +103,10 @@ Hardware accelerator for:
   current RTL have since been placed and routed, over four placer seeds
   and with every seed routing** — `oca_dual` builds them, and the
   paragraph below carries what they measure. One core of the current RTL
-  measures **12308 LUTs, 12033 FF, 4 DP16KD, 20 multipliers and 47.93
-  MHz at seed 1** (re-measured 2026-08-06; this read 11590 / 12043 /
-  48.52 MHz, which was the build from before the secret zeroisation),
+  measures **12308 LUTs, 12033 FF, 4 DP16KD, 20 multipliers and 49.91
+  MHz mean over four seeds** (47.93 / 50.91 / 51.03 / 49.76, measured
+  2026-08-09; this read 11590 / 12043 / 48.52 MHz, which was the build
+  from before the secret zeroisation),
   against the 11429 LUTs the two-core figure was scaled from — and that
   pair was already the tightest configuration in the study: two of its
   four placer seeds never routed, each stopped after 3 h 22 min still
@@ -114,11 +119,14 @@ Hardware accelerator for:
   fed at all.** The Colorlight i9 v7.2 carries two PHYs (`BOM-MVP.md`),
   so 2 Gbps of wire is present and >= 2 Gbps was the honest thing to aim
   at. Two cores of the current RTL place and route at 48.89 MHz mean
-  over four seeds (24602 LUTs, 56.1% of the device — re-measured on the
-  pinned toolchain 2026-08-09; this read 48.16 MHz, the pair from before
-  the secret zeroisation), and `oca_dual` wires them as two independent
-  streams — one core per port. That gives **0.561 Gbps per port at a
-  1500-byte MTU, 56% of line rate, 1.121 Gbps across both**. Saturating
+  over four seeds (24602 LUTs, 56.1% of the device, measured 2026-08-05
+  in `d4ee09f`; this read 48.16 MHz, the pair from before the secret
+  zeroisation), and `oca_dual` wires them as two independent
+  streams — one core per port. Through the measured cycle model (1031
+  cycles for a 1500-byte MTU) that clock gives **0.569 Gbps per port,
+  56.9% of line rate, 1.138 Gbps across both**; at the 48.16 MHz this
+  paragraph used to quote it was 0.561 / 1.121, and those two figures
+  stood here unchanged after the clock was corrected. Saturating
   a single port needs both cores behind it, which needs a distributor, a
   collector and an answer to the per-core key store; saturating both
   needs four cores, and three do not route. Full line rate on any port
@@ -128,9 +136,11 @@ Hardware accelerator for:
   8422 LUTs measured (19.2% of the device), so two cores with two ports
   would take 94.5% and two cores behind one port 75.3% — against the
   76.4% at which this device stopped routing in the study above. **The
-  MVP that fits the current RTL is one core on one port, 0.561 Gbps at
-  MTU.** The 1.121 Gbps stands as the fabric's cycle budget, not a
-  configuration the board carries.
+  MVP that fits the current RTL is one core on one port, 0.581 Gbps at
+  MTU** — the single core's own four-seed mean of 49.91 MHz (2026-08-09)
+  rather than the pair's, since only one core is in that build. The
+  1.138 Gbps stands as the fabric's cycle budget, not a configuration
+  the board carries.
   Both figures are projections from measurement rather than silicon
   results: the builds are `--out-of-context`, with no IO, no pin
   constraints and no Ethernet MAC, and the MAC still has to fit
