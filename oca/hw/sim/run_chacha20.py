@@ -33,12 +33,14 @@ def failed_tests() -> int:
     return num_failed
 
 
-def main() -> int:
+def run_at(rounds: int, tag: str) -> int:
+    print(f"=== chacha20 at ROUNDS_PER_CYCLE={rounds}", flush=True)
     runner = get_runner("verilator")
     runner.build(
         sources=[ROOT / "oca" / "hw" / "rtl" / "chacha20.sv"],
         hdl_toplevel="chacha20",
-        build_dir=SIM_DIR / "sim_build",
+        build_dir=SIM_DIR / f"sim_build{tag}",
+        parameters={"ROUNDS_PER_CYCLE": rounds},
         always=True,
     )
     (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
@@ -46,9 +48,28 @@ def main() -> int:
         hdl_toplevel="chacha20",
         test_module="test_chacha20",
         test_dir=SIM_DIR,
-        build_dir=SIM_DIR / "sim_build",
+        build_dir=SIM_DIR / f"sim_build{tag}",
     )
-    return 1 if failed_tests() else 0
+    return failed_tests()
+
+
+# A cocotb run only ever sees the ROUNDS_PER_CYCLE its build was
+# elaborated with, and the parameter selects the datapath rather than a
+# capacity: at 1 the state register alternates between the plain and the
+# diagonalised frame and the round counter picks the direction, at 2 one
+# cycle composes both and the counter never selects anything. The whole
+# keystream at 2 therefore comes out of logic the default run never
+# evaluates. The set is closed at these two values -- chacha20.sv
+# $fatal()s on anything else, verified: -GROUNDS_PER_CYCLE=4 fails to
+# elaborate even though 4 divides the 20 rounds.
+DEFAULT_ROUNDS = 1
+OTHER_ROUNDS = 2
+
+
+def main() -> int:
+    failed = run_at(DEFAULT_ROUNDS, "")
+    failed += run_at(OTHER_ROUNDS, f"_r{OTHER_ROUNDS}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
