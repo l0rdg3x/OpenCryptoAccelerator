@@ -14,3 +14,8 @@ tools/
 # Personal agent kickoff prompt
 prompt-claude-code.md
 .worktrees/
+
+# Throwaway worktrees the agent harness creates for parallel work. They
+# are nested git repositories, so `git add -A` from the top commits them
+# as gitlinks -- which happened once and had to be amended out.
+.claude/worktrees/
