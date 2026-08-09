@@ -48,10 +48,13 @@ readonly YOSYS_REV=41a4b5a039d1f6e04d9c577d3f186ba85f6f1f01       # 0.67+
 readonly NEXTPNR_URL=https://github.com/YosysHQ/nextpnr.git
 readonly NEXTPNR_REV=8945407874c3031f13a5453598e9923268259698
 
+readonly OPENFPGALOADER_URL=https://github.com/trabucayre/openFPGALoader.git
+readonly OPENFPGALOADER_REV=85be4fa02b2dd6a83716d7dfac3d25bbd260ff7b   # v1.1.1
+
 readonly COCOTB_URL=https://github.com/cocotb/cocotb.git
 readonly COCOTB_REV=82d0eed5521349b74d6397ccbf138f15130bc9a2
 
-readonly ALL=(help2man verilator eigen prjtrellis yosys nextpnr cocotb)
+readonly ALL=(help2man verilator eigen prjtrellis yosys nextpnr openfpgaloader cocotb)
 
 MODE=build
 JOBS="$(nproc)"
@@ -173,6 +176,8 @@ fetch_all() {
                            apply_yosys_patch; }
     wanted nextpnr    && { say "fetch nextpnr ${NEXTPNR_REV:0:9}"
                            fetch_git "$SRC/nextpnr" "$NEXTPNR_URL" "$NEXTPNR_REV"; }
+    wanted openfpgaloader && { say "fetch openFPGALoader ${OPENFPGALOADER_REV:0:9}"
+                           fetch_git "$SRC/openFPGALoader" "$OPENFPGALOADER_URL" "$OPENFPGALOADER_REV"; }
     return 0
 }
 
@@ -243,6 +248,26 @@ build_nextpnr() {
         -DEigen3_DIR="$TOOLS/eigen/share/eigen3/cmake"
     cmake --build "$SRC/nextpnr/build" -j "$JOBS"
     cmake --install "$SRC/nextpnr/build"
+}
+
+build_openfpgaloader() {
+    [[ -x $TOOLS/openFPGALoader/bin/openFPGALoader ]] && return 0
+    say "build openFPGALoader"
+    # libftdi1, hidapi, libusb, zlib and libudev are found through
+    # pkg-config on the system as-is; none of them are built here.
+    # `cmake --install` never touches /etc/udev — this project has no
+    # CMake option to gate that, because it has no CMake-driven udev
+    # rule install at all: 99-openfpgaloader.rules ships as a plain file
+    # at the repository root and upstream's own docs have the operator
+    # copy it by hand. So this build does the same as any other install
+    # of this tool: to use it without sudo, run
+    #   sudo cp tools/src/openFPGALoader/99-openfpgaloader.rules /etc/udev/rules.d/
+    #   sudo udevadm control --reload-rules && sudo udevadm trigger
+    # or invoke openFPGALoader itself with sudo.
+    cmake -S "$SRC/openFPGALoader" -B "$SRC/openFPGALoader/build" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$TOOLS/openFPGALoader"
+    cmake --build "$SRC/openFPGALoader/build" -j "$JOBS"
+    cmake --install "$SRC/openFPGALoader/build"
 }
 
 # The installed commit, read from what pip recorded, not from a marker
@@ -322,6 +347,7 @@ check() {
     report prjtrellis     "$TOOLS/trellis/bin/ecppack"
     report yosys          "$TOOLS/yosys/bin/yosys"
     report nextpnr-ecp5   "$TOOLS/nextpnr/bin/nextpnr-ecp5"
+    report openFPGALoader "$TOOLS/openFPGALoader/bin/openFPGALoader"
 
     rev=$(cocotb_installed_rev 2>/dev/null || true)
     if [[ $rev == "$COCOTB_REV" ]]; then
@@ -356,6 +382,8 @@ versions() {
         echo "  $("$TOOLS/nextpnr/bin/nextpnr-ecp5" --version 2>&1 | head -1)"
     [[ -x $TOOLS/trellis/bin/ecppack ]] &&
         echo "  $("$TOOLS/trellis/bin/ecppack" --version 2>&1 | head -1)"
+    [[ -x $TOOLS/openFPGALoader/bin/openFPGALoader ]] &&
+        echo "  $("$TOOLS/openFPGALoader/bin/openFPGALoader" --Version 2>&1 | head -1)"
     return 0
 }
 
@@ -374,6 +402,7 @@ main() {
     wanted prjtrellis && build_prjtrellis
     wanted yosys      && build_yosys
     wanted nextpnr    && build_nextpnr
+    wanted openfpgaloader && build_openfpgaloader
     wanted cocotb     && build_cocotb
 
     if wanted yosys; then
