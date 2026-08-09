@@ -161,8 +161,21 @@ Hardware accelerator for:
   `docs/design/2026-08-03-poly1305-datapath.md` for the earlier
   projection. On the MVP board the figure would in any case only be
   observable in simulation, the host link being GbE.
-- Declared note: v1 end-to-end throughput is limited by the host
-  interface (GbE); host-facing throughput scales up in later phases.
+- Declared note, **inverted 2026-08-09**: v1 end-to-end throughput is
+  limited by the fabric, not by the host interface. This line read "v1
+  end-to-end throughput is limited by the host interface (GbE)", which
+  was true when this bullet asked for >= 2 Gbps from three engines
+  against a 1 Gbps port. The MVP that fits is one core on one port at
+  0.581 Gbps, **58.1% of line rate**, so the port idles 42% of the time
+  and the GbE link is the larger number, not the smaller one. What
+  bounds v1 is what fits and routes on the LFE5U-45F: three cores do
+  not route at 76.4% occupancy (congestion, not timing), and one
+  Ethernet port costs 8422 LUTs, which puts two cores with two ports at
+  94.5% of the device. Whether two cores behind one port would route at
+  75.3% is **unmeasured** — that configuration has never been built,
+  and it would need a distributor, a collector and an answer to the
+  per-core key store besides. The host interface stops being the
+  smaller number only from Phase 3.
 - Final OCA-50 board: 50 Gbps aggregate multi-core/multi-session, with
   reproducible benchmarks (scripts + documented host configuration).
 - All results must be reproducible by third parties using public test
