@@ -42,8 +42,9 @@ under it — which changes where the width conversion belongs (section 4).
 `oca_dual.sv` exposes two independent AXI-Stream pairs, one per core,
 sharing nothing — deliberately, because a shared key store would put one
 port's keys within reach of the other port's traffic. One core per port
-therefore delivers **0.561 Gbps at a 1500-byte MTU, 56% of line rate**,
-and 1.121 Gbps across both ports.
+therefore delivers **0.569 Gbps at a 1500-byte MTU, 56.9% of line
+rate**, and 1.138 Gbps across both ports, on the committed pair's
+48.89 MHz mean.
 
 Saturating a single port needs both cores behind it, and that is not a
 wiring change. It needs a distributor, a collector, and an answer to the
@@ -89,10 +90,17 @@ kind of congestion that stopped router1 is still unmeasured, and the
 place to measure it is the two-core-plus-port build at 73.7%, once it
 exists.
 
-**So the MVP that fits today is one core on one port**, 0.561 Gbps at
-MTU, at 47.3% occupancy — with the rest of the device free for the
-second core if a distributor is ever built, or for the second port if the
-stack shrinks.
+**So the MVP that fits today is one core on one port**, 0.581 Gbps at
+MTU and 47.3% occupancy — with the rest of the device free for the
+second core if a distributor is ever built, or for the second port if
+the stack shrinks.
+
+Both of those numbers are constructions, not a build. The 47.3% adds
+two separately measured areas, and the 0.581 comes from the single
+core's 49.91 MHz mean, measured on the core placed alone and
+out of context: no MAC beside it, no IO, no PLL. **No netlist of one
+core plus one port has ever been placed**, so treat 0.581 as the
+ceiling that configuration could reach.
 
 ## 3. The RGMII front end
 

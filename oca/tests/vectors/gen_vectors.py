@@ -94,7 +94,8 @@ def parse_rfc8439():
     aad = hexdump_after(r, 0, "AAD:")
     key = hexdump_after(r, 0, "Key:")
     iv = hexdump_after(r, 0, "IV:")
-    nonce = bytes([0x07, 0x00, 0x00, 0x00]) + iv  # 32-bit fixed-common part || IV
+    fixed = hexdump_after(r, 0, "32-bit fixed-common part:")
+    nonce = fixed + iv
     ct_start = next(i for i, l in enumerate(r) if "keystream bytes:" in l)
     ct = hexdump_after(r, ct_start, "Ciphertext:")
     tag = colonhex_after(r, 0, "Tag:")
