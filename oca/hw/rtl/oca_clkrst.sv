@@ -369,6 +369,20 @@ module oca_clkrst #(
     // to be readable rather than inferred.
     logic [RST_SYNC_STAGES-1:0] sync_sys, sync_tx, sync_rx;
 
+    // verilator lint_off SYNCASYNCNET
+    //
+    // SYNCASYNCNET fires on exactly the thing this module is for: these
+    // registers are clocked with an asynchronous clear and their last
+    // stage then serves as an asynchronous reset elsewhere. That is what
+    // a reset synchroniser is, and verilator cannot tell it apart from
+    // the mistake it usually indicates -- a reset crossing domains with
+    // nothing to resolve it.
+    //
+    // Linting this module alone stays silent, because rst_n_* leave as
+    // outputs and nothing here consumes them; the warning appears the
+    // moment a top instantiates it and uses them as resets, which is
+    // every real use. Waived here, at the pattern, rather than at each
+    // call site.
     always_ff @(posedge clk_sys or negedge arst_n) begin
         if (!arst_n) sync_sys <= '0;
         else         sync_sys <= {sync_sys[RST_SYNC_STAGES-2:0], 1'b1};
@@ -383,6 +397,8 @@ module oca_clkrst #(
         if (!arst_n) sync_rx <= '0;
         else         sync_rx <= {sync_rx[RST_SYNC_STAGES-2:0], 1'b1};
     end
+
+    // verilator lint_on SYNCASYNCNET
 
     // Both polarities off the same flop, per the header.
     always_comb rst_n_sys = sync_sys[RST_SYNC_STAGES-1];

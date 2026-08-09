@@ -63,6 +63,16 @@ DESIGNS = {
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
+    # The first pinned build this project has. It carries no crypto: it
+    # exists to place the clocking and the RGMII pads against the real
+    # .lpf and report which clocks nextpnr constrained, which is the one
+    # thing that cannot be learned from an out-of-context run and the one
+    # thing every later number depends on.
+    "oca_top_stub": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
+            "oca_top_stub.sv"],
+        lpf="colorlight_i9.lpf",
+    ),
 }
 
 # oca_rgmii is deliberately not a target of its own. It cannot be built
@@ -402,6 +412,29 @@ REAL_CONSTRAINT_PATTERNS = [
 ]
 
 
+def bare_clock_name(clock):
+    """The net name nextpnr constrained, from the name it reports.
+
+    A clock is renamed twice on its way into the report and both have to
+    come off before it can be matched against the log. Promotion to a
+    global buffer prefixes '$glbnet$' (ecp5/globals.cc:465), and a clock
+    that arrives on a pad is reported on the input buffer's own net, with
+    '$TRELLIS_IO_IN' appended. Measured on the first pinned build: the
+    .lpf constrains 'clk25' and 'rgmii_rx_clk', and the report calls them
+    'clk25$TRELLIS_IO_IN' and '$glbnet$rgmii_rx_clk$TRELLIS_IO_IN'.
+
+    Stripping only the prefix — which is what this did until the first
+    pinned build was run — leaves both of those unmatched, so a clock
+    that carries a real .lpf constraint is reported as unchecked and a
+    miss on it passes. That is the exact failure check_timing exists to
+    prevent, so it is worth being blunt: this function is load-bearing.
+    """
+    if clock.startswith("$glbnet$"):
+        clock = clock[len("$glbnet$"):]
+    cut = clock.find("$")
+    return clock[:cut] if cut > 0 else clock
+
+
 def real_clock_constraints(nextpnr_log):
     """Net names nextpnr constrained for real, read back from its own log."""
     text = nextpnr_log.read_text()
@@ -434,8 +467,7 @@ def check_timing(top, report_path, nextpnr_log):
     fallback = []
     print("\ntiming check (pinned build, constraints this design carries):")
     for clock, data in sorted(fmax.items()):
-        bare = clock[len("$glbnet$"):] if clock.startswith("$glbnet$") else clock
-        if clock not in real and bare not in real:
+        if clock not in real and bare_clock_name(clock) not in real:
             fallback.append(clock)
             continue
         achieved = data.get("achieved", 0.0)
@@ -456,7 +488,7 @@ def check_timing(top, report_path, nextpnr_log):
     # -- and the fmax figures printed above are all --freq's default.
     # Reporting that on stderr and returning 0 would be the same silent
     # green this whole check was written to end.
-    if not any(c in real or c[len("$glbnet$"):] in real for c in fmax):
+    if not any(c in real or bare_clock_name(c) in real for c in fmax):
         print("\nTiming NOT CHECKED: this design carries an .lpf, but not one "
               "of its FREQUENCY constraints reached a clock in the report. "
               "Every figure above is nextpnr's --freq default. Fix the .lpf "
@@ -474,8 +506,12 @@ def summarise(top, args, report_path):
     util = report.get("utilization", {})
     fmax = report.get("fmax", {})
 
+    # Say which of the two builds this was: they are not comparable, and
+    # this line said "out-of-context" for both until the first pinned
+    # build printed it over a design with 17 real pads.
+    kind = "pinned, real IO" if DESIGNS[top].lpf else "out-of-context"
     print(f"\n=== {top} — LFE5U-{args.device.upper()} "
-          f"{args.package} speed {args.speed} (out-of-context) ===")
+          f"{args.package} speed {args.speed} ({kind}) ===")
     print(f"{'resource':<16} {'used':>8} {'available':>10} {'%':>7}")
     for name in sorted(util):
         used = util[name].get("used", 0)
