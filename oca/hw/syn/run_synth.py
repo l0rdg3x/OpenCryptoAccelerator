@@ -73,6 +73,30 @@ DESIGNS = {
             "oca_top_stub.sv"],
         lpf="colorlight_i9.lpf",
     ),
+    # Clocking, RGMII and the MAC, with the crypto removed. It answers
+    # whether oca_top's missed 125 MHz receive constraint is the MAC's
+    # own depth or the rest of the design stretching its routing.
+    "oca_top_mac": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
+            "oca_top_mac.sv"],
+        verilog=[
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_fifo.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_adapter.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo.v",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo_adapter.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/lfsr.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_rx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_tx.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g.v",
+            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g_fifo.v",
+            "oca/hw/rtl/vendor/oca_eth_mac_1g_fifo_64.v",
+        ],
+        incdirs=[
+            "oca/hw/vendor/verilog-ethernet/rtl",
+            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
+        ],
+        lpf="colorlight_i9.lpf",
+    ),
     # The board. Vendor Verilog is read first, by yosys's own frontend,
     # because a module that reaches read_slang through read_verilog
     # arrives already elaborated -- which is why the three oca_* wrappers
