@@ -118,7 +118,14 @@ module oca_top_stub (
         .dly_move         (1'b0),
         .dly_direction    (1'b0),
         .dly_cflag        (dly_cflag),
-        .rst_n            (rst_n_sys),
+        // rst_n_rx, not rst_n_sys. In the synthesised branch the only
+        // thing inside oca_rgmii that this reset reaches is the in-band
+        // status register, which is clocked by rgmii_rx_clk
+        // (oca_rgmii.sv:281). Releasing it from the sys domain would
+        // release it unsynchronised to its own clock, which is a
+        // recovery/removal violation on link_up and friends -- the kind
+        // that works on the bench until the day it does not.
+        .rst_n            (rst_n_rx),
         .link_up          (link_up),
         .link_speed       (link_speed),
         .link_full_duplex (link_full_duplex)
