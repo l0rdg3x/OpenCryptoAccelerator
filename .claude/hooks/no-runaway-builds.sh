@@ -14,10 +14,15 @@ set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
-# Past this, a build is not working, it is stuck. Deliberately above
-# run_synth.py's own default so a legitimate long build reaches its own
-# bound first and reports properly.
-CEILING_SECONDS=${OCA_BUILD_CEILING:-3600}
+# Past this, a build is not working, it is stuck. Deliberately above the
+# largest bound run_synth.py will use so a legitimate long build reaches
+# its own bound first and reports properly.
+#
+# 3600 until 2026-08-10, which was below the project's own flagship
+# build: oca_top's synthesis measures 3941 s, so this net would have
+# killed it ten minutes from the end and called it a runaway. oca_top
+# records a 7200 s bound; this sits above it.
+CEILING_SECONDS=${OCA_BUILD_CEILING:-7500}
 
 # Only ever this project's toolchain: never anything else the user is
 # running.
