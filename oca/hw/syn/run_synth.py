@@ -51,6 +51,10 @@ class Design(NamedTuple):
     verilog: list = []
     incdirs: list = []
     lpf: str = ""
+    # Extra nextpnr arguments, for pinned designs only. Recorded per
+    # design rather than passed on the command line so that a figure in
+    # a document can be reproduced by naming the target and nothing else.
+    pnr_args: list = []
 
 
 ENGINE = ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"]
@@ -484,6 +488,10 @@ def pnr(top, json_in, args, report, log):
         # misspelled port, and passing --lpf-allow-unconstrained would
         # disable exactly that.
         cmd += ["--lpf", str(SYN_DIR / d.lpf)]
+        # Placer and router settings this design asks for. A pinned build
+        # is the only place they mean anything: out-of-context placement
+        # has no pads to be pulled towards and no congestion to resolve.
+        cmd += d.pnr_args + args.pnr_arg
     else:
         # No pins: the wide internal buses have far more signals than the
         # package has balls, so the core is placed as a locked macro. The
@@ -651,6 +659,18 @@ def main():
                          f"(default {DEFAULT_TIMEOUT}). A stage that hits it "
                          f"is killed with its whole process group and nothing "
                          f"is measured.")
+    ap.add_argument("--pnr-only", action="store_true",
+                    help="skip synthesis and place & route the netlist "
+                         "already in build/. For trying placer settings "
+                         "without re-running a deterministic 40-minute "
+                         "yosys pass. The netlist check still runs.")
+    ap.add_argument("--pnr-arg", action="append", default=[], metavar="ARG",
+                    help="extra argument for nextpnr, repeatable, pinned "
+                         "designs only. For trying a placer or router "
+                         "setting before deciding whether it belongs in the "
+                         "design's own pnr_args. A figure measured with this "
+                         "is not reproducible from the target name alone, so "
+                         "do not record one without saying what was passed.")
     args = ap.parse_args()
 
     for tool in (YOSYS, NEXTPNR):
@@ -663,9 +683,21 @@ def main():
 
     check_cmp2lut()
 
-    rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log", args.timeout)
-    if rc != 0:
-        return rc
+    if args.pnr_only:
+        # Synthesis is deterministic, so re-running it to try a placer
+        # setting spends the same 40 minutes to produce the same netlist.
+        # This reuses it. The netlist check still runs: it costs nothing
+        # and skipping it is how a mapping defect gets in through a door
+        # marked "only placement changed".
+        if not netlist.exists():
+            sys.exit(f"--pnr-only needs {netlist}, which does not exist; "
+                     f"run once without it first")
+        print(f"reusing {netlist} (--pnr-only)")
+    else:
+        rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log",
+                   args.timeout)
+        if rc != 0:
+            return rc
     rc = check_netlist(args.top, netlist)
     if rc != 0:
         return rc
