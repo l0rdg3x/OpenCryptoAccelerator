@@ -80,6 +80,11 @@ class Design(NamedTuple):
     # design rather than passed on the command line so that a figure in
     # a document can be reproduced by naming the target and nothing else.
     pnr_args: list = []
+    # The placer seed this design is known to close timing on. None means
+    # the flow's default. A design that needs a particular seed says so
+    # here, because "it closes" and "it closes on seed 6" are different
+    # claims and only one of them reproduces.
+    seed: int | None = None
 
 
 ENGINE = ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"]
@@ -184,6 +189,19 @@ DESIGNS = {
             "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
         ],
         lpf="colorlight_i9.lpf",
+        # Seed 6, and it is not a preference. Over seeds 1 to 13 this
+        # design closes all three constraints on this one and no other:
+        # rgmii_rx_clk clears 125 MHz on two of the thirteen and clk_tx
+        # on seven, and the only seed where those overlap is 6. Both
+        # clocks swing about 20% across the sweep, so a seed is not a
+        # detail here, it is the difference between a bitstream and a
+        # failed build.
+        #
+        # What that means, stated rather than left to be discovered: the
+        # design has no timing margin of its own. Any RTL change reshuffles
+        # the placement and the seed has to be found again. See
+        # hw/syn/README.md for the whole sweep.
+        seed=6,
     ),
 }
 
@@ -678,8 +696,9 @@ def main():
     ap.add_argument("--speed", type=int, default=DEFAULT_SPEED, choices=[6, 7, 8])
     ap.add_argument("--freq", type=float, default=100.0,
                     help="clock constraint in MHz (default 100)")
-    ap.add_argument("--seed", type=int, default=1,
-                    help="nextpnr placer seed, fixed for reproducibility")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="nextpnr placer seed. Defaults to the seed the "
+                         "design records, or 1 if it records none.")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                     help=f"hard wall-clock bound per stage in seconds "
                          f"(default {DEFAULT_TIMEOUT}). A stage that hits it "
@@ -698,6 +717,8 @@ def main():
                          "is not reproducible from the target name alone, so "
                          "do not record one without saying what was passed.")
     args = ap.parse_args()
+    if args.seed is None:
+        args.seed = DESIGNS[args.top].seed or 1
 
     for tool in (YOSYS, NEXTPNR):
         if not tool.exists():

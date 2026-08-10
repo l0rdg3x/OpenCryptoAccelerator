@@ -1434,3 +1434,87 @@ seed stay scoped to the four seeds that measured it.
 The cycle side is measured and does not depend on any of that: a
 64-byte block costs **40 cycles** end to end through `oca_core`, exactly
 linear (231, 391, 551, 711 cycles for 4, 8, 12, 16 blocks).
+
+### The whole board, pinned: oca_top closes, on one seed in thirteen
+
+The first design in this project that is a board rather than a core:
+clocking, RGMII front end, MAC, Ethernet header parse and build,
+ARP/IP/UDP, the seam and `oca_core`, against `colorlight_i9.lpf` with
+real IO. LFE5U-45F CABGA381 speed 6.
+
+| resource | used | of device |
+|---|---|---|
+| TRELLIS_COMB | 17802 | 40.6% |
+| TRELLIS_FF | 16849 | 38.4% |
+| DP16KD | 13 | 12.0% |
+| MULT18X18D | 20 | 27.8% |
+| TRELLIS_IO | 17 | 6.9% |
+| EHXPLLL | 1 | 25.0% |
+
+**40.6%, against the 47.3% the area sum predicted.** One core measured
+12308 LUTs alone and one port 8422, which adds to 20730; the optimiser
+shares logic the two separate measurements each counted. Adding areas
+measured apart overestimates, and by 14% here.
+
+#### The receive clock, and what it took
+
+The first build missed `rgmii_rx_clk` at **102.59 MHz** against 125. The
+critical path was the MAC's receive CRC, and it split in two: 4.71 ns
+from `crc_state` through the LFSR to `crc_next`, which has to close in
+one cycle, and another 5.04 ns for the FCS comparison after it, which
+does not — `axis_gmii_rx.v:220` compared the four received FCS bytes
+against `~crc_next` combinationally in the same cycle.
+
+Place and route could not reach it, measured four ways on one netlist:
+
+| | rgmii_rx_clk |
+|---|---|
+| as committed, repeated | 102.59 MHz |
+| `--placer-heap-critexp 4` | 102.59 MHz |
+| `--placer-heap-timingweight 35` | 103.35 MHz |
+| both, plus `--router router2` | did not converge |
+
+The repeat matters as much as the rest: identical settings reproduce
+102.59 exactly, so the differences are the settings and not noise. The
+best was 0.7% against 21.8% needed. **`router2` diverges on this
+design** — overused arcs fall to 6970 by iteration 22, then climb to
+26003 by 58 — which answers a question the Ethernet design document had
+left open since the occupancy study.
+
+A patch to `axis_gmii_rx` moved the comparison off the path (see
+`hw/vendor/patches/`), and the receive path went to **115.77 MHz** with
+the critical path now in the receive FIFO's commit loop. Still short.
+
+#### The seed sweep, and the honest reading of it
+
+Thirteen seeds on the patched netlist, place and route only:
+
+| seed | rgmii_rx_clk | clk_tx | clk_sys |
+|---|---|---|---|
+| 1 | 115.77 | 124.69 | 52.16 |
+| 2 | **125.23** | 117.77 | 50.24 |
+| 3 | 118.85 | 119.18 | 47.84 |
+| 4 | 118.78 | 122.09 | 50.77 |
+| 5 | 122.26 | 121.54 | 49.77 |
+| **6** | **129.87** | **130.07** | **49.41** |
+| 7 | 119.13 | **140.37** | 48.99 |
+| 8 | 115.27 | **135.01** | 49.79 |
+| 9 | 111.71 | **132.42** | 52.08 |
+| 10 | 118.57 | 107.72 | 48.66 |
+| 11 | 109.52 | **127.39** | 51.74 |
+| 12 | 118.13 | 123.29 | 51.37 |
+| 13 | 106.61 | **135.98** | 51.19 |
+
+Targets are 125.00, 125.00 and 48.08 MHz. `rgmii_rx_clk` clears its own
+on two seeds of thirteen, `clk_tx` on seven, `clk_sys` on twelve — and
+all three coincide on **one**. Both 125 MHz clocks swing about 20% across
+the sweep and they do not swing together.
+
+**So the design closes, and it has no margin of its own.** Seed 6 is
+recorded in `run_synth.py`'s DESIGNS entry, not passed on a command line,
+so `run_synth.py oca_top` reproduces it. But a seed is not margin: any
+RTL change reshuffles the placement and the seed has to be found again,
+and there is no reason to expect the next one to exist. What would give
+real margin is less competition for the fabric around the receive path —
+the MAC alone closes at 132.98 MHz with 6.4% to spare, so the shortfall
+was never the module.

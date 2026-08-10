@@ -793,21 +793,64 @@ core and never updated as the design grew by 3000 LUTs.
   exists so that the clocking and the pads are known to place before the
   real top is written.
 
-  **What is left is the top level**, and two things stand in front of it:
+  **`oca_top` exists, places and routes, and closes timing.** The whole
+  chain in one design: pads, `oca_rgmii`, the MAC, the Ethernet header
+  parse and build, ARP/IP/UDP, `oca_udp_seam` and `oca_core`.
 
-  1. **`eth_axis_rx` and `eth_axis_tx` are missing from the design.**
-     The MAC wrapper hands out a raw AXI-Stream with the Ethernet header
-     still in the data; `udp_complete_64` wants it already parsed and
-     does not contain the parser. Both are parametric at
-     `DATA_WIDTH = 8`, so they need a third 64-bit wrapper of the kind
-     the other two vendor modules already have. Nothing elaborates
-     without it. This was absent from the plan, from both probe file
-     lists and from the 8422-LUT port measurement until 2026-08-09.
-  2. Then `oca_top.sv` itself, whose port list `colorlight_i9.lpf`
-     already fixes.
+  | | measured |
+  |---|---|
+  | TRELLIS_COMB | 17802, **40.6%** of the device |
+  | TRELLIS_FF | 16849, 38.4% |
+  | DP16KD | 13, 12.0% |
+  | MULT18X18D | 20, 27.8% |
+  | TRELLIS_IO | 17, every pad the `.lpf` names |
+  | `rgmii_rx_clk` | 129.87 MHz against 125 required |
+  | `clk_tx` | 130.07 MHz against 125 |
+  | `clk_sys` | 49.41 MHz against 48.08 |
 
-  Everything downstream waits on those: no in-context Fmax for the whole
-  design, no block RAM budget, no bitstream, no bench step past "blink".
+  40.6% against the 47.3% the area sum predicted: adding a core measured
+  alone to a port measured alone counts twice the logic the optimiser
+  shares.
+
+  **It closes on seed 6 and on no other seed of the thirteen tried.**
+  `rgmii_rx_clk` clears its target on two of thirteen, `clk_tx` on seven,
+  and they coincide once. The seed is recorded in the DESIGNS entry, so
+  `run_synth.py oca_top` reproduces it, but a seed is not margin: any RTL
+  change reshuffles the placement and the next seed has to be found
+  again. The whole sweep is in `hw/syn/README.md`. What would give real
+  margin is less competition for the fabric around the receive path — the
+  MAC alone closes at 132.98 MHz with 6.4% to spare, so the shortfall was
+  never the module.
+
+  **Two vendor defects had to be patched to get here, and both were
+  blocking.** They live in `hw/vendor/patches/`, applied to an extracted
+  copy of the pin by `hw/vendor/vendor_patches.py`; the submodule is
+  never written and `run_synth.py` and the runners refuse to build
+  without them.
+
+  1. **`tkeep` was zero on every receive beat.** `axis_adapter`'s upsize
+     branch ignored `S_KEEP_ENABLE` where its bypass branch honours it,
+     and `eth_mac_1g_fifo` ties that port to zero having set the
+     parameter to 0. `eth_axis_rx` computes which bytes are valid from
+     that signal, so no byte was valid anywhere downstream: the board
+     would not have received anything, at any clock.
+  2. **The FCS comparison sat on the 125 MHz critical path**, between
+     `crc_next` and its register. Moving it to the registered
+     `crc_state` one cycle later took the receive path from 102.59 to
+     115.77 MHz and took the CRC out of the critical path entirely.
+
+  `oca/hw/sim/run_eth_mac.py` is the MAC's testbench, written before the
+  patches and against the unpatched module: 8 tests, and it is what makes
+  the `tkeep` patch provable — reverted, it goes 7/8. The FCS patch is
+  observably inert by construction, so what the suite proves about it is
+  that it changed nothing.
+
+  **Still not done, and none of it is simulation:** no bitstream has been
+  written or loaded, nothing has run on hardware, and `eth_axis_rx` and
+  `udp_complete_64` are exercised by no testbench of ours — the seam is
+  tested where `udp_complete_64` would stand, not through it. So
+  "reception works" is proved at the MAC's own boundary and reasoned
+  beyond it.
 
   What the board alone can settle is listed in the design document: the
   RGMII delay value and the IO bank voltages above all. One trap is
