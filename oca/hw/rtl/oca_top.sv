@@ -349,6 +349,18 @@ module oca_top #(
         .m_eth_payload_axis_tlast  (tx_eth_payload_tlast),
         .m_eth_payload_axis_tuser  (tx_eth_payload_tuser),
 
+        // The raw IP receive path, which every IPv4 frame whose protocol
+        // is not 0x11 leaves by -- an ICMP echo request, a stray TCP
+        // segment, anything. udp_complete_64.v:361-365 builds
+        // ip_rx_ip_hdr_ready from these two, so with both reading 0 the
+        // first such frame is never consumed, ip_eth_rx_64 holds it
+        // forever and the whole receive path stops behind it with no
+        // error wire raised. Nothing here wants the frame, so it is
+        // accepted and discarded, which is what oca_udp_complete_64.v:29-44
+        // prescribes.
+        .m_ip_hdr_ready            (1'b1),
+        .m_ip_payload_axis_tready  (1'b1),
+
         .s_udp_hdr_valid           (udp_tx_hdr_valid),
         .s_udp_hdr_ready           (udp_tx_hdr_ready),
         .s_udp_ip_dscp             (udp_tx_ip_dscp),
@@ -426,7 +438,14 @@ module oca_top #(
         .local_mac   (LOCAL_MAC),
         .local_ip    (stack_local_ip),
         .gateway_ip  (GATEWAY_IP),
-        .subnet_mask (SUBNET_MASK)
+        .subnet_mask (SUBNET_MASK),
+
+        // Nothing flushes the cache at runtime. Stated rather than left to
+        // the toolchain: it gates arp_cache's query and write ports
+        // (arp_cache.v:158, :181), and a pin that reads 0 because two
+        // flows happen to resolve undriven nets that way is not the same
+        // thing as a pin that is held low on purpose.
+        .clear_arp_cache (1'b0)
     );
 
     // ------------------------------------------------------------------
