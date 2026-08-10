@@ -60,6 +60,7 @@ def uses_vendor(top: str) -> bool:
 
 YOSYS = ROOT / "tools" / "yosys" / "bin" / "yosys"
 NEXTPNR = ROOT / "tools" / "nextpnr" / "bin" / "nextpnr-ecp5"
+ECPPACK = ROOT / "tools" / "trellis" / "bin" / "ecppack"
 
 # Sources per top module, in dependency order.
 #
@@ -524,6 +525,11 @@ def pnr(top, json_in, args, report, log):
         "--timing-allow-fail",
         "--report", str(report),
         "--write", str(BUILD / f"{top}_pnr.json"),
+        # The text configuration ecppack turns into a bitstream. Written
+        # for every build; only a pinned one is packed, since an
+        # out-of-context placement has no IO and would produce a
+        # bitstream that drives nothing.
+        "--textcfg", str(BUILD / f"{top}.config"),
     ]
     if d.lpf:
         # A design with real pins. Every IO must be constrained: nextpnr
@@ -647,6 +653,35 @@ def check_timing(top, report_path, nextpnr_log):
               "missed. This is a pinned build, not characterisation — see "
               "hw/syn/README.md.", file=sys.stderr)
     return rc
+
+
+def pack(top, args):
+    """Turn a routed pinned design into a bitstream. Nothing else packs.
+
+    An --out-of-context build has no IO buffers and is placed as a locked
+    macro, so a bitstream from one would configure a device that drives
+    no pin. Those builds stop at the report, which is all they were for.
+
+    This runs only after check_timing has passed. A bitstream that misses
+    its clock is a bitstream that will be loaded, will appear to work,
+    and will corrupt one frame in some number nobody measures -- packing
+    it would turn a build failure into a bench mystery.
+    """
+    if not DESIGNS[top].lpf:
+        return 0
+    config = BUILD / f"{top}.config"
+    if not config.is_file():
+        sys.exit(f"{config} was not written; nextpnr cannot have routed")
+    bitstream = BUILD / f"{top}.bit"
+    rc = run([ECPPACK, str(config), str(bitstream), "--compress"],
+             BUILD / f"{top}.ecppack.log", args.timeout)
+    if rc != 0:
+        return rc
+    size = bitstream.stat().st_size
+    print(f"\nbitstream: {bitstream} ({size} bytes)")
+    print(f"load it with: tools/openFPGALoader/bin/openFPGALoader "
+          f"-b colorlight-i9 {bitstream}")
+    return 0
 
 
 def summarise(top, args, report_path):
@@ -781,7 +816,10 @@ def main():
         return rc
 
     summarise(args.top, args, report)
-    return check_timing(args.top, report, nextpnr_log)
+    rc = check_timing(args.top, report, nextpnr_log)
+    if rc != 0:
+        return rc
+    return pack(args.top, args)
 
 
 if __name__ == "__main__":
