@@ -353,7 +353,13 @@ the board arrives once and debugging starts then.
 - **The whole path**, from a synthetic Ethernet frame carrying a UDP
   packet with an OCA command, through the stack, through `oca_core`, and
   back out as a frame — driven by `proto_model.py`, which stays the
-  definition of the wire format and is not modified.
+  definition of the wire format and is not modified. **Done
+  2026-08-10**: `oca/hw/sim/run_oca_path.py`, 7 tests, at the GMII
+  boundary rather than the pads because `EHXPLLL` is a blackbox with an
+  empty body and no reset in the design ever releases under Verilator.
+  It earned itself on the first run, finding `oca_top` tied off the
+  UDP stack's non-UDP receive path — one ICMP echo and the board stops
+  receiving, with all nineteen status wires reading clean.
 - **The netlist checks extend to the new logic.** A green Verilator run
   says nothing about synthesis; that is the lesson the `cmp2lut` defect
   cost us 2313 flip-flops to learn. Whatever storage the integration adds

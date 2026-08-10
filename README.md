@@ -59,6 +59,7 @@ cd oca
 .venv/bin/python hw/vendor/vendor_patches.py build        # before the next one
 .venv/bin/python hw/sim/run_eth_mac.py
 .venv/bin/python hw/sim/run_udp_seam.py
+.venv/bin/python hw/sim/run_oca_path.py        # the whole path, frame in to frame out
 .venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
 .venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
@@ -67,8 +68,9 @@ cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 The two `*_gate.py` runners need the project-local yosys as well: they
 replay tests on ECP5 primitives, because every other suite elaborates
 the SystemVerilog and cannot see what synthesis did to it. `run_eth_mac.py`
-reads a patched copy of the pinned `verilog-ethernet` tree rather than
-the submodule, which is why `vendor_patches.py build` comes first; it
+and `run_oca_path.py` read a patched copy of the pinned
+`verilog-ethernet` tree rather than the submodule, which is why
+`vendor_patches.py build` comes first; each
 refuses to run against an unpatched tree instead of testing sources the
 board will not carry. The last line is not a simulation at all — the
 protocol model has no DUT and runs as plain Python.
