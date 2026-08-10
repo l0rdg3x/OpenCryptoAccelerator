@@ -48,7 +48,9 @@ Hardware accelerator for:
   port.** This bullet read "high enough to saturate one GbE host port
   with margin" until 2026-08-06, which added the two engines together
   against a single port: `oca_dual` gives each core its own stream, so a
-  port sees one core and carries 0.569 Gbps at a 1500-byte MTU. The
+  port sees one core and carries 0.569 Gbps at a 1500-byte MTU — itself
+  an Fmax over a cycle count rather than a rate, see the 2026-08-10
+  amendment below. The
   2026-08-05 correction further down this bullet is the one that holds.
   This bullet asked for ">= 2 Gbps aggregate (multiple parallel cores)"
   until 2026-08-04, on the estimate that an LFE5U-45F would hold three
@@ -126,7 +128,10 @@ Hardware accelerator for:
   cycles for a 1500-byte MTU) that clock gives **0.569 Gbps per port,
   56.9% of line rate, 1.138 Gbps across both**; at the 48.16 MHz this
   paragraph used to quote it was 0.561 / 1.121, and those two figures
-  stood here unchanged after the clock was corrected. Saturating
+  stood here unchanged after the clock was corrected. **48.89 MHz is an
+  out-of-context Fmax and no PLL divider produces it**, so these are
+  cycle budgets and not rates — the 2026-08-10 amendment below gives the
+  clock a pinned build gets. Saturating
   a single port needs both cores behind it, which needs a distributor, a
   collector and an answer to the per-core key store; saturating both
   needs four cores, and three do not route. Full line rate on any port
@@ -141,10 +146,24 @@ Hardware accelerator for:
   rather than the pair's, since only one core is in that build. The
   1.138 Gbps stands as the fabric's cycle budget, not a configuration
   the board carries.
-  Both figures are projections from measurement rather than silicon
-  results: the builds are `--out-of-context`, with no IO, no pin
-  constraints and no Ethernet MAC, and the MAC still has to fit
-  alongside. The host datapath is no longer the limit — it costs the
+  **Amended 2026-08-10: the MAC fits, it has been placed beside a core,
+  and the delivered figure is lower than either projection.** `oca_top`
+  is one core and one full port against the real pin map, with IO and
+  the PLL: 17802 LUTs, 40.6% of the device, closing all four clock
+  constraints at seed 6. **0.581 Gbps was an Fmax divided into a cycle
+  count**, and the design cannot run at that clock: `oca_clkrst`
+  delivers `clk_sys` at 625/13 = **48.0769 MHz**, and because `clk_tx`
+  divides the same VCO the ladder is coarse — nothing between 48.08 and
+  50.00, and 50.00 has never been built. Through the same cycle model
+  the built design delivers
+  **0.560 Gbps at MTU, 56.0% of line rate**. The two-port and two-core
+  rows above remain sums that nothing has built: every term in them was
+  measured `--out-of-context`, with no IO and no pin constraints, and
+  the port was measured apart from the cores rather than placed beside
+  them — which is exactly the addition that came in 2928 LUTs high on
+  the one row that has since been built.
+  Nothing has run on a board. The host
+  datapath is no longer the limit — it costs the
   engine's 40 cycles per 64-byte block and nothing on top, see
   `docs/design/2026-08-03-host-protocol.md`. Measurements and method:
   `oca/hw/syn/README.md`.
@@ -166,8 +185,11 @@ Hardware accelerator for:
   end-to-end throughput is limited by the host interface (GbE)", which
   was true when this bullet asked for >= 2 Gbps from three engines
   against a 1 Gbps port. The MVP that fits is one core on one port at
-  0.581 Gbps, **58.1% of line rate**, so the port idles 42% of the time
-  and the GbE link is the larger number, not the smaller one. What
+  0.560 Gbps, **56.0% of line rate**, so the port idles 44% of the time
+  and the GbE link is the larger number, not the smaller one. (This read
+  0.581 and 58.1% until 2026-08-10: that figure divides an Fmax the PLL
+  cannot deliver into the cycle model. The conclusion is unchanged and
+  the margin is wider.) What
   bounds v1 is what fits and routes on the LFE5U-45F: three cores do
   not route at 76.4% occupancy (congestion, not timing), and one
   Ethernet port costs 8422 LUTs, which puts two cores with two ports at

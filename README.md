@@ -23,8 +23,10 @@ The full project specification is in [SPEC.md](SPEC.md).
   cocotb + Verilator against the same official vectors: ChaCha20,
   Poly1305, AEAD ChaCha20-Poly1305 (encrypt + decrypt), plus the host
   protocol layer (`oca_core`) that turns a UDP payload into an AEAD
-  operation and back. Next is the Ethernet integration, which needs the
-  board.
+  operation and back. The Ethernet integration is merged: `oca_top`
+  reaches from the RGMII pads to `oca_core` and back, closes timing on
+  the LFE5U-45F and packs into a bitstream. Next is bring-up on the
+  board, which nothing here has run on.
 
 ## Quick start
 
@@ -52,6 +54,11 @@ cd oca
 .venv/bin/python hw/sim/run_pktbuf.py
 .venv/bin/python hw/sim/run_oca_core.py
 .venv/bin/python hw/sim/run_attack.py
+.venv/bin/python hw/sim/run_clkrst.py
+.venv/bin/python hw/sim/run_rgmii.py
+.venv/bin/python hw/vendor/vendor_patches.py build        # before the next one
+.venv/bin/python hw/sim/run_eth_mac.py
+.venv/bin/python hw/sim/run_udp_seam.py
 .venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
 .venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
@@ -59,9 +66,12 @@ cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 
 The two `*_gate.py` runners need the project-local yosys as well: they
 replay tests on ECP5 primitives, because every other suite elaborates
-the SystemVerilog and cannot see what synthesis did to it. The last line
-is not a simulation at all — the protocol model has no DUT and runs as
-plain Python.
+the SystemVerilog and cannot see what synthesis did to it. `run_eth_mac.py`
+reads a patched copy of the pinned `verilog-ethernet` tree rather than
+the submodule, which is why `vendor_patches.py build` comes first; it
+refuses to run against an unpatched tree instead of testing sources the
+board will not carry. The last line is not a simulation at all — the
+protocol model has no DUT and runs as plain Python.
 
 ## Documentation
 

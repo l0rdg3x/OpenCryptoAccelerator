@@ -180,14 +180,23 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass, + 3 at BYTES=16
 .venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
+.venv/bin/python hw/sim/run_clkrst.py             # 7/7 pass
+.venv/bin/python hw/sim/run_rgmii.py              # 10/10 pass
+.venv/bin/python hw/sim/run_eth_mac.py            # 8/8 pass, needs the vendor patches
+.venv/bin/python hw/sim/run_udp_seam.py           # 10/10 pass, twice, at two HDR_Q_DEPTH
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-81 RTL tests, twelve of them run a second time at a non-default
+116 RTL tests, twenty-two of them run a second time at a non-default
 parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
-`poly1305` at `ROWS_PER_CYCLE` = 5 and three for `oca_pktbuf` at the
-smallest `BYTES` it accepts — plus 6 on a synthesised netlist.
+`poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
+smallest `BYTES` it accepts and all ten of `oca_udp_seam` at
+`HDR_Q_DEPTH` = 2 — plus 6 on a synthesised netlist.
+
+`run_eth_mac.py` reads the patched vendor tree, so
+`hw/vendor/vendor_patches.py build` has to have run; the runner says so
+and exits non-zero rather than testing the wrong sources.
 
 **A parameter with one tested value is a parameter that does not work.**
 Both of these switch the datapath rather than sizing it, and both went
@@ -502,7 +511,9 @@ core and never updated as the design grew by 3000 LUTs.
   `oca_dual` wires the two engines as two independent AXI-Stream pairs,
   one per core — so this is **0.569 Gbps per port at a 1500-byte MTU,
   1.138 Gbps aggregated across both** on the committed pair's 48.89 MHz,
-  and **neither port is saturated**. Both PHYs can be fed in cycle
+  and **neither port is saturated**. That 48.89 is an out-of-context
+  Fmax and no PLL divider produces it; the two-core bullet below gives
+  the clock a pinned build gets. Both PHYs can be fed in cycle
   budget; whether two MACs
   fit beside the cores is settled below — they do not. Saturating one of them would need
   both cores behind it, hence a distributor and a collector that do not
@@ -634,7 +645,10 @@ core and never updated as the design grew by 3000 LUTs.
   core.** Throughput follows from the measured cycle model — 40 cycles
   per 64-byte block plus 71 per packet, so 1031 cycles for a 1500-byte
   MTU and 111 for a 64-byte packet — divided into the clock of the
-  netlist being described, **and it moves when that clock does**. On
+  netlist being described, **and it moves when that clock does** —
+  which makes every figure below a cycle budget, since the clock in
+  question is an Fmax and `oca_clkrst`'s PLL delivers 625/13 =
+  48.0769 MHz whatever an out-of-context build reaches. On
   the committed pair (48.89 MHz mean, below) one core per port is
   **0.569 Gbps at a 1500-byte MTU — 56.9% of line rate — and 0.226 Gbps
   on 64-byte packets**, with 1.138 Gbps aggregated across both ports.
@@ -665,24 +679,57 @@ core and never updated as the design grew by 3000 LUTs.
   ~61 for the RGMII front end. The MAC figure is that module as
   measured; the build now uses `eth_mac_1g_fifo`, which is the same
   wrapper without the `rgmii_phy_if` the ~61 accounts for, so the total
-  does not move. What that leaves:
+  does not move. **Two modules are missing from that figure**:
+  `eth_axis_rx` and `eth_axis_tx`, which `udp_complete_64` does not
+  instantiate and which `oca_top` reads and needs
+  (`docs/design/2026-08-05-ethernet-integration.md`), so 8422 is a floor
+  for a port and not its cost. What that leaves:
 
   | configuration | LUTs | of device |
   |---|---|---|
   | two cores, two ports | 41446 | **94.5%** |
   | two cores, one port | 33024 | **75.3%** |
-  | one core, one port | 20730 | 47.3% |
+  | one core, one port | 20730 | 47.3% — **built, and it is 17802, 40.6%** |
 
   Two ports are not merely tight, they are out. Two cores behind one
   port land at 75.3%, against the 76.4% at which this device stopped
   routing in the occupancy study — and would additionally need a
-  distributor, a collector and an answer to the per-core key store. **On
-  the current RTL the MVP that fits is one core on one port, 0.581 Gbps
-  at MTU** — the single core's own mean of 49.91 MHz through the same
-  cycle model, 58.1% of line rate, 0.230 Gbps on 64-byte packets. That
-  clock is the core placed **alone and out of context**: no MAC beside
-  it, no IO, no PLL, so it is the ceiling that configuration could
-  reach and not a measurement of it.
+  distributor, a collector and an answer to the per-core key store.
+  **The one row that has since been built came in 2928 LUTs under its
+  sum**, because adding a core measured alone to a port measured alone
+  counts twice the logic the optimiser shares. The two rows above it are
+  sums of the same kind and neither has been built, so they are
+  estimates of unknown tightness in the same direction. **On the current
+  RTL the MVP that fits is one core on one port, 0.581 Gbps at MTU** —
+  the single core's own mean of 49.91 MHz through the same cycle model,
+  58.1% of line rate, 0.230 Gbps on 64-byte packets. That clock is the
+  core placed **alone and out of context**: no MAC beside it, no IO, no
+  PLL, so it is the ceiling that configuration could reach and not a
+  measurement of it.
+
+  **And the ceiling is not the clock the board runs.** `oca_top`
+  instantiates `oca_clkrst`, which delivers `clk_sys` at 625/13 =
+  **48.0769 MHz**. Fmax only says whether that clock closes: at seed 6
+  it closes with 49.41 MHz, 2.8% of margin. So through the same cycle
+  model the built design delivers **0.560 Gbps at MTU, 56.0% of line
+  rate, and 0.222 Gbps on 64-byte packets**. Every *throughput* figure
+  above it is an Fmax divided into a cycle count — what a core could
+  reach if a PLL could give it that clock; this one is what the board
+  gets. (The Gbps figures that are wire rates or targets, 1 and 2, are
+  neither.)
+
+  **What this PLL can offer instead is a coarse ladder, and the next
+  rung up is unmeasured.** `clk_tx` is an integer division of the same
+  VCO, so the VCO must be a multiple of 125 MHz, and the 400-800 MHz
+  band leaves exactly 500, 625 and 750. From those, `clk_sys` near this
+  range can be 45.45, 46.88, **48.08**, 50.00 and 52.08 — nothing
+  between 48.08 and 50.00. Whether the design would close a 50.00 MHz
+  constraint **has not been built**: every figure in the sweep was
+  measured against 48.08, and at the one seed that closes both 125 MHz
+  clocks `clk_sys` reached 49.41. That is a reason to expect 50.00 to be
+  tight, not a measurement of it. The device also carries four PLLs and
+  this design uses one, so a second one for `clk_sys` is a door nobody
+  has opened.
 
   **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
   Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
@@ -761,11 +808,15 @@ core and never updated as the design grew by 3000 LUTs.
   branches and no new state. Non-vacuous — deleting the flip-flops
   attributed to any one of the three engine files fails it, and the
   per-file floors report ok in all three cases.
-- Next: **the Ethernet integration**, designed in
-  `docs/design/2026-08-05-ethernet-integration.md` and needing the board
-  (expected ~2026-08-17), and most of it is now written **here**.
+- **The Ethernet integration is merged** (`c153934`), designed in
+  `docs/design/2026-08-05-ethernet-integration.md`. Everything it needed
+  to be built is written, and all of it is tested but one thing: the
+  whole-path testbench that document's section 8 asks for — a synthetic
+  frame through the stack and `oca_core` and back out — does not need
+  the board and is not written. **What is next is that testbench, and
+  bring-up on the board**, expected ~2026-08-17.
 
-  What exists on this branch: `verilog-ethernet` as a submodule at
+  What exists in the tree: `verilog-ethernet` as a submodule at
   `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
   front end around the ECP5 DDR primitives, with the receive delay
   movable at run time rather than fixed in the bitstream (10 tests);
@@ -781,17 +832,21 @@ core and never updated as the design grew by 3000 LUTs.
   to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
   `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
   crossing in one instance. Upstream's testbench does not exercise that
-  configuration, so it needs one of ours, as does the whole path from a
-  synthetic frame back out to one.
+  configuration, so it has one of ours (`run_eth_mac.py`, 8 tests). The
+  whole path from a synthetic frame back out to one still has none.
 
   **A pinned place & route now runs**, on `oca_top_stub`: 17 TRELLIS_IO
   (every pad the `.lpf` names, and the flow passes no
   `--lpf-allow-unconstrained`, so 17 is the proof), 1 EHXPLLL, 11
-  IOLOGIC, and four clocks all constrained for real — `clk_sys` 243 MHz
-  against 48.08 required, `clk_tx` 315 against 125, `rgmii_rx_clk` 332
-  against 125, `clk25` 417 against 25. The stub carries no crypto: it
-  exists so that the clocking and the pads are known to place before the
-  real top is written.
+  IOLOGIC, and four clocks all constrained for real — `clk_sys` 260.69
+  MHz against 48.08 required, `clk_tx` 347.34 against 125,
+  `rgmii_rx_clk` 283.53 against 125, `clk25` 488.76 against 25. Those are
+  the committed stub, rebuilt by `3421a20` after `oca_rgmii` stopped
+  being reset from the wrong clock domain in it; the figures this entry
+  carried until 2026-08-10 (243 / 315 / 332 / 417) belong to `24b90e6`,
+  the RTL before that fix. The stub carries no crypto: it exists so that
+  the clocking and the pads are known to place before the real top is
+  written.
 
   **`oca_top` exists, places and routes, and closes timing.** The whole
   chain in one design: pads, `oca_rgmii`, the MAC, the Ethernet header
@@ -813,7 +868,7 @@ core and never updated as the design grew by 3000 LUTs.
   shares.
 
   **It closes on seed 6 and on no other seed of the thirteen tried.**
-  `rgmii_rx_clk` clears its target on two of thirteen, `clk_tx` on seven,
+  `rgmii_rx_clk` clears its target on two of thirteen, `clk_tx` on six,
   and they coincide once. The seed is recorded in the DESIGNS entry, so
   `run_synth.py oca_top` reproduces it, but a seed is not margin: any RTL
   change reshuffles the placement and the next seed has to be found
@@ -845,12 +900,27 @@ core and never updated as the design grew by 3000 LUTs.
   observably inert by construction, so what the suite proves about it is
   that it changed nothing.
 
-  **Still not done, and none of it is simulation:** no bitstream has been
-  written or loaded, nothing has run on hardware, and `eth_axis_rx` and
-  `udp_complete_64` are exercised by no testbench of ours — the seam is
-  tested where `udp_complete_64` would stand, not through it. So
-  "reception works" is proved at the MAC's own boundary and reasoned
-  beyond it.
+  **The flow packs a bitstream**, and only where one can mean something:
+  `run_synth.py` runs `ecppack` after `check_timing` has passed, and only
+  for a design that carries an `.lpf`. An `--out-of-context` build still
+  stops at the report — it has no IO buffers, so a bitstream from one
+  would configure a device that drives no pin — and a design that misses
+  a constraint exits 1 and writes no `.bit`. **Nor does one outlive the
+  report it was built with**: the bitstream is removed as soon as
+  nextpnr has replaced that report, so `build/` never holds a `.bit`
+  from one placement beside the numbers of another. A run that fails
+  before or during place & route takes nothing, because nextpnr writes
+  no report unless it succeeds and the old pairing still holds.
+  `oca_top.bit` is 527142 bytes,
+  its header reads `Part: LFE5U-45F-6CABGA381`, and the run prints the
+  `openFPGALoader` command that would load it.
+
+  **Still not done, and none of it is simulation:** that bitstream has
+  been loaded onto nothing, nothing has run on hardware, and
+  `eth_axis_rx` and `udp_complete_64` are exercised by no testbench of
+  ours — the seam is tested where `udp_complete_64` would stand, not
+  through it. So "reception works" is proved at the MAC's own boundary
+  and reasoned beyond it.
 
   What the board alone can settle is listed in the design document: the
   RGMII delay value and the IO bank voltages above all. One trap is

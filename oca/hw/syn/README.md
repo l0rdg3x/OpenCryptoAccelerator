@@ -25,18 +25,83 @@ the post-synthesis netlist and the nextpnr JSON report.
   (`read_verilog -sv`) rejects the SystemVerilog these cores use
   (functions with `return`, concatenation assignments); the slang
   frontend built into yosys handles it.
-- **nextpnr-ecp5** with `--out-of-context`: the cores carry 512-bit data
-  buses, far more signals than the package has pins, so no IO buffers
-  are inserted and the design is placed as a locked macro. The numbers
-  characterise the core itself — a top level with a real host interface
-  will add its own IO and routing pressure.
-- `--timing-allow-fail` is deliberate: this is characterisation, a
-  missed target must be reported, not turned into a build failure.
-- The placer seed is fixed (`--seed 1`) so runs are comparable.
+- **nextpnr-ecp5**, and there are two kinds of build. A design with no
+  `.lpf` gets `--out-of-context`: the cores carry 512-bit data buses,
+  far more signals than the package has pins, so no IO buffers are
+  inserted and the design is placed as a locked macro. Those numbers
+  characterise the core itself. A design that carries an `.lpf`
+  (`oca_top_stub`, `oca_top_mac`, `oca_top`) is built against the real
+  pin map instead, with IO, the PLL and its own clock constraints.
+- `--timing-allow-fail` stops nextpnr itself from failing, so that a
+  missed target is reported rather than swallowed. It is not a licence
+  to miss one: `check_timing()` re-reads the report afterwards and
+  returns non-zero for any missed constraint nextpnr says it really
+  applied, and `main()` then skips packing. That set is wider than the
+  `.lpf` — `colorlight_i9.lpf` carries two `FREQUENCY` lines, `clk25`
+  and `rgmii_rx_clk`, and the other two constraints are the ones nextpnr
+  derives from the PLL, so all four are enforced. What is deliberately
+  *not* enforced is `--freq`, which is nextpnr's fallback for an
+  unconstrained net rather than a target this design set for itself.
+- The placer seed comes from the design (`Design.seed`), and `--seed`
+  overrides it. `oca_top` records 6 — see the sweep at the end of this
+  file — and everything else falls back to 1, so runs stay comparable.
 - Two checks bracket synthesis, because nothing downstream would catch
   what they catch: `check_cmp2lut()` probes the toolchain before it is
   trusted, and `check_netlist()` asserts the netlist still contains the
   storage the design depends on (`NETLIST_FF_FLOOR`). Both are fatal.
+- **ecppack** turns the Trellis text configuration into a compressed
+  `.bit`, and runs only for a pinned design whose timing passed. A
+  bitstream that misses its clock would be loaded, would appear to
+  work, and would corrupt one frame in some number nobody is counting —
+  packing it turns a build failure into a bench mystery.
+
+  Measured both ways on `oca_top`: at its own seed 6 the run exits 0 and
+  writes `oca_top.bit`, 527142 bytes, header `Part:
+  LFE5U-45F-6CABGA381`, which `ecpunpack` decodes back to a
+  configuration naming the same part with USERCODE and DONE set. At seed
+  1 it exits 1 and writes no `.bit`, **two constraints having been
+  missed** — `clk_tx` 124.69 against 125 and `rgmii_rx_clk` 115.77
+  against 125, while `clk_sys` (52.16) and `clk25` (486.85) pass.
+  `b9f68ea`'s commit message says three; it is two, and the report it
+  was measured on is the one described here.
+
+  **Not packing was not enough, and that was found by reading rather
+  than at the bench.** `pack()` is simply not reached when the check
+  fails, so a `.bit` from an earlier run stayed where a programmer would
+  find it — the build directory carried a seed-6 bitstream beside a
+  seed-1 report for a day.
+
+  **So the bitstream is removed the moment nextpnr has succeeded**, when
+  the report it was built with has just been replaced. The property is
+  not "a failed build deletes it" but the narrower and more useful one:
+  **a `.bit` never outlives the report it was built with**.
+
+  Both earlier placements of that line were wrong, and in the same
+  direction. At the top of `main()` it destroyed the last good bitstream
+  over a missing tool or a failed netlist check; immediately *before*
+  nextpnr it destroyed it whenever nextpnr itself failed — and nextpnr
+  writes neither the report nor the configuration unless place and route
+  both succeed (`common/kernel/command.cc`), so on those failures the
+  old report is still standing and the old bitstream still matches it.
+  The difference is not academic on this design: only 1 seed of 13
+  closes, so retrying with `--seed` and `--pnr-arg` is the normal way to
+  work here. `pack()` separately removes a `.bit` that `ecppack` failed
+  partway through, since a truncated bitstream is one a programmer will
+  load.
+
+  Proved on all three:
+
+  | mutation | design | verdict |
+  |---|---|---|
+  | `--pnr-only` before any netlist exists | `oca_top` | exit 1, `.bit` **kept** |
+  | `--pnr-arg --this-flag-does-not-exist` | `oca_top_stub` | exit 2, `.bit` **kept**, report byte-identical |
+  | `.lpf` `rgmii_rx_clk` set to 400 MHz | `oca_top_stub` | exit 1, 283.53 against 400 FAILED, `.bit` gone |
+  | neither | `oca_top_stub` | exit 0, `.bit` present, 163854 bytes |
+
+  `oca_top_stub` stands in wherever place & route is reached, because its
+  takes seconds; the first row never reaches nextpnr, so it was run on
+  `oca_top` itself. Restore the `.lpf` by name afterwards, never with
+  `git checkout -- .`.
 
 ## The cmp2lut trap
 
@@ -1213,7 +1278,13 @@ headroom" and "24% of margin rather than 26%", both of which measure the
 two engines together against one port. `oca_dual` gives each core its
 own port, so the per-port figure is 0.569 Gbps at a 1500-byte MTU on
 the committed pair's 48.89 MHz mean (0.561 at the 48.16 MHz this line
-quoted until 2026-08-09).
+quoted until 2026-08-09). **Amended 2026-08-10: that is a cycle budget
+and not a rate.** 48.89 MHz is an out-of-context Fmax, and `oca_clkrst`
+gives `clk_sys` = 625/N with N = 13, so a pinned build of this topology
+runs at 48.0769 MHz and 0.560 Gbps per port. Every *throughput* figure
+in this file divides an Fmax into a cycle count, and no PLL divider
+produces any of those clocks; the 1 and 2 Gbps that appear elsewhere are
+wire rates and targets, which is a different kind of number.
 
 The cost of pipelining is buffers, and it is affordable: a second receive
 and a second transmit buffer per core takes block RAM from 4 DP16KD per
@@ -1506,7 +1577,7 @@ Thirteen seeds on the patched netlist, place and route only:
 | 13 | 106.61 | **135.98** | 51.19 |
 
 Targets are 125.00, 125.00 and 48.08 MHz. `rgmii_rx_clk` clears its own
-on two seeds of thirteen, `clk_tx` on seven, `clk_sys` on twelve — and
+on two seeds of thirteen, `clk_tx` on six, `clk_sys` on twelve — and
 all three coincide on **one**. Both 125 MHz clocks swing about 20% across
 the sweep and they do not swing together.
 

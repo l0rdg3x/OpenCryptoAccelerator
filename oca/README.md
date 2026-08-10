@@ -150,6 +150,10 @@ Python 3.14).
 .venv/bin/python hw/sim/run_pktbuf.py
 .venv/bin/python hw/sim/run_oca_core.py
 .venv/bin/python hw/sim/run_attack.py
+.venv/bin/python hw/sim/run_clkrst.py
+.venv/bin/python hw/sim/run_rgmii.py
+.venv/bin/python hw/sim/run_eth_mac.py         # needs `python hw/vendor/vendor_patches.py build`
+.venv/bin/python hw/sim/run_udp_seam.py
 .venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
 cd hw/sim && ../../.venv/bin/python test_proto_model.py
@@ -165,9 +169,10 @@ test run this project ever had.
 Current status: chacha20 5/5 tests pass at both `ROUNDS_PER_CYCLE`
 values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
-pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16 — 81 plus
-the three at the smallest `BYTES` — and post-synthesis keystore 4/4 and
-oca_proto 2/2;
+pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
+7/7, rgmii 10/10, eth_mac 8/8, udp_seam 10/10 at both `HDR_Q_DEPTH`
+values — 116 plus the three at the smallest `BYTES` — and
+post-synthesis keystore 4/4 and oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,
@@ -218,7 +223,9 @@ they are wired to the ports, and `oca_dual` gives each core its own
 AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
 56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
 48.89 MHz mean through the measured cycle model, 1031 cycles for an
-MTU-sized packet. Both PHYs can be fed in cycle budget — whether two
+MTU-sized packet. That mean is an out-of-context Fmax and no PLL divider
+produces it, so read these as cycle budgets: at the 48.0769 MHz
+`oca_clkrst` delivers they are 0.560 per port. Both PHYs can be fed in cycle budget — whether two
 MACs fit beside the cores is settled below, and they do not — and
 neither port is saturated, and saturating one would need both cores
 behind it — a distributor and a collector that do not exist. This
@@ -233,9 +240,17 @@ current RTL is **one core on one port, 0.581 Gbps at MTU** — one core
 alone means the single core's own 49.91 MHz mean, not the pair's. That
 clock was measured on the core placed **alone and out of context**: no
 MAC beside it, no IO, no PLL, so it is the ceiling that configuration
-could reach rather than a measurement of it, and no such netlist has
-been built. The two-port figures above stand as a cycle budget, not a
-configuration the board carries.
+could reach rather than a measurement of it. **That netlist has since
+been built**: `oca_top` is one core and one port against the real pin
+map, 17802 LUTs — 40.6%, not the 47.3% the sum predicted, because the
+sum counts twice the logic the optimiser shares. **And it does not run
+at 0.581 Gbps**, because it cannot run at 49.91 MHz: `oca_clkrst`
+delivers `clk_sys` at 625/13 = **48.0769 MHz**, which seed 6 closes with
+49.41 MHz of Fmax, 2.8% of margin. The next frequency this PLL can offer
+is 50.00, and no build has ever asked for it. At the clock it
+gets, the same cycle model gives
+**0.560 Gbps at MTU**. The two-port figures above stand as a cycle
+budget, not a configuration the board carries.
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
@@ -293,7 +308,9 @@ two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
 added together, and `oca_dual` wires them to two ports, one core each.
 One port therefore sees one core, **0.569 Gbps at a 1500-byte MTU** on
 the committed pair's clock, and is not saturated. **Read the aggregate
-as a cycle budget, not as a port cleared.** The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
+as a cycle budget, not as a port cleared** — and the per-port figure the
+same way, since that clock is an Fmax the PLL cannot deliver: 625/13 =
+48.0769 MHz gives 0.560. The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers
 (55.6%) and 8 DP16KD beside it were measured on RTL from before the
 packet overlap, in a build whose key store the mapper had deleted. That
 older pair was also the tightest configuration in the study: two of its
@@ -304,20 +321,20 @@ been placed and routed, on four seeds with every seed routing** —
 `AGENTS.md` carries what they measure, and it is deliberately not
 repeated here. **None of this has run on silicon.**
 
-Next: the Ethernet integration, designed in
-`docs/design/2026-08-05-ethernet-integration.md` and needing the board —
-`verilog-ethernet` (MIT) as a submodule, the RGMII front end written by
-us around the ECP5 DDR primitives, PLL, reset and the Colorlight i9 pin
-constraints. The 8-to-64-bit width conversion is not in our clock
+**The Ethernet integration is merged**, designed in
+`docs/design/2026-08-05-ethernet-integration.md`: `verilog-ethernet`
+(MIT) as a submodule, the RGMII front end written by us around the ECP5
+DDR primitives, PLL, reset, the Colorlight i9 pin constraints, the seam
+onto `oca_core`, and `oca_top` placed, routed, timing-closed and packed
+into a bitstream. The 8-to-64-bit width conversion is not in our clock
 domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
 is meant to feed, so it happens on the 125 MHz side inside
 `eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64` — not
 `eth_mac_1g_rgmii_fifo`, which embeds the `rgmii_phy_if` that has no
-ECP5 target. Upstream has no
-testbench for that configuration, so it needs one of ours — that
-testbench, one for the RGMII wrapper and one for the whole path from a
-synthetic frame back out to one are the work that does not need the
-board.
+ECP5 target. Upstream has no testbench for that configuration, so it
+has one of ours (`run_eth_mac.py`), beside one for the RGMII wrapper
+and one for the seam. **The whole path from a synthetic frame back out
+to one still has none**, and next is bring-up on the board.
 
 ## Phase 1: abstract API + software backend
 

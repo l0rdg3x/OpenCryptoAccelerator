@@ -138,7 +138,7 @@ eth_mac_1g_fifo #(
     // one frame while the previous one drains.
     //
     // Deliberately not larger. Depth cannot fix a sustained rate mismatch:
-    // one oca_core sinks ~0.561 Gbps at MTU against a 1 Gbps port, so
+    // one oca_core sinks ~0.560 Gbps at MTU against a 1 Gbps port, so
     // back-to-back line-rate traffic overflows any depth we could afford.
     // What depth buys is tolerance of bursts, and what makes the shortfall
     // visible is rx_fifo_overflow, not a bigger memory.

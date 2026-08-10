@@ -247,7 +247,7 @@ udp_complete_64 #(
     // The price is store-and-forward through the payload FIFO below. It does
     // not cost throughput here: filling and draining 1472 bytes at 64 bits
     // per cycle is 368 cycles even with no overlap, 1.5 Gbps at 48 MHz,
-    // above the port and far above one oca_core's 0.561 Gbps.
+    // above the port and far above one oca_core's 0.560 Gbps.
     .UDP_CHECKSUM_GEN_ENABLE(1),
 
     // Bytes, like every other DEPTH in this vendor tree: axis_fifo derives

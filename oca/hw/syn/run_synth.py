@@ -193,7 +193,7 @@ DESIGNS = {
         # Seed 6, and it is not a preference. Over seeds 1 to 13 this
         # design closes all three constraints on this one and no other:
         # rgmii_rx_clk clears 125 MHz on two of the thirteen and clk_tx
-        # on seven, and the only seed where those overlap is 6. Both
+        # on six, and the only seed where those overlap is 6. Both
         # clocks swing about 20% across the sweep, so a seed is not a
         # detail here, it is the difference between a bitstream and a
         # failed build.
@@ -676,6 +676,9 @@ def pack(top, args):
     rc = run([ECPPACK, str(config), str(bitstream), "--compress"],
              BUILD / f"{top}.ecppack.log", args.timeout)
     if rc != 0:
+        # ecppack having failed says nothing about how much it wrote, and
+        # a truncated bitstream is one a programmer will load.
+        bitstream.unlink(missing_ok=True)
         return rc
     size = bitstream.stat().st_size
     print(f"\nbitstream: {bitstream} ({size} bytes)")
@@ -814,6 +817,25 @@ def main():
     rc = pnr(args.top, netlist, args, report, nextpnr_log)
     if rc != 0:
         return rc
+
+    # The report has just been replaced, so the bitstream an earlier run
+    # left no longer has one. build/ is where a programmer looks and a
+    # .bit records nothing about its own origin, so one outliving its
+    # report is one that gets loaded against numbers describing a
+    # different placement.
+    #
+    # Here and not earlier, twice over. A run that fails before this
+    # point has changed nothing, and destroying the last good artefact
+    # over a missing tool or a failed netlist check would cost more than
+    # it protects -- on a design that closes on one placer seed of
+    # thirteen, retrying is the normal way to work. And nextpnr writes
+    # neither the report nor the configuration unless place and route
+    # both succeed, so a routing failure or a timeout leaves the old
+    # report standing: deleting the bitstream that matches it would
+    # break the pairing rather than keep it.
+    stale = BUILD / f"{args.top}.bit"
+    if stale.is_file():
+        stale.unlink()
 
     summarise(args.top, args, report)
     rc = check_timing(args.top, report, nextpnr_log)
