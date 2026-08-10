@@ -254,8 +254,8 @@ module oca_clkrst #(
     localparam int CLKI_HZ    = 25_000_000;
     localparam int CLKI_DIV   = 1;
     localparam int CLKFB_DIV  = 5;
-    localparam int CLKOP_DIV  = 5;
-    localparam int CLKOS_DIV  = 13;
+    localparam int CLKOP_DIV  = 4;
+    localparam int CLKOS_DIV  = 10;
     localparam int CLKOP_CPH  = 2;
     localparam int CLKOS_CPH  = 2;
 
