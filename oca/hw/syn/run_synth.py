@@ -283,12 +283,44 @@ NETLIST_FF_FLOOR = {
 #
 # oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
 #
-# oca_top measures 16840, of which 12043 are attributed to our RTL and
-# 4797 to the vendor stack, which read_verilog gives no src attribute
-# this census can key on. The total is floored rather than those two
+# oca_top measures 16849, of which 12043 are attributed to our RTL and
+# 4806 to the vendor stack, which read_verilog gives no src attribute
+# this census can key on. (16840 / 4797 until 2026-08-10: those are the
+# figures from before the vendor patches, and hw/vendor/patches/README.md
+# records the +9 they cost.) The total is floored rather than those two
 # separately for the same reason as above, and because the vendor's
 # share is the part most likely to move if a parameter changes.
 NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}
+
+# The cells no flip-flop census can see, and nothing else checks either.
+#
+# live_ff_census skips any cell whose type lacks "FF" or lacks a Q port,
+# so IDDRX1F, ODDRX1F, DELAYF, DELAYG and EHXPLLL are all invisible to
+# it -- the DDR cells expose Q0/Q1, and the PLL is not storage at all.
+# That is the whole physical interface: 22 bits of receive capture and
+# transmit launch, their delay lines, and the one PLL every clock in the
+# design comes from. A mapper that dropped any of them leaves a netlist
+# that passes every check above, places, routes, meets timing and packs
+# a bitstream. On the board it is a link that never comes up, and the
+# cmp2lut trap is the precedent for treating that as a real risk rather
+# than a theoretical one.
+#
+# Exact counts, not floors, and deliberately: these follow from the pin
+# map rather than from logic, so a change in either direction is
+# something a person should look at. Adding a second port means editing
+# this table, the way adding a design means editing DESIGNS.
+#
+# Measured on the netlists in hw/syn/build/: identical across all three
+# pinned designs, because all three carry one oca_rgmii and one
+# oca_clkrst.
+NETLIST_PRIM_COUNT = {
+    "oca_top": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
+                "DELAYF": 5, "DELAYG": 6},
+    "oca_top_mac": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
+                    "DELAYF": 5, "DELAYG": 6},
+    "oca_top_stub": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
+                     "DELAYF": 5, "DELAYG": 6},
+}
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
 DEFAULT_DEVICE = "45k"
@@ -445,6 +477,39 @@ def live_ff_census(top, netlist):
     return census, total
 
 
+def check_prims(top, netlist):
+    """Fail if a physical-interface primitive is missing or multiplied.
+
+    See NETLIST_PRIM_COUNT for why these need a check of their own: the
+    flip-flop census cannot see any of them, and a design that lost its
+    PLL or a DDR register still builds, still meets timing and still
+    packs.
+    """
+    want = NETLIST_PRIM_COUNT.get(top)
+    if not want:
+        return 0
+    cells = json.loads(netlist.read_text())["modules"][top]["cells"]
+    have = {}
+    for cell in cells.values():
+        t = cell["type"]
+        if t in want:
+            have[t] = have.get(t, 0) + 1
+    rc = 0
+    print("\nphysical-interface primitives:")
+    for t, n in sorted(want.items()):
+        got = have.get(t, 0)
+        status = "ok" if got == n else "FAILED"
+        print(f"  {t:<10} {got:>3} (want {n}) — {status}")
+        if got != n:
+            rc = 1
+    if rc:
+        print("\nThe physical interface is not what this design describes: "
+              "a link that never comes up builds and packs exactly like one "
+              "that does.\nSee run_synth.py, NETLIST_PRIM_COUNT.",
+              file=sys.stderr)
+    return rc
+
+
 def check_netlist(top, netlist):
     """Fail if storage the design depends on has vanished from the netlist.
 
@@ -458,6 +523,7 @@ def check_netlist(top, netlist):
     it; hw/sim/run_proto_gate.py replays it on the mapped netlist for
     that reason.
     """
+    rc = check_prims(top, netlist)
     floors = NETLIST_FF_FLOOR.get(top, {})
     total_floor = NETLIST_FF_TOTAL.get(top)
     if not floors and total_floor is None:
@@ -466,12 +532,11 @@ def check_netlist(top, netlist):
               f"Not fatal: measure a floor and add one once this top carries "
               f"state worth guarding (see README.md, 'The cmp2lut trap').",
               file=sys.stderr)
-        return 0
+        return rc
     census, live_total = live_ff_census(top, netlist)
     print("\nlive flip-flops by source file:")
     for src, n in sorted(census.items(), key=lambda kv: -kv[1]):
         print(f"  {src:<24} {n:>6}")
-    rc = 0
     for src, want in sorted(floors.items()):
         live = census.get(src, 0)
         status = "ok" if live >= want else "FAILED"
