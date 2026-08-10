@@ -65,8 +65,14 @@ drives one register from two `always` blocks on opposite edges, and
 `synth_ecp5` reports conflicting drivers on every bit rather than
 inferring `ODDRX1F`. `iddr.v` does elaborate, into fabric flip-flops on
 both edges instead of `IDDRX1F`. **The RGMII front end — DDR
-primitives, the RX clock delay and its ECLK routing — is therefore ours
-to write, behind the wrapper SPEC.md's portability rule requires.**
+primitives and the receive delay — is therefore ours to write, behind
+the wrapper SPEC.md's portability rule requires**, and it now exists as
+`oca/hw/rtl/oca_rgmii.sv`. (This entry said "the RX clock delay and its
+ECLK routing" until 2026-08-08. `IDDRX1F` has no `ECLK` port — its port
+list is `D, SCLK, RST, Q0, Q1` — and `ECLK` belongs to the x2 gearing
+primitives, which this design rejects. The delay is on the five data
+lines, not on the clock, so that the recovered clock keeps its dedicated
+path to a global buffer.)
 (`example/RV901T` is a Linsn RV901T, a Spartan-6 board, not a
 Colorlight.)
 
@@ -83,12 +89,13 @@ than in our clock domain. `eth_mac_1g_fifo` with
 `AXIS_DATA_WIDTH = 64` does the width conversion and the clock domain
 crossing in one instance, on the correct side of each — that
 configuration is not exercised by the upstream testbench, so it needs
-one of ours. (This named `eth_mac_1g_rgmii_fifo` until 2026-08-09. That
-wrapper **embeds `rgmii_phy_if`**, the module with no ECP5 target, so it
+one of ours. (This said `eth_mac_1g_rgmii_fifo` until 2026-08-08. That
+one **embeds `rgmii_phy_if`**, the module with no ECP5 target, so it
 cannot take our front end without editing a pinned vendor tree.
 `eth_mac_1g_fifo` is the same wrapper one layer down, taking GMII plus
-its two clocks, and it carries the same pair of
-`axis_async_fifo_adapter` instances.)
+its two clocks, and it carries the same pair of `axis_async_fifo_adapter`
+instances. Its user side is already in our domain, so no further
+asynchronous FIFO is needed between the MAC and the UDP stack.)
 
 ## Environment rules
 
@@ -265,6 +272,21 @@ core and never updated as the design grew by 3000 LUTs.
 - yosys reads these cores with `read_slang`, not `read_verilog -sv`:
   the Verilog-2005 frontend rejects functions with `return` and
   concatenation assignments, which the RTL uses throughout.
+- **Never invoke `yosys` or `nextpnr-ecp5` directly. Go through
+  `hw/syn/run_synth.py`**, which bounds every stage with a hard
+  wall-clock timeout and kills the whole process group when one is hit.
+  A build that has produced nothing after half an hour will not produce
+  anything by carrying on, and a synthesis nobody is watching is worse
+  than no synthesis: it saturates a core and hides whether anything is
+  progressing. This has happened twice — a stalled yosys that outlived
+  the agent that started it, and a caller that wrote its own two-hour
+  timeout and then had its orphaned shells relaunch the job after its
+  children were killed. If a build genuinely needs longer, raise it with
+  `--timeout`; do not route around the bound. The `Stop` hook in
+  `.claude/hooks/no-runaway-builds.sh` is the net under the cases that
+  bypass this anyway: it reports every live build at the end of a turn
+  and kills anything past an hour, identifying processes by
+  `/proc/PID/exe` because the command line may carry a relative path.
 - cocotb gotchas: runner import is `cocotb_tools.runner` on cocotb 2.x
   (fallback from `cocotb.runner`); when polling a DUT status signal in
   a loop, `await RisingEdge` **before** reading — reading right after
@@ -640,7 +662,10 @@ core and never updated as the design grew by 3000 LUTs.
   **And one Ethernet port costs 8422 LUTs, 19.2% of the device**,
   measured out-of-context on this toolchain rather than estimated:
   `udp_complete_64` 7147, `eth_mac_1g_rgmii_fifo` at 64 bits 1214, and
-  ~61 for the RGMII front end. What that leaves:
+  ~61 for the RGMII front end. The MAC figure is that module as
+  measured; the build now uses `eth_mac_1g_fifo`, which is the same
+  wrapper without the `rgmii_phy_if` the ~61 accounts for, so the total
+  does not move. What that leaves:
 
   | configuration | LUTs | of device |
   |---|---|---|
@@ -738,44 +763,98 @@ core and never updated as the design grew by 3000 LUTs.
   per-file floors report ok in all three cases.
 - Next: **the Ethernet integration**, designed in
   `docs/design/2026-08-05-ethernet-integration.md` and needing the board
-  (expected ~2026-08-17). **Half of it is written and lives on
-  `feat/ethernet-integration`, not here**: `verilog-ethernet` as a
-  submodule, `oca_rgmii.sv` (the RGMII front end around the ECP5 DDR
-  primitives, RX delay a parameter, 10 cocotb tests), `oca_clkrst.sv`
-  (PLL, three domains, reset — no testbench yet), `ecp5_prims.sv`,
-  `colorlight_i9.lpf`, and the parameter-fixing wrappers under
-  `oca/hw/rtl/vendor/` that the 8422-LUT port measurement was taken on.
+  (expected ~2026-08-17), and most of it is now written **here**.
+
+  What exists on this branch: `verilog-ethernet` as a submodule at
+  `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
+  front end around the ECP5 DDR primitives, with the receive delay
+  movable at run time rather than fixed in the bitstream (10 tests);
+  `oca_clkrst.sv`, one PLL and three clock domains with a reset
+  synchroniser each (7 tests); `ecp5_prims.sv`; `colorlight_i9.lpf`;
+  the parameter-fixing wrappers under `oca/hw/rtl/vendor/` that the
+  8422-LUT port measurement was taken on; and `oca_udp_seam.sv`, the
+  join between the UDP stack and `oca_core` (10 tests, run at two queue
+  depths).
+
   **The 8-to-64-bit width conversion is not in our clock domain**: at
   ~48 MHz an 8-bit stream carries 384 Mbps, under the port it is meant
   to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
   `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
-  crossing in one instance. (This said `eth_mac_1g_rgmii_fifo` until
-  2026-08-09; that wrapper embeds `rgmii_phy_if`, which has no ECP5
-  target, so it cannot take our front end without editing a pinned
-  vendor tree.) Upstream's testbench does not exercise the 64-bit
-  configuration, so it needs one of ours.
+  crossing in one instance. Upstream's testbench does not exercise that
+  configuration, so it needs one of ours, as does the whole path from a
+  synthetic frame back out to one.
 
-  **What is missing, in the order it blocks things** (whole-project
-  review, 2026-08-09):
-  1. **No top level.** Nothing instantiates the pieces together, so
-     there has never been a place & route with real IO: no in-context
-     Fmax, no DP16KD budget, no bitstream, and no bench step past
-     "blink". `colorlight_i9.lpf` already fixes the port list.
-  2. **The seam between the UDP stack and `oca_core` is undesigned.**
-     `oca_core` presents a bare 64-bit AXI-Stream pair;
-     `udp_complete_64` presents a payload stream plus a header sideband
-     and expects one back. That is logic with its own failure modes, not
-     wiring, and it needs its own testbench.
-  3. ~~No programmer in the tree.~~ **Done 2026-08-09**:
-     `scripts/build-toolchain.sh openfpgaloader` builds openFPGALoader
-     v1.1.1 into `tools/`. `--detect` runs and reports no cable, which
-     is as far as this can be tested without the board.
-  4. `oca_clkrst.sv` has no testbench, and reset synchronisers are
-     exactly the thing that works in simulation and not on silicon.
+  **A pinned place & route now runs**, on `oca_top_stub`: 17 TRELLIS_IO
+  (every pad the `.lpf` names, and the flow passes no
+  `--lpf-allow-unconstrained`, so 17 is the proof), 1 EHXPLLL, 11
+  IOLOGIC, and four clocks all constrained for real — `clk_sys` 243 MHz
+  against 48.08 required, `clk_tx` 315 against 125, `rgmii_rx_clk` 332
+  against 125, `clk25` 417 against 25. The stub carries no crypto: it
+  exists so that the clocking and the pads are known to place before the
+  real top is written.
+
+  **`oca_top` exists, places and routes, and closes timing.** The whole
+  chain in one design: pads, `oca_rgmii`, the MAC, the Ethernet header
+  parse and build, ARP/IP/UDP, `oca_udp_seam` and `oca_core`.
+
+  | | measured |
+  |---|---|
+  | TRELLIS_COMB | 17802, **40.6%** of the device |
+  | TRELLIS_FF | 16849, 38.4% |
+  | DP16KD | 13, 12.0% |
+  | MULT18X18D | 20, 27.8% |
+  | TRELLIS_IO | 17, every pad the `.lpf` names |
+  | `rgmii_rx_clk` | 129.87 MHz against 125 required |
+  | `clk_tx` | 130.07 MHz against 125 |
+  | `clk_sys` | 49.41 MHz against 48.08 |
+
+  40.6% against the 47.3% the area sum predicted: adding a core measured
+  alone to a port measured alone counts twice the logic the optimiser
+  shares.
+
+  **It closes on seed 6 and on no other seed of the thirteen tried.**
+  `rgmii_rx_clk` clears its target on two of thirteen, `clk_tx` on seven,
+  and they coincide once. The seed is recorded in the DESIGNS entry, so
+  `run_synth.py oca_top` reproduces it, but a seed is not margin: any RTL
+  change reshuffles the placement and the next seed has to be found
+  again. The whole sweep is in `hw/syn/README.md`. What would give real
+  margin is less competition for the fabric around the receive path — the
+  MAC alone closes at 132.98 MHz with 6.4% to spare, so the shortfall was
+  never the module.
+
+  **Two vendor defects had to be patched to get here, and both were
+  blocking.** They live in `hw/vendor/patches/`, applied to an extracted
+  copy of the pin by `hw/vendor/vendor_patches.py`; the submodule is
+  never written and `run_synth.py` and the runners refuse to build
+  without them.
+
+  1. **`tkeep` was zero on every receive beat.** `axis_adapter`'s upsize
+     branch ignored `S_KEEP_ENABLE` where its bypass branch honours it,
+     and `eth_mac_1g_fifo` ties that port to zero having set the
+     parameter to 0. `eth_axis_rx` computes which bytes are valid from
+     that signal, so no byte was valid anywhere downstream: the board
+     would not have received anything, at any clock.
+  2. **The FCS comparison sat on the 125 MHz critical path**, between
+     `crc_next` and its register. Moving it to the registered
+     `crc_state` one cycle later took the receive path from 102.59 to
+     115.77 MHz and took the CRC out of the critical path entirely.
+
+  `oca/hw/sim/run_eth_mac.py` is the MAC's testbench, written before the
+  patches and against the unpatched module: 8 tests, and it is what makes
+  the `tkeep` patch provable — reverted, it goes 7/8. The FCS patch is
+  observably inert by construction, so what the suite proves about it is
+  that it changed nothing.
+
+  **Still not done, and none of it is simulation:** no bitstream has been
+  written or loaded, nothing has run on hardware, and `eth_axis_rx` and
+  `udp_complete_64` are exercised by no testbench of ours — the seam is
+  tested where `udp_complete_64` would stand, not through it. So
+  "reception works" is proved at the MAC's own boundary and reasoned
+  beyond it.
 
   What the board alone can settle is listed in the design document: the
-  RGMII delay value and the IO bank voltages above all. One trap is now
+  RGMII delay value and the IO bank voltages above all. One trap is
   written down in `oca_rgmii.sv` and in the bring-up skill: the receive
-  delay is on the data lines by LiteEth precedent and not by geometry,
+  delay sits on the data lines by LiteEth precedent and not by geometry,
   and a one-unit-interval misalignment cannot be repaired by any tap
   value. `link_up` low while the PHY's own link LED is lit is the tell.
