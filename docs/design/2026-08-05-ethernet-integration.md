@@ -42,9 +42,14 @@ under it — which changes where the width conversion belongs (section 4).
 `oca_dual.sv` exposes two independent AXI-Stream pairs, one per core,
 sharing nothing — deliberately, because a shared key store would put one
 port's keys within reach of the other port's traffic. One core per port
-therefore delivers **0.569 Gbps at a 1500-byte MTU, 56.9% of line
-rate**, and 1.138 Gbps across both ports, on the committed pair's
-48.89 MHz mean.
+is therefore a cycle budget of **0.569 Gbps at a 1500-byte MTU, 56.9%
+of line rate**, and 1.138 Gbps across both ports, on the committed
+pair's 48.89 MHz mean. **A budget and not a rate**: 48.89 MHz is an
+out-of-context Fmax, and `oca_clkrst` delivers `clk_sys` at 48.0769 MHz,
+so a pinned build of this topology would run at 0.560 Gbps per port.
+Two ports are out in any case, though on routability rather than on the
+area sum alone:
+94.5% of the device, by the table further down this section.
 
 Saturating a single port needs both cores behind it, and that is not a
 wiring change. It needs a distributor, a collector, and an answer to the
@@ -68,10 +73,14 @@ end. Against two cores at 24602 (56.1%):
 |---|---|---|
 | two cores, two ports | 41446 | 94.5% |
 | two cores, one port | 33024 | 75.3% |
-| one core, one port | 20730 | 47.3% |
+| one core, one port | 20730 | 47.3% — **built: 17802, 40.6%** |
 
 Two ports are out. Two cores behind one port land at 75.3%, against the
-76.4% at which this device stopped routing in the occupancy study.
+76.4% at which this device stopped routing in the occupancy study. The
+last row has since been built as `oca_top` and came in **2928 LUTs
+under its sum**, because adding a core measured alone to a port
+measured alone counts twice the logic the optimiser shares; the two
+rows above it are sums of the same kind and neither has been built.
 
 **Two modules are missing from that figure, and from this document until
 2026-08-09.** `oca_eth_mac_1g_fifo_64` hands out a raw AXI-Stream with
@@ -113,12 +122,41 @@ MTU and 47.3% occupancy — with the rest of the device free for the
 second core if a distributor is ever built, or for the second port if
 the stack shrinks.
 
-Both of those numbers are constructions, not a build. The 47.3% adds
+Both of those numbers were constructions, not a build. The 47.3% adds
 two separately measured areas, and the 0.581 comes from the single
 core's 49.91 MHz mean, measured on the core placed alone and
-out of context: no MAC beside it, no IO, no PLL. **No netlist of one
-core plus one port has ever been placed**, so treat 0.581 as the
-ceiling that configuration could reach.
+out of context: no MAC beside it, no IO, no PLL.
+
+**Amended 2026-08-10: that netlist has been placed, and the two
+constructions were wrong in opposite directions.** `oca_top` is one
+core plus one port against `colorlight_i9.lpf`, with real IO and the
+PLL.
+
+**Area was pessimistic by 2928 LUTs**: **17802, 40.6%** rather than the
+47.3% predicted, because the sum counts twice the logic the optimiser
+shares.
+
+**The clock was optimistic, and by more than a seed.** 0.581 Gbps came
+from 49.91 MHz, and this design cannot run at 49.91 MHz: `oca_clkrst`
+delivers `clk_sys` at 625/13 = **48.0769 MHz**, which seed 6 closes with
+49.41 MHz of Fmax, 2.8% of margin. Through the same cycle model the
+design delivers **0.560 Gbps at MTU**, 56.0% of line rate. An Fmax says
+whether a clock closes; it is not a clock the design can be given.
+
+**And the ladder above it is coarse, with the next rung unmeasured.**
+`clk_tx` is an integer division of the same VCO, so the VCO must be a
+multiple of 125 MHz; the 400-800 MHz band leaves 500, 625 and 750, and
+from those `clk_sys` can be 45.45, 46.88, **48.08**, 50.00 or 52.08 —
+nothing between 48.08 and 50.00. **Whether this design closes 50.00 has
+not been built.** Every clock in the seed sweep was measured against a
+48.08 MHz constraint, and at the one seed that closes both 125 MHz
+clocks `clk_sys` reached 49.41; that makes 50.00 look tight and proves
+nothing. The device carries four PLLs and this design uses one, which is
+the other unopened door.
+
+What the build also showed is that area was never the binding
+constraint here: the design closes its two 125 MHz clocks on one placer
+seed of thirteen.
 
 ## 3. The RGMII front end
 
@@ -305,8 +343,13 @@ the board arrives once and debugging starts then.
   timing characterisation — so what the testbench proves is the data
   path, not the timing. Say so in the test, or someone will read a green
   run as a validated delay.
-- **`eth_mac_1g_rgmii_fifo` at `AXIS_DATA_WIDTH=64`** gets its own
-  testbench, because upstream has none for that configuration.
+- **`eth_mac_1g_fifo` at `AXIS_DATA_WIDTH=64`** gets its own testbench,
+  because upstream has none for that configuration. (This item said
+  `eth_mac_1g_rgmii_fifo` until 2026-08-10; the correction box in
+  section 5 rules that module out — it embeds `rgmii_phy_if`, which has
+  no ECP5 target — and named section 10 and `AGENTS.md` but missed this
+  one. The testbench that was written, `run_eth_mac.py`, drives
+  `oca_eth_mac_1g_fifo_64`.)
 - **The whole path**, from a synthetic Ethernet frame carrying a UDP
   packet with an OCA command, through the stack, through `oca_core`, and
   back out as a frame — driven by `proto_model.py`, which stays the
@@ -337,12 +380,17 @@ None of these is a reason to delay the design. All of them are reasons
 to build the delay as a parameter, the pin map as a file, and the bring-up
 as a sequence that checks one thing at a time.
 
-## 10. Still to be built before the board arrives
+## 10. Built since, before the board arrives
 
-`openFPGALoader` is not in `tools/` — there is no programmer of any kind
-in the tree. It has native support for the i9 (`colorlight-i9`, cable
-`cmsisdap`), and it should be added to `scripts/build-toolchain.sh` with
-the same pinning as everything else, well before 2026-08-17.
+`openFPGALoader` **is in the tree**: pinned at `85be4fa0` (v1.1.1) in
+`scripts/build-toolchain.sh` like everything else, built into
+`tools/openFPGALoader/`. It has native support for the i9
+(`colorlight-i9`, cable `cmsisdap`). It now has something to load, too:
+`run_synth.py` packs `oca_top.bit` and prints the command.
+
+This section previously read "there is no programmer of any kind in the
+tree", which was true when it was written on 2026-08-05 and stopped
+being true with `4df1201`.
 
 ## 11. Amended 2026-08-08, from the toolchain rather than from memory
 

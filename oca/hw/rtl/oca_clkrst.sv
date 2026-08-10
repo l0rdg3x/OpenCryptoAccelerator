@@ -73,13 +73,23 @@
  * fires at elaboration, in Verilator and in slang, so an edited divider
  * fails the lint rather than the board.
  *
- * IF 48.08 MHz DOES NOT CLOSE TIMING. The VCO is pinned at 625 MHz by
- * the 125 MHz transmit clock, so clk_sys is 625/N and nothing else
- * moves: N=12 gives 52.08 MHz, N=13 gives 48.08, N=14 gives 44.64,
- * N=15 gives 41.67. The measured Fmax behind this choice — oca_core
- * around 48-52 MHz, oca_dual 50.4 — was taken out of context, with no
- * pins and no Ethernet stack sharing the fabric, so it is an upper
- * bound on what the pinned design will reach and not a promise.
+ * IF 48.08 MHz DOES NOT CLOSE TIMING. clk_tx is an integer division of
+ * the same VCO, so the VCO must be a multiple of 125 MHz, and the
+ * 400-800 MHz band the guard below enforces leaves exactly 500, 625 and
+ * 750. From those, clk_sys near this range can be 45.45, 46.88, 48.08,
+ * 50.00 or 52.08: the ladder is coarse, and a design that misses 48.08
+ * drops to 46.88. (This comment said the VCO was pinned at 625 MHz by
+ * the transmit clock until 2026-08-10. It is 625 because ecppll breaks a
+ * tie among equal-error candidates by taking the VCO nearest 600 MHz,
+ * libtrellis/tools/ecppll.cpp:293 — a preference, not a constraint.)
+ *
+ * The measured Fmax behind this choice — oca_core around 48-52 MHz,
+ * oca_dual 50.4 — was taken out of context, with no pins and no
+ * Ethernet stack sharing the fabric, so it is an upper bound on what
+ * the pinned design will reach and not a promise. oca_top bore that out:
+ * it closes 48.08 with 49.41 MHz of Fmax at the one seed of thirteen
+ * that also closes both 125 MHz clocks. Whether 50.00 would close has
+ * not been built, and nothing here has asked for it.
  *
  * ----------------------------------------------------------------------
  * RESETS

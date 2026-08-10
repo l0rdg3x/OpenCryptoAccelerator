@@ -193,7 +193,7 @@ DESIGNS = {
         # Seed 6, and it is not a preference. Over seeds 1 to 13 this
         # design closes all three constraints on this one and no other:
         # rgmii_rx_clk clears 125 MHz on two of the thirteen and clk_tx
-        # on seven, and the only seed where those overlap is 6. Both
+        # on six, and the only seed where those overlap is 6. Both
         # clocks swing about 20% across the sweep, so a seed is not a
         # detail here, it is the difference between a bitstream and a
         # failed build.
