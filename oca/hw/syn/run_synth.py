@@ -86,6 +86,12 @@ class Design(NamedTuple):
     # here, because "it closes" and "it closes on seed 6" are different
     # claims and only one of them reproduces.
     seed: int | None = None
+    # Per-stage wall-clock bound, when DEFAULT_TIMEOUT is not enough.
+    # Recorded here rather than left to the caller for the same reason as
+    # the seed: the documented way to reproduce a design's figures is to
+    # name the target, and a bound that kills it half way makes that
+    # false.
+    timeout: int | None = None
 
 
 ENGINE = ["chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv"]
@@ -203,6 +209,10 @@ DESIGNS = {
         # the placement and the seed has to be found again. See
         # hw/syn/README.md for the whole sweep.
         seed=6,
+        # Synthesis alone measured 3941 s on this design. 7200 leaves the
+        # bound doing its job -- a stage that has stopped progressing
+        # still dies -- without killing a build that is simply large.
+        timeout=7200,
     ),
 }
 
@@ -285,10 +295,17 @@ DEFAULT_DEVICE = "45k"
 DEFAULT_PACKAGE = "CABGA381"
 DEFAULT_SPEED = 6
 
-# Hard bound per stage. Generous enough for the whole Ethernet top, and
-# finite, which is the point: a build that has produced nothing after
-# this long has not produced anything by carrying on either. Raise it
-# deliberately with --timeout; never remove it.
+# Hard bound per stage, for a design that does not say otherwise. Finite
+# is the point: a build that has produced nothing after this long has not
+# produced anything by carrying on either.
+#
+# It is NOT generous enough for the whole Ethernet top, which this
+# comment claimed until 2026-08-10. oca_top's synthesis measured 3941 s
+# ("End of script ... time: 3941.43s" in its yosys log), so
+# `run_synth.py oca_top` at this bound is killed at 30 minutes with
+# nothing measured -- the documented way to reproduce that design's
+# figures could not finish. A design that needs longer now records it,
+# the way oca_top records its seed, so naming the target is enough.
 DEFAULT_TIMEOUT = 1800
 
 
@@ -737,11 +754,12 @@ def main():
     ap.add_argument("--seed", type=int, default=None,
                     help="nextpnr placer seed. Defaults to the seed the "
                          "design records, or 1 if it records none.")
-    ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
-                    help=f"hard wall-clock bound per stage in seconds "
-                         f"(default {DEFAULT_TIMEOUT}). A stage that hits it "
-                         f"is killed with its whole process group and nothing "
-                         f"is measured.")
+    ap.add_argument("--timeout", type=int, default=None,
+                    help=f"hard wall-clock bound per stage in seconds. "
+                         f"Defaults to what the design records, or "
+                         f"{DEFAULT_TIMEOUT}. A stage that hits it is killed "
+                         f"with its whole process group and nothing is "
+                         f"measured.")
     ap.add_argument("--pnr-only", action="store_true",
                     help="skip synthesis and place & route the netlist "
                          "already in build/. For trying placer settings "
@@ -757,6 +775,8 @@ def main():
     args = ap.parse_args()
     if args.seed is None:
         args.seed = DESIGNS[args.top].seed or 1
+    if args.timeout is None:
+        args.timeout = DESIGNS[args.top].timeout or DEFAULT_TIMEOUT
 
     for tool in (YOSYS, NEXTPNR):
         if not tool.exists():
