@@ -40,11 +40,14 @@ What a passing run rests on, and how each rests on the other:
     bytes on instead of dropping them fails on the count, not on a
     missing counter.
 
-  * rx_axis_tkeep is 8'h00 on every beat of every frame, which is wrong,
-    which is not this patch's doing, and which is why no assertion here
-    uses it to find the end of a frame. The whole of it is written up in
-    test_rx_axis_tkeep_is_always_zero_which_is_an_upstream_defect, which
-    exists to fail the day the behaviour changes.
+  * rx_axis_tkeep marks the valid bytes of every beat, and did not until
+    the patch in hw/vendor/patches/: every beat arrived 8'h00, so nothing
+    reading rx_axis could tell where a frame ended and the receive path
+    could not work at all. test_rx_axis_tkeep_marks_the_valid_bytes_of_every_beat
+    is what pins it -- reverted, this suite goes 7/8. No assertion here
+    uses tkeep to find the end of a frame, because these tests were
+    written against the unpatched module and finding the end another way
+    is what let them see the defect in the first place.
 """
 
 import zlib
