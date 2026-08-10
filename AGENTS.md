@@ -184,19 +184,20 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_rgmii.py              # 10/10 pass
 .venv/bin/python hw/sim/run_eth_mac.py            # 8/8 pass, needs the vendor patches
 .venv/bin/python hw/sim/run_udp_seam.py           # 10/10 pass, twice, at two HDR_Q_DEPTH
+.venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-116 RTL tests, twenty-two of them run a second time at a non-default
+123 RTL tests, twenty-two of them run a second time at a non-default
 parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
 `poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
 smallest `BYTES` it accepts and all ten of `oca_udp_seam` at
 `HDR_Q_DEPTH` = 2 — plus 6 on a synthesised netlist.
 
-`run_eth_mac.py` reads the patched vendor tree, so
-`hw/vendor/vendor_patches.py build` has to have run; the runner says so
-and exits non-zero rather than testing the wrong sources.
+`run_eth_mac.py` and `run_oca_path.py` read the patched vendor tree, so
+`hw/vendor/vendor_patches.py build` has to have run; both say so and
+exit non-zero rather than testing the wrong sources.
 
 **A parameter with one tested value is a parameter that does not work.**
 Both of these switch the datapath rather than sizing it, and both went
@@ -810,11 +811,9 @@ core and never updated as the design grew by 3000 LUTs.
   per-file floors report ok in all three cases.
 - **The Ethernet integration is merged** (`c153934`), designed in
   `docs/design/2026-08-05-ethernet-integration.md`. Everything it needed
-  to be built is written, and all of it is tested but one thing: the
-  whole-path testbench that document's section 8 asks for — a synthetic
-  frame through the stack and `oca_core` and back out — does not need
-  the board and is not written. **What is next is that testbench, and
-  bring-up on the board**, expected ~2026-08-17.
+  to be built is written and tested, section 8's whole-path testbench
+  included. **What is next is bring-up on the board**, expected
+  ~2026-08-17: everything that could be settled without it has been.
 
   What exists in the tree: `verilog-ethernet` as a submodule at
   `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
@@ -833,7 +832,8 @@ core and never updated as the design grew by 3000 LUTs.
   `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
   crossing in one instance. Upstream's testbench does not exercise that
   configuration, so it has one of ours (`run_eth_mac.py`, 8 tests). The
-  whole path from a synthetic frame back out to one still has none.
+  whole path from a synthetic frame back out to one has `run_oca_path.py`
+  (7 tests), below.
 
   **A pinned place & route now runs**, on `oca_top_stub`: 17 TRELLIS_IO
   (every pad the `.lpf` names, and the flow passes no
@@ -915,12 +915,36 @@ core and never updated as the design grew by 3000 LUTs.
   its header reads `Part: LFE5U-45F-6CABGA381`, and the run prints the
   `openFPGALoader` command that would load it.
 
+  **The whole path is tested, and testing it found a defect that would
+  have killed the board.** `run_oca_path.py` (7 tests) generates a
+  harness holding `oca_eth_mac_1g_fifo_64`, both halves of
+  `oca_eth_axis_64`, `oca_udp_complete_64`, `oca_udp_seam` and
+  `oca_core`, wired as `oca_top` wires them, and drives `gmii_rxd` /
+  reads `gmii_txd`. A synthetic frame goes in and a frame comes out:
+  ARP answered, a stats request, a seal and its open compared byte for
+  byte against `aead_model`, a corrupted tag proved to put **no
+  plaintext on the wire** — asserted on the 60 bytes that leave the
+  board — and two peers in flight each answered at their own address.
+
+  Not at the pads, and the reason is structural rather than a cost:
+  `EHXPLLL` in `ecp5_prims.sv` is a blackbox with an empty body, so
+  under Verilator `CLKOP`, `CLKOS` and `LOCK` never move, `pll_locked`
+  stays 0 and every reset in the design is held asserted forever
+  (`oca_clkrst.sv:186-198` says so).
+
+  What it found on its first run: **`oca_top` left `m_ip_hdr_ready` and
+  `m_ip_payload_axis_tready` unconnected**, so the first IPv4 frame that
+  is not UDP — an ICMP echo, a stray TCP segment, one IGMP report — was
+  never consumed, `ip_eth_rx_64` held it, and the board stopped
+  receiving. Every one of the nineteen status and error wires read zero
+  while it happened. The wrapper had predicted it in writing
+  (`oca_udp_complete_64.v:29-44`) and the yosys log carried the warning,
+  one of forty on that instance, and nothing gated on it. Fixed, and the
+  fix is proved load-bearing: reverting it fails only the new test,
+  while the other six pass unchanged.
+
   **Still not done, and none of it is simulation:** that bitstream has
-  been loaded onto nothing, nothing has run on hardware, and
-  `eth_axis_rx` and `udp_complete_64` are exercised by no testbench of
-  ours — the seam is tested where `udp_complete_64` would stand, not
-  through it. So "reception works" is proved at the MAC's own boundary
-  and reasoned beyond it.
+  been loaded onto nothing, and nothing has run on hardware.
 
   What the board alone can settle is listed in the design document: the
   RGMII delay value and the IO bank voltages above all. One trap is
