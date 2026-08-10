@@ -1003,3 +1003,52 @@ async def test_two_peers_in_flight_each_get_their_own_reply(dut):
         "flight; zero would mean it never queued a header at all")
     quiet(dut, cnt_accepted=2, watermark=watermark)
 
+
+@cocotb.test(timeout_time=300, timeout_unit="us")
+async def test_a_non_udp_frame_does_not_wedge_the_receive_path(dut):
+    """One ICMP echo request, and the board must still answer the next UDP one.
+
+    This is the composition property no per-module suite can see. Every
+    module in the chain is individually correct: ip_eth_rx_64 parses the
+    frame, udp_complete_64.v:289 routes it to the raw IP receive port
+    because its protocol is 0x01 and not 0x11, and that port is a real
+    output pair with a real handshake. What decides the outcome is one
+    line of integration, udp_complete_64.v:361-365:
+
+        ip_rx_ip_hdr_ready = (s_select_udp && udp_rx_ip_hdr_ready) ||
+                             (s_select_ip  && m_ip_hdr_ready);
+
+    With m_ip_hdr_ready reading 0 the frame is never consumed, ip_eth_rx_64
+    holds it forever, back pressure reaches the MAC receive FIFO -- which
+    has none toward the wire (eth_mac_1g_fifo.v:305, RX_DROP_WHEN_FULL at
+    oca_eth_mac_1g_fifo_64.v:192) -- and every frame after it is dropped.
+    oca_udp_complete_64.v:29-44 named this failure before the top level was
+    written; the toolchain printed the warning; nothing gated on it.
+
+    No ICMP reply is expected and none is asserted: this design has no ICMP
+    responder and the raw IP port goes nowhere. The property is only that
+    the frame is CONSUMED and the path keeps working, so the assertion is
+    on the stats reply that follows and on rx_fifo_overflow staying at
+    zero.
+
+    The counters make it sharper than a liveness check. The stats body must
+    read rx 1, which says the ICMP frame reached the demux and stopped
+    there rather than being handed to oca_core as a malformed request, and
+    cnt_accepted must be 1 for the same reason one layer up.
+    """
+    drv, tx, status, _ = await setup(dut)
+    await arp_resolve(dut, drv, tx, status, PEER_A)
+
+    await drv.send(wire(icmp_echo_frame(PEER_A)))
+    rsp = await command(dut, drv, tx, status, PEER_A, build_stats(0x0501))
+    await drain(dut)
+
+    check_header(rsp, OP_STATS, 0x0501)
+    assert rsp["status"] == ST_OK, f"stats status {rsp['status']}"
+    assert stats_body(rsp) == {"rx": 1, "drop": 0, "done": 0, "auth": 0}, (
+        f"the core's counters say {stats_body(rsp)}: the ICMP frame must be "
+        "discarded at the demux, never offered to oca_core")
+
+    tx.check()
+    status.expect(rx_fifo_good_frame=3, tx_fifo_good_frame=2)
+    quiet(dut, cnt_accepted=1, watermark=1)
