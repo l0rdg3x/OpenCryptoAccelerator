@@ -362,8 +362,30 @@ the board arrives once and debugging starts then.
   receiving, with all nineteen status wires reading clean.
 - **The netlist checks extend to the new logic.** A green Verilator run
   says nothing about synthesis; that is the lesson the `cmp2lut` defect
-  cost us 2313 flip-flops to learn. Whatever storage the integration adds
-  gets a floor in `run_synth.py`.
+  cost us 2313 flip-flops to learn.
+
+  **Amended 2026-08-10, because this item overstated itself.** It read
+  "whatever storage the integration adds gets a floor in
+  `run_synth.py`". Of the 4816 live flip-flops `oca_top` adds over
+  `oca_core`, **276 — 5.7% — sit behind a floor of their own**
+  (`oca_udp_seam.sv`). The rest is covered by `NETLIST_FF_TOTAL`, with
+  149 of slack, or by nothing: `oca_clkrst.sv` contributes 26 and
+  `oca_rgmii.sv` 1, so both could vanish entirely and the total would
+  still pass. And no per-file floor is even possible for the vendor
+  stack's 4806, because the census keys on `([\w.]+\.sv):` and a `.v`
+  filename can never produce a key.
+
+  **What was actually missing is worse than a loose floor, and is now
+  checked.** No flip-flop census can see `IDDRX1F`, `ODDRX1F`, `DELAYF`,
+  `DELAYG` or `EHXPLLL` — the DDR cells expose `Q0`/`Q1` rather than
+  `Q`, and the PLL is not storage at all — so the entire physical
+  interface was invisible to the whole flow: 22 bits of receive capture
+  and transmit launch, their delay lines, and the one PLL every clock
+  comes from. A build that lost them placed, routed, met timing and
+  packed a bitstream. `NETLIST_PRIM_COUNT` in `run_synth.py` now
+  requires them exactly, and the check is proved by mutation: building
+  the stub with `SIMULATION=1` really does remove all 22, and the run
+  exits 1 naming each type.
 
 ## 9. What only the bench can close
 
