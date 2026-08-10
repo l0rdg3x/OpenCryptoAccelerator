@@ -410,43 +410,51 @@ async def test_a_good_frame_arrives_whole_and_is_counted(dut):
 
 
 @cocotb.test(timeout_time=400, timeout_unit="us")
-async def test_rx_axis_tkeep_is_always_zero_which_is_an_upstream_defect(dut):
-    """What rx_axis_tkeep does, pinned here because it is wrong.
+async def test_rx_axis_tkeep_marks_the_valid_bytes_of_every_beat(dut):
+    """tkeep says which bytes of each beat are the frame.
 
-    Every beat of every received frame arrives with tkeep == 8'h00, the last
-    one included, so nothing reading rx_axis can tell how long a frame is.
-    This is not the FCS path and no patch to it will move this: it is
-    axis_adapter's upsize branch writing s_axis_tkeep into the wide keep
-    register whatever S_KEEP_ENABLE says (axis_adapter.v:178 and :181), while
-    eth_mac_1g_fifo ties that port to a literal 0 because it set
-    S_KEEP_ENABLE(0) (eth_mac_1g_fifo.v:304). The parameter's documented
-    meaning -- "if disabled, tkeep assumed to be 1'b1" -- is honoured in the
-    bypass branch (:126) and not in this one.
+    It did not until 2026-08-10: every beat arrived with tkeep == 8'h00, so
+    nothing reading rx_axis could tell where a frame ended, and the receive
+    path could not work at all. axis_adapter's upsize branch wrote
+    s_axis_tkeep into the wide keep register whatever S_KEEP_ENABLE said
+    (axis_adapter.v:178, :181), while eth_mac_1g_fifo tied that port to a
+    literal 0 having set S_KEEP_ENABLE(0) (eth_mac_1g_fifo.v:304). The
+    parameter documents itself as "if disabled, tkeep assumed to be 1'b1",
+    which the bypass branch honours (:126) and that one did not.
 
-    It does not stop here. oca_top wires mac_rx_tkeep straight into
-    oca_eth_axis_64 (oca_top.sv:241), and eth_axis_rx reads tkeep to find
-    where a frame ends.
+    It did not stop at the MAC either: oca_top wires mac_rx_tkeep straight
+    into oca_eth_axis_64, and eth_axis_rx computes from it which bytes are
+    valid, so with all zeros no byte was valid anywhere downstream.
 
-    The test exists so that the timing fix cannot be charged with this, and
-    so that the day it changes -- a vendor bump, a KEEP_ENABLE corrected, a
-    patch that touches the receive width adapter -- this file goes red and
-    somebody has to decide about it, instead of every length assertion here
-    quietly resting on a different shape.
+    The expectations are written out by hand rather than computed the way
+    the RTL computes them. A full beat is 8'hff; the last carries one bit
+    per valid byte from the bottom, so a 60-byte frame ends 8'h0f. A helper
+    shared with the design under test would agree with it by construction
+    and prove nothing.
     """
     drv, mon, status = await setup(dut)
-    f = frame(MIN_FRAME, tag=9)
 
-    await drv.send(wire(f))
+    # Wire length -> tkeep of the last beat. The delivered frame is four
+    # bytes shorter, the FCS being stripped: 64 -> 60 bytes -> 7 full beats
+    # and 0x0f, 68 -> 64 bytes -> 8 full beats and 0xff.
+    last_beat = {64: 0x0f, 65: 0x1f, 68: 0xff, 71: 0x07}
+    lengths = sorted(last_beat)
+
+    sent = [frame(w, tag=20 + n) for n, w in enumerate(lengths)]
+    for f in sent:
+        await drv.send(wire(f))
     await drain(dut)
 
-    delivered(mon, [f])
-    keeps = mon.frames[0].keeps
-    assert keeps == [0] * beats_for(len(f)), (
-        "rx_axis_tkeep came out as "
-        f"{[format(k, '#04x') for k in keeps]}: the upstream defect this test "
-        "pins has moved, and every length assertion in this file is written "
-        "around it")
-    status.expect(rx_fifo_good_frame=1)
+    delivered(mon, sent)
+
+    for r, w in zip(mon.frames, lengths):
+        want = [0xff] * (len(r.keeps) - 1) + [last_beat[w]]
+        assert r.keeps == want, (
+            f"a {w}-byte frame came out with tkeep "
+            f"{[format(k, '#04x') for k in r.keeps]}, want "
+            f"{[format(k, '#04x') for k in want]}")
+
+    status.expect(rx_fifo_good_frame=len(lengths))
 
 
 @cocotb.test(timeout_time=400, timeout_unit="us")

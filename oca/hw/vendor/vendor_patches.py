@@ -267,8 +267,24 @@ def problems(tree: Path, *, stamped: bool) -> list:
 
 
 def require(tree: Path = PATCHED) -> None:
-    """Refuse to go on unless `tree` is this pin with these patches in it."""
+    """Refuse to go on unless `tree` is this pin with these patches in it.
+
+    One exception, and it is narrow: a tree named explicitly by the caller
+    through OCA_ETH_MAC_VENDOR, missing a patch, is warned about loudly
+    and allowed. That is the shape of a mutation experiment -- prove the
+    suite goes red without the patch -- and refusing it would mean the
+    patches could never be shown to be load-bearing. A missing tree, or
+    the default tree in any state but correct, is still fatal.
+    """
     found = problems(tree, stamped=tree == PATCHED)
+    if found and tree != PATCHED and tree.is_dir() and all(
+            f.startswith("not applied: ") for f in found):
+        print(f"WARNING: {tree} is missing " + ", ".join(
+                  f.removeprefix("not applied: ") for f in found)
+              + ".\n  Going on because it was named explicitly. Anything "
+                "measured here describes a design the board will not carry.",
+              file=sys.stderr)
+        return
     if found:
         sys.exit(f"vendor tree {tree} is not usable:\n  "
                  + "\n  ".join(found)

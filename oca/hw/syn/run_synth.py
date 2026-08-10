@@ -33,6 +33,31 @@ RTL = ROOT / "oca" / "hw" / "rtl"
 SYN_DIR = Path(__file__).resolve().parent
 BUILD = SYN_DIR / "build"
 
+sys.path.insert(0, str(ROOT / "oca" / "hw" / "vendor"))
+import vendor_patches  # noqa: E402
+
+# Where the pinned submodule sits in a DESIGNS path, and where the file
+# yosys actually opens sits instead.
+_PINNED_PREFIX = "oca/hw/vendor/verilog-ethernet/"
+
+
+def source_path(rel: str) -> Path:
+    """Absolute path for a DESIGNS entry, redirected to the patched tree.
+
+    The lists name files under the pinned submodule because that is where
+    they come from. Nothing reads them there: the submodule is read-only
+    and unpatched, and building from it gives a receive path with tkeep
+    tied to zero and an FCS comparison on the 125 MHz critical path.
+    """
+    if rel.startswith(_PINNED_PREFIX):
+        return vendor_patches.PATCHED / rel[len(_PINNED_PREFIX):]
+    return ROOT / rel
+
+
+def uses_vendor(top: str) -> bool:
+    d = DESIGNS[top]
+    return any(p.startswith(_PINNED_PREFIX) for p in d.verilog + d.incdirs)
+
 YOSYS = ROOT / "tools" / "yosys" / "bin" / "yosys"
 NEXTPNR = ROOT / "tools" / "nextpnr" / "bin" / "nextpnr-ecp5"
 
@@ -451,8 +476,9 @@ def synth(top, json_out, log, timeout):
     d = DESIGNS[top]
     cmds = []
     if d.verilog:
-        incs = " ".join(f"-I{ROOT / i}" for i in d.incdirs)
-        cmds.append(f"read_verilog {incs} " + " ".join(str(ROOT / v) for v in d.verilog))
+        incs = " ".join(f"-I{source_path(i)}" for i in d.incdirs)
+        cmds.append(f"read_verilog {incs} "
+                    + " ".join(str(source_path(v)) for v in d.verilog))
     cmds.append(f"read_slang --top {top} " + " ".join(str(RTL / s) for s in d.sv))
     cmds.append(f"synth_ecp5 -top {top} -json {json_out}")
     cmds.append("stat")
@@ -683,6 +709,16 @@ def main():
 
     check_cmp2lut()
 
+    # Which vendor tree this netlist was elaborated from, recorded beside
+    # it. Without this --pnr-only would happily place and route a netlist
+    # built from the pinned tree while printing that the patches are in,
+    # and there was a live case of exactly that in build/.
+    provenance = BUILD / f"{args.top}.vendor.json"
+
+    if uses_vendor(args.top):
+        vendor_patches.require()
+        print(vendor_patches.describe(vendor_patches.PATCHED))
+
     if args.pnr_only:
         # Synthesis is deterministic, so re-running it to try a placer
         # setting spends the same 40 minutes to produce the same netlist.
@@ -692,12 +728,29 @@ def main():
         if not netlist.exists():
             sys.exit(f"--pnr-only needs {netlist}, which does not exist; "
                      f"run once without it first")
+        if uses_vendor(args.top):
+            want = vendor_patches.stamp_now(vendor_patches.PATCHED)
+            try:
+                have = json.loads(provenance.read_text())
+            except (OSError, ValueError):
+                sys.exit(f"{netlist} has no record of the vendor tree it was "
+                         f"elaborated from. Re-run without --pnr-only.")
+            if have != want:
+                sys.exit(f"{netlist} was elaborated from a different vendor "
+                         f"tree than the one present now. Placing it would "
+                         f"report Fmax for a design that is not this one. "
+                         f"Re-run without --pnr-only.")
         print(f"reusing {netlist} (--pnr-only)")
     else:
         rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log",
                    args.timeout)
         if rc != 0:
             return rc
+        if uses_vendor(args.top):
+            provenance.write_text(json.dumps(
+                vendor_patches.stamp_now(vendor_patches.PATCHED), indent=2))
+        elif provenance.exists():
+            provenance.unlink()
     rc = check_netlist(args.top, netlist)
     if rc != 0:
         return rc

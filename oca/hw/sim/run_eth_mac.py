@@ -30,13 +30,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 VERILATOR_BIN = ROOT / "tools" / "verilator" / "bin"
 RTL = ROOT / "oca" / "hw" / "rtl"
-# The pinned submodule, unless something points this at a copy. The
-# override exists so a mutation can be proved against an edited MAC
-# without editing the pinned tree, which nothing in this project may do:
+sys.path.insert(0, str(ROOT / "oca" / "hw" / "vendor"))
+import vendor_patches  # noqa: E402
+
+# The patched vendor tree, never the pinned submodule: unpatched, the
+# receive path delivers tkeep = 0 on every beat and this suite would be
+# testing a MAC the board will never contain.
+#
+# The override points it at a copy, which is how a mutation is proved
+# without writing to the submodule:
 #   OCA_ETH_MAC_VENDOR=/path/to/a/copy .venv/bin/python hw/sim/run_eth_mac.py
-VENDOR = Path(os.environ.get(
-    "OCA_ETH_MAC_VENDOR",
-    ROOT / "oca" / "hw" / "vendor" / "verilog-ethernet"))
+_override = os.environ.get("OCA_ETH_MAC_VENDOR")
+VENDOR = Path(_override) if _override else vendor_patches.PATCHED
+vendor_patches.require(VENDOR)
 
 os.environ["PATH"] = str(VERILATOR_BIN) + os.pathsep + os.environ["PATH"]
 
