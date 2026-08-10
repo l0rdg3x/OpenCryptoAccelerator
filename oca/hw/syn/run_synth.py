@@ -322,6 +322,30 @@ NETLIST_PRIM_COUNT = {
                      "DELAYF": 5, "DELAYG": 6},
 }
 
+# The PLL exists is not the same claim as the PLL is the one the design
+# describes, and nothing downstream can tell the two apart.
+#
+# nextpnr derives the clk_sys and clk_tx constraints from these very
+# parameters as they reach the netlist (ecp5/pack.cc), so a wrong
+# divider moves the constraint and the measurement together and
+# check_timing still reports ok. colorlight_i9.lpf:195 says as much: the
+# check on the PLL "is to read those two log lines" -- by hand, every
+# time, or never. This is that reading, done by the flow.
+#
+# It also pins the frequency the published throughput figures divide
+# into a cycle count. clk_sys is 625/13 = 48.0769 MHz here; editing
+# CLKOS_DIV without editing this table now fails the build instead of
+# quietly making every Gbps figure in the documents wrong.
+PLL_INPUT_HZ = 25_000_000
+NETLIST_PLL_PARAMS = {
+    "oca_top": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                "CLKOS_DIV": 13},
+    "oca_top_mac": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                    "CLKOS_DIV": 13},
+    "oca_top_stub": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                     "CLKOS_DIV": 13},
+}
+
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
 DEFAULT_DEVICE = "45k"
 DEFAULT_PACKAGE = "CABGA381"
@@ -477,6 +501,44 @@ def live_ff_census(top, netlist):
     return census, total
 
 
+def check_pll(top, params):
+    """Fail unless the mapped PLL is the one this design describes.
+
+    See NETLIST_PLL_PARAMS. Also prints the clocks the netlist implies,
+    which is the reading colorlight_i9.lpf asks a human to do by hand.
+    """
+    want = NETLIST_PLL_PARAMS.get(top)
+    if not want:
+        return 0
+    if params is None:
+        print("\nPLL: no EHXPLLL in the netlist", file=sys.stderr)
+        return 1
+    rc = 0
+    got = {}
+    print("PLL parameters:")
+    for k, n in sorted(want.items()):
+        raw = params.get(k)
+        # yosys writes an integer parameter as a 32-bit binary string.
+        value = int(raw, 2) if isinstance(raw, str) else raw
+        got[k] = value
+        status = "ok" if value == n else "FAILED"
+        print(f"  {k:<10} {value} (want {n}) — {status}")
+        if value != n:
+            rc = 1
+    if rc:
+        print("\nThe PLL is not configured as this design describes. nextpnr "
+              "derives the clk_sys and clk_tx constraints from these very "
+              "parameters, so timing would still report ok against the wrong "
+              "clock.", file=sys.stderr)
+        return rc
+    pfd = PLL_INPUT_HZ / got["CLKI_DIV"]
+    clk_tx = pfd * got["CLKFB_DIV"]
+    vco = clk_tx * got["CLKOP_DIV"]
+    print(f"  -> VCO {vco / 1e6:.2f} MHz, clk_tx {clk_tx / 1e6:.4f} MHz, "
+          f"clk_sys {vco / got['CLKOS_DIV'] / 1e6:.4f} MHz")
+    return 0
+
+
 def check_prims(top, netlist):
     """Fail if a physical-interface primitive is missing or multiplied.
 
@@ -490,10 +552,13 @@ def check_prims(top, netlist):
         return 0
     cells = json.loads(netlist.read_text())["modules"][top]["cells"]
     have = {}
+    pll = None
     for cell in cells.values():
         t = cell["type"]
         if t in want:
             have[t] = have.get(t, 0) + 1
+        if t == "EHXPLLL" and pll is None:
+            pll = cell.get("parameters", {})
     rc = 0
     print("\nphysical-interface primitives:")
     for t, n in sorted(want.items()):
@@ -502,6 +567,7 @@ def check_prims(top, netlist):
         print(f"  {t:<10} {got:>3} (want {n}) — {status}")
         if got != n:
             rc = 1
+    rc |= check_pll(top, pll)
     if rc:
         print("\nThe physical interface is not what this design describes: "
               "a link that never comes up builds and packs exactly like one "
