@@ -280,9 +280,12 @@ NETLIST_FF_FLOOR = {
     # being the 25 MHz we think it is. That reading is the entire purpose
     # of the step, so the thing it depends on is checked.
     "oca_blink": {"oca_blink.sv": 25},
-    # Same counter and same reason: the blink is the only sign that the
-    # bitstream is live while the meter is on the header.
-    "oca_vccio": {"oca_vccio.sv": 25},
+    # 27 bits, two more than oca_blink, because led_n has to alternate
+    # slowly enough for a meter to settle on each level: bit 26 gives
+    # 2.684 s per state. Two bits short and it is 0.67 s, which a digital
+    # meter cannot resolve into two clean readings, and the whole method
+    # is reading two clean levels off one pad.
+    "oca_vccio": {"oca_vccio.sv": 27},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
     # The board build. Same two floors as oca_core, since it contains
