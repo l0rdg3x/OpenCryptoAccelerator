@@ -827,11 +827,13 @@ core and never updated as the design grew by 3000 LUTs.
 
   **Step 1 of the ladder is done.** `openFPGALoader --detect -c
   cmsisdap` reads `idcode 0x41112043`, LFE5U-45, over the carrier's
-  DAPLink. That excludes a wrong die and not a wrong package:
-  prjtrellis lists six packages against that one code, `caBGA256`
-  included, so the 381-ball pinout every LOCATE in `colorlight_i9.lpf`
-  assumes is still unproven, and the chip's own marking is what settles
-  it.
+  DAPLink. That excludes a wrong die and not a wrong package, since
+  prjtrellis lists six packages against that one code with `caBGA256`
+  among them, so the package was settled the only way it can be, off
+  the chip: the marking reads `LFE5U-45F` / `6BG381C`, speed grade 6,
+  caBGA381, commercial. Both halves now agree with `BOM-MVP.md` and
+  with the `--package CABGA381 --speed 6` the build targets, so every
+  LOCATE in `colorlight_i9.lpf` rests on the right ball map.
 
   **Step 2 of the ladder now has a design.** `oca_blink.sv` and its
   two-pin `colorlight_i9_blink.lpf`: 25 flip-flops, two IO, floored at

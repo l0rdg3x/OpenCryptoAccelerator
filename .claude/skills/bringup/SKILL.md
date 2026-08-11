@@ -50,10 +50,21 @@ LFE5U-45`, `irlength 8`, agreeing with all three tables in the tree:
 **An IDCODE settles the die and says nothing about the package.**
 prjtrellis lists six packages against that one code, `caBGA256` among
 them, and a 256-ball part carrying a 381-ball pinout is the documented
-failure this step exists to catch. Half of it is now excluded and half
-of it is not, and no JTAG read closes the other half. What does is the
-marking on the chip itself: read it and compare against `BOM-MVP.md`
-before trusting a single LOCATE.
+failure this step exists to catch. No JTAG read closes that half. The
+marking on the chip does, and on 2026-08-11 it reads:
+
+    LATTICE
+    LFE5U-45F
+    6BG381C
+    A3421RL1
+
+`6BG381C` is speed grade 6, caBGA381, commercial temperature, which is
+what `run_synth.py` targets by default (`--package CABGA381 --speed 6`).
+The alternative that mattered would have marked `6BG256C`, differing in
+all three digits at once, so a misreading cannot produce this string.
+Die and package both agree with `BOM-MVP.md` and every LOCATE rests on
+the right ball map. Read the marking again on any board that is not this
+one: nothing in the flow rereads it for you.
 
 Expect a bare `empty` on the first line of output. It is an
 unconditional debug `printf` in openFPGALoader's own `src/main.cpp:1205`
