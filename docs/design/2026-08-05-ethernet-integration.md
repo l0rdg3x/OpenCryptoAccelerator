@@ -1,3 +1,57 @@
+# Ethernet integration — CLOSED 2026-08-12
+
+**This route is closed and this document is history.** The Colorlight i9
+v7.2 carries both B50612D PHYs and routes their MDI pairs to the SO-DIMM
+edge, but the RJ45 sockets and the magnetics are on a carrier no kit sold
+with the module includes: there is no socket to put a cable in. And the
+part cannot become the PCIe platform the roadmap's step 7 names either,
+because the die is an LFE5U and the ECP5 SERDES lives only in the UM and
+UM5G variants. See SPEC.md, PHASE 2.
+
+The host interface is the board's USB serial, which SPEC.md PHASE 2
+allowed from the start ("documented protocol over UDP or USB FIFO").
+
+WHAT SURVIVES, and it is most of the value. `oca_core` never knew about
+Ethernet: its ports are two 64-bit AXI-Stream, in and out. All of the
+transport knowledge is in `oca_udp_seam`. So the crypto, the keystore,
+the packet buffer and the protocol are unaffected by this, and what is
+retired is the seam, the vendored stack and the RGMII front end.
+
+FOUR DEFECTS FOUND IN THE WHOLE-PATH TESTBENCH ON 2026-08-12, each proved
+by a mutation that was run, and deliberately NOT fixed: the file is being
+retired, and polishing it would be work on code that is going away. They
+are recorded because the replacement end-to-end test over the console
+must not repeat them, and every one of them is a shape, not an accident:
+
+1. THE LEAK ASSERTION COULD NOT FAIL. `assert msg not in rsp["frame"]`
+   over a 60-byte reply whose padding is ten bytes, against a 48-byte
+   plaintext. No placement fits: any match would have to start at offset
+   12 or less and would cover frame[14], which the decoder has already
+   pinned to 0x45, a byte the plaintext does not contain. The headline
+   security check added nothing that the body-is-empty assertion beside
+   it did not already say.
+
+2. THE TWO-PEER TEST DID NOT TEST CONCURRENCY. It asserted
+   `1 <= watermark <= 2` on the seam's header queue, and both bounds are
+   unreachable: the lower one is forced by the accepted-count assertion
+   beside it, the upper by there being only two pushes. Proved by
+   inserting a full drain between the two requests, making them strictly
+   sequential: the test still passed.
+
+3. THE LINT GATE NEVER READ THE FILE IT NAMED. It pinned the generated
+   harness against a hand-written list of pins and then printed "37
+   pin(s) the harness leaves unconnected because oca_top.sv:324 does" --
+   while never parsing oca_top.sv. Proved by editing that instance in
+   oca_top.sv: the gate passed and printed the sentence anyway. A gate
+   that reports on a file it does not open is worse than no gate.
+
+4. A TIE VALUE THAT DIFFERED FROM THE TOP WENT UNDETECTED. The same gate
+   compares connectivity and not the value tied: the harness driving
+   m_ip_hdr_ready low against oca_top's high passed lint, and only one
+   unrelated test noticed.
+
+---
+
 # Ethernet integration — design
 
 The other half that `2026-08-03-host-protocol.md` section 7 declined to

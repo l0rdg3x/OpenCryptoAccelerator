@@ -237,7 +237,26 @@ Before any hardware:
 # ================================================== PHASE 2: FPGA PROTOTYPE (MVP, low budget)
 
 Hardware: Lattice ECP5 (e.g., Colorlight i9 or equivalent, ~40 EUR),
-host interface via Ethernet (GbE). NO PCIe in this phase.
+host interface over the board's USB serial. NO PCIe in this phase, and
+NO Ethernet either: that is a change from what this line said until
+2026-08-12, and the two reasons are hardware, not preference.
+
+The Colorlight i9 v7.2 carries both B50612D PHYs on the module and
+routes their MDI pairs to the SO-DIMM edge, but the RJ45 sockets and
+the magnetics live on a carrier this kit does not include and no
+carrier sold with it has. There is no socket to put a cable in.
+
+And this part cannot become the PCIe platform of step 7 in any case.
+The die is an LFE5U, IDCODE 0x41112043 read on silicon, and the ECP5
+family puts the SERDES only in the UM and UM5G variants: prjtrellis
+gives LFE5U-45F twenty-four DCU tiles all named VCIB_DCU*, against
+LFE5UM-45F's forty-two named CIB_DCU*, the eighteen difference being
+the transceiver this die does not have. No SERDES, no PCIe.
+
+So this board is a vehicle for proving the core on silicon, not a
+prototype of the product, and the transport it uses only has to be
+good enough to carry a test vector. The clause below already allowed
+that: the USB FIFO was always the alternative.
 
 Implement in SystemVerilog:
 
@@ -323,7 +342,10 @@ Do NOT generate everything at once. Proceed with:
 3. Software simulator + tests
 4. First FPGA algorithm (ChaCha20) with testbench
 5. Remaining crypto cores
-6. Host integration on ECP5/Ethernet (MVP)
+6. Host integration on ECP5 over USB serial (MVP). Was "ECP5/Ethernet"
+   until 2026-08-12; see PHASE 2 for why the Ethernet route is closed on
+   this hardware. Correctness on silicon is what this step proves, and
+   the transport's throughput is not a figure about the accelerator.
 7. PCIe platform (Artix-7 + LitePCIe)
 8. FreeBSD and Linux drivers
 9. WireGuard and OpenSSL integration

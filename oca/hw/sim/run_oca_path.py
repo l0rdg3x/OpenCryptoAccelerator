@@ -35,9 +35,15 @@ m_ip_payload_axis_tready were open, which
 test_a_non_udp_frame_does_not_wedge_the_receive_path showed wedges the
 whole receive path on the first ICMP echo request, exactly as
 oca_udp_complete_64.v:29-44 predicted; both are now tied high in oca_top
-and here. clear_arp_cache went with them, tied low -- no behaviour change,
-since an undriven input already reads 0 in both flows, but an intent
-stated rather than inherited from the toolchain.
+and here. clear_arp_cache went with them, tied low, and that one is NOT
+cosmetic: an undriven input is not an input reading zero. Verilator
+resolves it to 0, yosys may treat it as don't-care and take whatever
+simplifies most -- here "the cache is permanently clearing", which kills
+the ARP cache's ports and its storage. Measured: 16849 flip-flops with
+arp_cache.v at 0 live, against 17249 with it at 130. This comment said
+the tie was a behavioural no-op until 2026-08-12; AGENTS.md and
+hw/syn/README.md were corrected on 2026-08-11 and this third copy was
+missed.
 """
 
 import os
