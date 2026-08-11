@@ -1595,8 +1595,9 @@ below; it is not the design that is in the tree.**
 
 Targets are 125.00, 125.00 and 48.08 MHz. `rgmii_rx_clk` clears its own
 on two seeds of thirteen, `clk_tx` on six, `clk_sys` on twelve — and
-all three coincide on **one**. Both 125 MHz clocks swing about 20% across
-the sweep and they do not swing together.
+all three coincide on **one**. Both 125 MHz clocks swing widely across
+the sweep and they do not swing together: `rgmii_rx_clk` by 21.8% from
+worst to best and `clk_tx` by 30.3%.
 
 **So the design closed, and it had no margin of its own.** Seed 6 was
 recorded in `run_synth.py`'s DESIGNS entry, not passed on a command
