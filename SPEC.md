@@ -149,14 +149,21 @@ Hardware accelerator for:
   **Amended 2026-08-10: the MAC fits, it has been placed beside a core,
   and the delivered figure is lower than either projection.** `oca_top`
   is one core and one full port against the real pin map, with IO and
-  the PLL: 17802 LUTs, 40.6% of the device, closing all four clock
-  constraints at seed 6. **0.581 Gbps was an Fmax divided into a cycle
-  count**, and the design cannot run at that clock: `oca_clkrst`
-  delivers `clk_sys` at 625/13 = **48.0769 MHz**, and because `clk_tx`
-  divides the same VCO the ladder is coarse — nothing between 48.08 and
-  50.00, and 50.00 has never been built. Through the same cycle model
-  the built design delivers
-  **0.560 Gbps at MTU, 56.0% of line rate**. The two-port and two-core
+  the PLL: **18719 LUTs, 42.7% of the device**. **0.581 Gbps was an Fmax
+  divided into a cycle count**, and the design cannot run at that clock:
+  `oca_clkrst` delivers `clk_sys` at 625/13 = **48.0769 MHz**, and
+  because `clk_tx` divides the same VCO the ladder is coarse — nothing
+  between 48.08 and 50.00, and 50.00 has since been built and does not
+  close (48.22 against 50.00). Through the same cycle model the design
+  delivers **0.560 Gbps at MTU, 56.0% of line rate**.
+
+  **Amended 2026-08-11: it does not close timing at all.** Connecting
+  the raw-IP ready pins on the UDP stack, which the board needs or one
+  non-UDP frame stops reception for good, added 917 LUTs of vendor logic
+  around the receive path; across 32 placer seeds `rgmii_rx_clk` clears
+  125 MHz on none, the best being 124.22. The 0.560 Gbps above is
+  therefore what this design delivers if a closing placement is found,
+  and finding one is the project's first open item. The two-port and two-core
   rows above remain sums that nothing has built: every term in them was
   measured `--out-of-context`, with no IO and no pin constraints, and
   the port was measured apart from the cores rather than placed beside

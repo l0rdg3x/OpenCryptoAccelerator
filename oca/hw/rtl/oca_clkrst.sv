@@ -86,10 +86,12 @@
  * The measured Fmax behind this choice — oca_core around 48-52 MHz,
  * oca_dual 50.4 — was taken out of context, with no pins and no
  * Ethernet stack sharing the fabric, so it is an upper bound on what
- * the pinned design will reach and not a promise. oca_top bore that out:
- * it closes 48.08 with 49.41 MHz of Fmax at the one seed of thirteen
- * that also closes both 125 MHz clocks. Whether 50.00 would close has
- * not been built, and nothing here has asked for it.
+ * the pinned design will reach and not a promise. oca_top bore that out
+ * and then some: as of 2026-08-11 it does not close 48.08 either, the
+ * best of 32 placer seeds reaching 47.40 on the seed that comes closest
+ * overall. What it misses by more is rgmii_rx_clk, which no seed
+ * clears, so moving clk_sys would not help. 50.00 has been built as
+ * well -- CLKOP_DIV 4, CLKOS_DIV 10, VCO 500 -- and reaches 48.22.
  *
  * ----------------------------------------------------------------------
  * RESETS

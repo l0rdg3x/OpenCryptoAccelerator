@@ -73,11 +73,11 @@ end. Against two cores at 24602 (56.1%):
 |---|---|---|
 | two cores, two ports | 41446 | 94.5% |
 | two cores, one port | 33024 | 75.3% |
-| one core, one port | 20730 | 47.3% — **built: 17802, 40.6%** |
+| one core, one port | 20730 | 47.3% — **built: 18719, 42.7%** |
 
 Two ports are out. Two cores behind one port land at 75.3%, against the
 76.4% at which this device stopped routing in the occupancy study. The
-last row has since been built as `oca_top` and came in **2928 LUTs
+last row has since been built as `oca_top` and came in **2011 LUTs
 under its sum**, because adding a core measured alone to a port
 measured alone counts twice the logic the optimiser shares; the two
 rows above it are sums of the same kind and neither has been built.
@@ -132,31 +132,39 @@ constructions were wrong in opposite directions.** `oca_top` is one
 core plus one port against `colorlight_i9.lpf`, with real IO and the
 PLL.
 
-**Area was pessimistic by 2928 LUTs**: **17802, 40.6%** rather than the
+**Area was pessimistic by 2011 LUTs**: **18719, 42.7%** rather than the
 47.3% predicted, because the sum counts twice the logic the optimiser
-shares.
+shares. (It was 17802 and 2928 under until `54a2df8`; see the second
+amendment below.)
 
 **The clock was optimistic, and by more than a seed.** 0.581 Gbps came
 from 49.91 MHz, and this design cannot run at 49.91 MHz: `oca_clkrst`
-delivers `clk_sys` at 625/13 = **48.0769 MHz**, which seed 6 closes with
-49.41 MHz of Fmax, 2.8% of margin. Through the same cycle model the
-design delivers **0.560 Gbps at MTU**, 56.0% of line rate. An Fmax says
-whether a clock closes; it is not a clock the design can be given.
+delivers `clk_sys` at 625/13 = **48.0769 MHz**. Through the same cycle
+model the design delivers **0.560 Gbps at MTU**, 56.0% of line rate. An
+Fmax says whether a clock closes; it is not a clock the design can be
+given.
 
-**And the ladder above it is coarse, with the next rung unmeasured.**
+**And the ladder above it is coarse, with the next rung now measured.**
 `clk_tx` is an integer division of the same VCO, so the VCO must be a
 multiple of 125 MHz; the 400-800 MHz band leaves 500, 625 and 750, and
 from those `clk_sys` can be 45.45, 46.88, **48.08**, 50.00 or 52.08 —
-nothing between 48.08 and 50.00. **Whether this design closes 50.00 has
-not been built.** Every clock in the seed sweep was measured against a
-48.08 MHz constraint, and at the one seed that closes both 125 MHz
-clocks `clk_sys` reached 49.41; that makes 50.00 look tight and proves
-nothing. The device carries four PLLs and this design uses one, which is
-the other unopened door.
+nothing between 48.08 and 50.00. **50.00 was built on 2026-08-11 and
+does not close**: `CLKOP_DIV` 4 with `CLKOS_DIV` 10 gives a 500 MHz VCO,
+`clk_tx` exactly 125 and `clk_sys` exactly 50.000, and the design
+reaches 48.22 against it. The ladder offers nothing above 48.0769 this
+design can take. The device carries four PLLs and this design uses one,
+which is the other unopened door.
 
-What the build also showed is that area was never the binding
-constraint here: the design closes its two 125 MHz clocks on one placer
-seed of thirteen.
+**Second amendment, 2026-08-11: the design no longer closes at all.**
+`54a2df8` connected `m_ip_hdr_ready` and `m_ip_payload_axis_tready`,
+without which one non-UDP frame stops reception permanently. That makes
+the raw-IP path live where yosys had been folding it away — **+917
+TRELLIS_COMB and +400 TRELLIS_FF, every flip-flop of it in the vendor
+bucket** — and the new logic lands around the receive path, the one
+part of this design that never had margin. Across 32 placer seeds
+`rgmii_rx_clk` clears 125 MHz on none: best 124.22, second best 117.32,
+the bulk between 105 and 117. Area was never the binding constraint
+here and still is not; the receive clock is.
 
 ## 3. The RGMII front end
 

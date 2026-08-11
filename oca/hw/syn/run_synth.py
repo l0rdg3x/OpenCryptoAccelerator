@@ -196,19 +196,22 @@ DESIGNS = {
             "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
         ],
         lpf="colorlight_i9.lpf",
-        # Seed 6, and it is not a preference. Over seeds 1 to 13 this
-        # design closes all three constraints on this one and no other:
-        # rgmii_rx_clk clears 125 MHz on two of the thirteen and clk_tx
-        # on six, and the only seed where those overlap is 6. Both
-        # clocks swing about 20% across the sweep, so a seed is not a
-        # detail here, it is the difference between a bitstream and a
-        # failed build.
+        # Seed 10 is the best of 32, NOT a seed that works. This design
+        # does not close timing: rgmii_rx_clk clears 125 MHz on none of
+        # the 32 seeds measured, and 10 is the closest at 124.22, short
+        # by 0.63%. The next best is 117.32 and the bulk sits between
+        # 105 and 117, so the best is a tail and not a near miss.
         #
-        # What that means, stated rather than left to be discovered: the
-        # design has no timing margin of its own. Any RTL change reshuffles
-        # the placement and the seed has to be found again. See
-        # hw/syn/README.md for the whole sweep.
-        seed=6,
+        # It closed on seed 6 until 54a2df8, at 129.87 / 130.07 / 49.41.
+        # Connecting the raw-IP ready pins there -- which the board needs,
+        # since without them one non-UDP frame stops reception for good --
+        # made that path live and cost +917 LUTs and +400 flip-flops of
+        # vendor logic around the receive path, which never had margin.
+        #
+        # Recorded so that the published numbers reproduce by naming the
+        # target. See hw/syn/README.md for the sweep and AGENTS.md for
+        # what has been ruled out.
+        seed=10,
         # Synthesis alone measured 3941 s on this design. 7200 leaves the
         # bound doing its job -- a stage that has stopped progressing
         # still dies -- without killing a build that is simply large.
@@ -283,11 +286,12 @@ NETLIST_FF_FLOOR = {
 #
 # oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
 #
-# oca_top measures 16849, of which 12043 are attributed to our RTL and
-# 4806 to the vendor stack, which read_verilog gives no src attribute
-# this census can key on. (16840 / 4797 until 2026-08-10: those are the
-# figures from before the vendor patches, and hw/vendor/patches/README.md
-# records the +9 they cost.) The total is floored rather than those two
+# oca_top measures 17249, of which 12043 are attributed to our RTL and
+# 5206 to the vendor stack, which read_verilog gives no src attribute
+# this census can key on. (16849 / 4806 until 2026-08-11 and 16840 /
+# 4797 before the vendor patches: the last step is the +400 the raw-IP
+# tie-off in 54a2df8 keeps alive, all of it vendor and none of it ours.)
+# The total is floored rather than those two
 # separately for the same reason as above, and because the vendor's
 # share is the part most likely to move if a parameter changes.
 NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}

@@ -690,15 +690,17 @@ core and never updated as the design grew by 3000 LUTs.
   |---|---|---|
   | two cores, two ports | 41446 | **94.5%** |
   | two cores, one port | 33024 | **75.3%** |
-  | one core, one port | 20730 | 47.3% — **built, and it is 17802, 40.6%** |
+  | one core, one port | 20730 | 47.3% — **built: 18719, 42.7%** |
 
   Two ports are not merely tight, they are out. Two cores behind one
   port land at 75.3%, against the 76.4% at which this device stopped
   routing in the occupancy study — and would additionally need a
   distributor, a collector and an answer to the per-core key store.
-  **The one row that has since been built came in 2928 LUTs under its
+  **The one row that has since been built came in 2011 LUTs under its
   sum**, because adding a core measured alone to a port measured alone
-  counts twice the logic the optimiser shares. The two rows above it are
+  counts twice the logic the optimiser shares. (It was 2928 under until
+  `54a2df8`, which added 917 of vendor logic the earlier netlist did not
+  keep.) The two rows above it are
   sums of the same kind and neither has been built, so they are
   estimates of unknown tightness in the same direction. **On the current
   RTL the MVP that fits is one core on one port, 0.581 Gbps at MTU** —
@@ -710,10 +712,13 @@ core and never updated as the design grew by 3000 LUTs.
 
   **And the ceiling is not the clock the board runs.** `oca_top`
   instantiates `oca_clkrst`, which delivers `clk_sys` at 625/13 =
-  **48.0769 MHz**. Fmax only says whether that clock closes: at seed 6
-  it closes with 49.41 MHz, 2.8% of margin. So through the same cycle
-  model the built design delivers **0.560 Gbps at MTU, 56.0% of line
-  rate, and 0.222 Gbps on 64-byte packets**. Every *throughput* figure
+  **48.0769 MHz**. Fmax only says whether that clock closes, and **as of
+  2026-08-11 it does not**: the best of 32 seeds reaches 47.40 on the
+  seed that comes closest overall, and `clk_sys` clears its target on 20
+  of the 32 without any of them carrying the two 125 MHz clocks as well.
+  So **0.560 Gbps at MTU, 56.0% of line rate, and 0.222 Gbps on 64-byte
+  packets** is what this design delivers *if* a placement is found that
+  closes it — not what a build produces today. Every *throughput* figure
   above it is an Fmax divided into a cycle count — what a core could
   reach if a PLL could give it that clock; this one is what the board
   gets. (The Gbps figures that are wire rates or targets, 1 and 2, are
@@ -724,13 +729,15 @@ core and never updated as the design grew by 3000 LUTs.
   VCO, so the VCO must be a multiple of 125 MHz, and the 400-800 MHz
   band leaves exactly 500, 625 and 750. From those, `clk_sys` near this
   range can be 45.45, 46.88, **48.08**, 50.00 and 52.08 — nothing
-  between 48.08 and 50.00. Whether the design would close a 50.00 MHz
-  constraint **has not been built**: every figure in the sweep was
-  measured against 48.08, and at the one seed that closes both 125 MHz
-  clocks `clk_sys` reached 49.41. That is a reason to expect 50.00 to be
-  tight, not a measurement of it. The device also carries four PLLs and
-  this design uses one, so a second one for `clk_sys` is a door nobody
-  has opened.
+  between 48.08 and 50.00. **50.00 has now been built, and it does not
+  close**: `CLKOP_DIV` 4 with `CLKOS_DIV` 10 gives a 500 MHz VCO,
+  `clk_tx` exactly 125 and `clk_sys` exactly 50.000, and on that design
+  `clk_sys` reaches 48.22 against the 50.00 it would need. So the ladder
+  offers nothing above 48.0769 that this design can take, which is a
+  measurement rather than the expectation this paragraph used to carry.
+  The device does carry four PLLs and this design uses one, so a second
+  one for `clk_sys` is still a door nobody has opened — though it would
+  not help until the receive clock closes.
 
   **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
   Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
@@ -848,34 +855,60 @@ core and never updated as the design grew by 3000 LUTs.
   the clocking and the pads are known to place before the real top is
   written.
 
-  **`oca_top` exists, places and routes, and closes timing.** The whole
-  chain in one design: pads, `oca_rgmii`, the MAC, the Ethernet header
-  parse and build, ARP/IP/UDP, `oca_udp_seam` and `oca_core`.
+  **`oca_top` places and routes, and as of 2026-08-11 it does NOT close
+  timing.** The whole chain is in one design — pads, `oca_rgmii`, the
+  MAC, the Ethernet header parse and build, ARP/IP/UDP, `oca_udp_seam`
+  and `oca_core` — and `run_synth.py oca_top` exits 1 and packs nothing.
 
-  | | measured |
+  | | measured, seed 10 |
   |---|---|
-  | TRELLIS_COMB | 17802, **40.6%** of the device |
-  | TRELLIS_FF | 16849, 38.4% |
+  | TRELLIS_COMB | 18719, **42.7%** of the device |
+  | TRELLIS_FF | 17249, 39.3% |
   | DP16KD | 13, 12.0% |
   | MULT18X18D | 20, 27.8% |
   | TRELLIS_IO | 17, every pad the `.lpf` names |
-  | `rgmii_rx_clk` | 129.87 MHz against 125 required |
-  | `clk_tx` | 130.07 MHz against 125 |
-  | `clk_sys` | 49.41 MHz against 48.08 |
+  | `rgmii_rx_clk` | **124.22 MHz against 125 required — FAILED** |
+  | `clk_tx` | 122.91 against 125 — FAILED |
+  | `clk_sys` | 47.40 against 48.08 — FAILED |
 
-  40.6% against the 47.3% the area sum predicted: adding a core measured
-  alone to a port measured alone counts twice the logic the optimiser
-  shares.
+  **What happened, and it is not a lost seed.** Until the ICMP fix
+  (`54a2df8`) this design closed on seed 6 at 129.87 / 130.07 / 49.41,
+  measuring 17802 and 16849. Tying `m_ip_hdr_ready` and
+  `m_ip_payload_axis_tready` high makes the raw-IP receive path live
+  where it had been constant, so yosys keeps logic it used to delete:
+  **+917 TRELLIS_COMB and +400 TRELLIS_FF, every one of the flip-flops
+  in the vendor bucket and none in our RTL**. That logic lands around
+  the receive path, which is the one part of this design that never had
+  margin.
 
-  **It closes on seed 6 and on no other seed of the thirteen tried.**
-  `rgmii_rx_clk` clears its target on two of thirteen, `clk_tx` on six,
-  and they coincide once. The seed is recorded in the DESIGNS entry, so
-  `run_synth.py oca_top` reproduces it, but a seed is not margin: any RTL
-  change reshuffles the placement and the next seed has to be found
-  again. The whole sweep is in `hw/syn/README.md`. What would give real
-  margin is less competition for the fabric around the receive path — the
-  MAC alone closes at 132.98 MHz with 6.4% to spare, so the shortfall was
-  never the module.
+  **32 placer seeds, and `rgmii_rx_clk` clears 125 MHz on none of
+  them.** Best 124.22 (seed 10, short by 0.63%), second best 117.32, and
+  the bulk between 105 and 117 — so the best is a tail event and not a
+  cluster near the target. `clk_tx` clears on 18 of 32 and `clk_sys` on
+  20, but no seed carries all three. The seed lottery is spent as a
+  lever. `oca_top`'s DESIGNS entry records 10 because it is the best
+  measured, not because it works.
+
+  **This is the top open item.** The fix stays: a board that closes
+  timing and stops receiving on the first ping is worth less than one
+  that misses a clock, and the ICMP defect is proved by test while the
+  clock is a number in a report. What it needs is less logic competing
+  for the fabric around the receive path — the same conclusion the
+  occupancy study reached, now with a harder constraint. Not yet tried:
+  a vendor patch that discards non-UDP frames inside `udp_complete_64`
+  without exposing the raw-IP port at all, which would consume the frame
+  without keeping its datapath alive.
+
+  42.7% against the 47.3% the area sum predicted: adding a core measured
+  alone to a port measured alone still counts twice the logic the
+  optimiser shares, though by less than before.
+
+  Superseded, and kept because the comparison is the finding: on the RTL
+  before the fix, `rgmii_rx_clk` cleared its target on two seeds of
+  thirteen, `clk_tx` on six, and they coincided once. The whole sweep is
+  in `hw/syn/README.md`. What would give real margin is less competition
+  for the fabric around the receive path — the MAC alone closes at
+  132.98 MHz with 6.4% to spare, so the shortfall was never the module.
 
   **Two vendor defects had to be patched to get here, and both were
   blocking.** They live in `hw/vendor/patches/`, applied to an extracted
@@ -911,9 +944,13 @@ core and never updated as the design grew by 3000 LUTs.
   from one placement beside the numbers of another. A run that fails
   before or during place & route takes nothing, because nextpnr writes
   no report unless it succeeds and the old pairing still holds.
-  `oca_top.bit` is 527142 bytes,
-  its header reads `Part: LFE5U-45F-6CABGA381`, and the run prints the
-  `openFPGALoader` command that would load it.
+  **And right now it packs nothing for `oca_top`**, because that design
+  misses three constraints. The gate is doing its job rather than
+  failing: the only `oca_top.bit` this project ever had was 527142
+  bytes with a header reading `Part: LFE5U-45F-6CABGA381`, built from
+  the netlist before the ICMP fix, and it no longer exists. What packs
+  today is `oca_top_stub`, 163854 bytes, which carries no crypto and no
+  MAC.
 
   **The whole path is tested, and testing it found a defect that would
   have killed the board.** `run_oca_path.py` (7 tests) generates a
