@@ -33,16 +33,32 @@ program without a word.
 ## 1. Transport, before anything else
 
 Do not load a design. Establish that the programmer talks to the part.
+Name the cable: `--detect` alone probes every cable it knows, and this
+board's is the DAPLink on the carrier (`0d28:0204`), which is also what
+the `colorlight-i9` board profile selects.
 
 ```sh
-openFPGALoader --detect
+tools/openFPGALoader/bin/openFPGALoader --detect -c cmsisdap
 ```
 
-Read the IDCODE and confirm it is the part you think you have. There is
-a documented case in this family of modules silkscreened as one revision
-carrying a different die and package entirely: a 256-pin part where the
-pinout assumes 381. If the IDCODE disagrees with `BOM-MVP.md`, stop:
-every pin constraint downstream is wrong.
+Run on 2026-08-11 this read `idcode 0x41112043`, `lattice ECP5
+LFE5U-45`, `irlength 8`, agreeing with all three tables in the tree:
+`prjtrellis/database/devices.json`,
+`prjtrellis/docs/architecture/bitstream_format.rst:164` and
+`openFPGALoader/src/part.hpp:389`.
+
+**An IDCODE settles the die and says nothing about the package.**
+prjtrellis lists six packages against that one code, `caBGA256` among
+them, and a 256-ball part carrying a 381-ball pinout is the documented
+failure this step exists to catch. Half of it is now excluded and half
+of it is not, and no JTAG read closes the other half. What does is the
+marking on the chip itself: read it and compare against `BOM-MVP.md`
+before trusting a single LOCATE.
+
+Expect a bare `empty` on the first line of output. It is an
+unconditional debug `printf` in openFPGALoader's own `src/main.cpp:1205`
+reporting whether `--mcufw` was given, and it shipped in the v1.1.1
+release commit (`85be4fa`). It says nothing about the board.
 
 A bitstream that "loaded" but did not is the most expensive hour at the
 bench.

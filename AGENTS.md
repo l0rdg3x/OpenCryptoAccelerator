@@ -825,6 +825,14 @@ core and never updated as the design grew by 3000 LUTs.
   expected, and bring-up is what is next: everything that could be
   settled without it has been.
 
+  **Step 1 of the ladder is done.** `openFPGALoader --detect -c
+  cmsisdap` reads `idcode 0x41112043`, LFE5U-45, over the carrier's
+  DAPLink. That excludes a wrong die and not a wrong package:
+  prjtrellis lists six packages against that one code, `caBGA256`
+  included, so the 381-ball pinout every LOCATE in `colorlight_i9.lpf`
+  assumes is still unproven, and the chip's own marking is what settles
+  it.
+
   **Step 2 of the ladder now has a design.** `oca_blink.sv` and its
   two-pin `colorlight_i9_blink.lpf`: 25 flip-flops, two IO, floored at
   all 25, and the counting proof on the .lpf shown non-vacuous by
