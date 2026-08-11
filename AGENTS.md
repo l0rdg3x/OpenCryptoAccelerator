@@ -10,9 +10,14 @@ MVP development BOM: `BOM-MVP.md`.
   backend + official test vectors + benchmarks. In `oca/`.
 - **Phase 2 (in progress)**: FPGA cores in SystemVerilog, verified with
   cocotb + Verilator against the same official vectors. In `oca/hw/`.
-- **MVP target**: Lattice ECP5 (Colorlight i9 v7.2) + GbE, open toolchain
-  (yosys/nextpnr-ecp5). PCIe phase later: Artix-7 + LitePCIe (Vivado is
-  the documented exception to the open-toolchain rule).
+- **MVP target**: Lattice ECP5 (Colorlight i9 v7.2), host interface over
+  the board's DAPLink USB serial (J17/H18, 115200 8N1, `/dev/ttyACM0`),
+  open toolchain (yosys/nextpnr-ecp5). This read "+ GbE" until
+  2026-08-12: the board has no RJ45 socket and the die has no SERDES, so
+  it is a vehicle for proving the core on silicon and not a prototype of
+  the product (`SPEC.md`, PHASE 2). PCIe phase later, on other hardware:
+  Artix-7 + LitePCIe (Vivado is the documented exception to the
+  open-toolchain rule).
 - Linux/WireGuard integration via kernel crypto API — **no kernel
   patches**. FreeBSD if_wg needs a minimal patch or is out of scope v1.
 
@@ -42,12 +47,22 @@ tools/                      local tool builds — NOT committed
   src/                      upstream sources for the above (shallow clones)
 ```
 
-**The Ethernet MAC is an external dependency, not project RTL.** The
+**The Ethernet route is retired, 2026-08-12, and everything from here to
+the end of this section is history.** The board has no RJ45 socket -- the
+B50612D PHYs are on the module and their MDI pairs go to the SO-DIMM
+edge, but the sockets and the magnetics are on a carrier no kit sold
+with the module includes -- and the die is an LFE5U with no SERDES, so
+it can never be the PCIe platform either (`SPEC.md`, PHASE 2). None of
+it is work to do. It is kept because it was measured and because the
+code is still in the tree.
+
+**The Ethernet MAC was an external dependency, not project RTL.** The
 1G MAC, the RGMII interface and the IP/ARP/UDP stack come from
-`verilog-ethernet` (Alex Forencich, **MIT licence**); it will arrive as
+`verilog-ethernet` (Alex Forencich, **MIT licence**); it arrived as
 a submodule. Writing a MAC from scratch is weeks of work on well-trodden
 ground where every bug presents as "the link does not come up". That
-choice sets the project's RTL boundary: the stack hands over the UDP
+choice set the project's RTL boundary, and it is the reason retiring the
+route cost no crypto: the stack hands over the UDP
 payload as an AXI-Stream and everything in `hw/rtl/` sits behind that
 interface, which is why `oca_core` can be tested end to end with no
 Ethernet in the simulation at all
@@ -181,12 +196,22 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_clkrst.py             # 7/7 pass
+.venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
+.venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
+```
+
+Four suites belong to the Ethernet route retired on 2026-08-12. The code
+is still in the tree, deliberately, and they still pass. Nothing new is
+built on them. They stay until the console carries the same end-to-end
+test, because `test_oca_path.py` is the only one that drives `oca_core`
+inside a system rather than on its own, and no aggregate runner invokes
+any of them, so they cost nothing where they sit:
+
+```sh
 .venv/bin/python hw/sim/run_rgmii.py              # 10/10 pass
 .venv/bin/python hw/sim/run_eth_mac.py            # 8/8 pass, needs the vendor patches
 .venv/bin/python hw/sim/run_udp_seam.py           # 10/10 pass, twice, at two HDR_Q_DEPTH
 .venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
-.venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
-.venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
 123 RTL tests, twenty-two of them run a second time at a non-default
@@ -503,11 +528,16 @@ core and never updated as the design grew by 3000 LUTs.
   three engines the critical path also leaves `chacha20.sv` for
   `poly1305.sv:140` (the registered DSP products), routing-dominated
   because the third engine fills 83% of the DSP columns.
+  **The port figures that follow are retired, 2026-08-12** -- the board
+  has no socket, so none of them is a target any more. They are kept
+  because they were measured and because the occupancy conclusion above
+  does not depend on the transport.
   **Corrected MVP target: two ports at 56% of line rate each, not one
   port saturated** (56% being that figure at the 48.16 MHz of the day)
   — superseded in turn on 2026-08-05, when `d4ee09f` measured the cost
-  of an Ethernet port and two ports turned out not to fit; the standing
-  target is in the two-core bullet below. The board has two PHYs
+  of an Ethernet port and two ports turned out not to fit; the port
+  target that stood until the route closed is in the two-core bullet
+  below. The board has two PHYs
   (`BOM-MVP.md`) and
   `oca_dual` wires the two engines as two independent AXI-Stream pairs,
   one per core — so this is **0.569 Gbps per port at a 1500-byte MTU,
@@ -631,7 +661,12 @@ core and never updated as the design grew by 3000 LUTs.
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
   datapath.
-- **Two cores measured, and the standing target: one core on one port.**
+- **Two cores measured, and the port target the Ethernet route carried
+  until it was retired on 2026-08-12.** The cell counts, the clocks and
+  the cycle model in this bullet are measurements and stand; every
+  figure in it that names a port, an MTU or a percentage of line rate
+  describes a configuration the board cannot carry, because there is no
+  socket to carry it (`SPEC.md`, PHASE 2).
   `run_synth.py oca_dual` builds two `oca_core`. **On the RTL of
   `c1c6556` (2026-08-05), before the secret zeroisation**, four placer
   seeds gave **23191 LUTs (52.9%), 24086 FF (54.9%), 40 MULT18X18D
@@ -702,13 +737,14 @@ core and never updated as the design grew by 3000 LUTs.
   `54a2df8`, whose `clear_arp_cache` connection restored 881 LUTs of ARP
   logic the earlier netlist had deleted.) The two rows above it are
   sums of the same kind and neither has been built, so they are
-  estimates of unknown tightness in the same direction. **On the current
-  RTL the MVP that fits is one core on one port, 0.581 Gbps at MTU** —
-  the single core's own mean of 49.91 MHz through the same cycle model,
-  58.1% of line rate, 0.230 Gbps on 64-byte packets. That clock is the
-  core placed **alone and out of context**: no MAC beside it, no IO, no
-  PLL, so it is the ceiling that configuration could reach and not a
-  measurement of it.
+  estimates of unknown tightness in the same direction. **The one
+  configuration that fitted was one core on one port, 0.581 Gbps at
+  MTU** — the single core's own mean of 49.91 MHz through the same cycle
+  model, 58.1% of line rate, 0.230 Gbps on 64-byte packets. That clock is
+  the core placed **alone and out of context**: no MAC beside it, no IO,
+  no PLL, so it is the ceiling that configuration could reach and not a
+  measurement of it. It stopped being a target on 2026-08-12, when the
+  route closed for want of a socket.
 
   **And the ceiling is not the clock the board runs.** `oca_top`
   instantiates `oca_clkrst`, which delivers `clk_sys` at 625/13 =
@@ -735,11 +771,11 @@ core and never updated as the design grew by 3000 LUTs.
   50.000. One placement is not a sweep, and this project's own rule
   about seeds cuts both ways: on the 48.08-constrained sweep `clk_sys`
   reaches 50.44 at best and clears 50.00 on three of 32 seeds. So the
-  rung above is **untested rather than unreachable**, and moot until the
-  receive clock closes.
+  rung above is **untested rather than unreachable**. It was moot while
+  `rgmii_rx_clk` had to close alongside it; that route was retired on
+  2026-08-12 and no design has asked for the rung since.
   The device does carry four PLLs and this design uses one, so a second
-  one for `clk_sys` is still a door nobody has opened — though it would
-  not help until the receive clock closes.
+  one for `clk_sys` is still a door nobody has opened.
 
   **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
   Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
@@ -818,12 +854,16 @@ core and never updated as the design grew by 3000 LUTs.
   branches and no new state. Non-vacuous — deleting the flip-flops
   attributed to any one of the three engine files fails it, and the
   per-file floors report ok in all three cases.
-- **The Ethernet integration is merged** (`c153934`), designed in
-  `docs/design/2026-08-05-ethernet-integration.md`. Everything it needed
+- **The Ethernet integration was merged** (`c153934`), designed in
+  `docs/design/2026-08-05-ethernet-integration.md`, **and the route is
+  retired as of 2026-08-12** because the board has no RJ45 socket and
+  the die has no SERDES (`SPEC.md`, PHASE 2; that design document now
+  opens with a closed header). Everything it needed
   to be built is written and tested, section 8's whole-path testbench
-  included. **The board arrived on 2026-08-11**, six days before it was
-  expected, and bring-up is what is next: everything that could be
-  settled without it has been.
+  included, and none of it is work to do. **The board arrived on
+  2026-08-11**, six days before it was expected, and the bring-up ladder
+  below is where it went. The host interface is the DAPLink USB serial
+  on J17/H18, 115200 8N1, `/dev/ttyACM0`.
 
   **Step 1 of the ladder is done.** `openFPGALoader --detect -c
   cmsisdap` reads `idcode 0x41112043`, LFE5U-45, over the carrier's
@@ -940,13 +980,14 @@ core and never updated as the design grew by 3000 LUTs.
   therefore right, and the silent case that file documents at length,
   RGMII inputs declared `LVCMOS33` in a 2.5 V bank, does not apply here.
 
-  **There is no `oca_top` bitstream to load, and that is deliberate.**
-  It misses 125 MHz on all 32 seeds, and `pack()` refuses to write a
-  bitstream for a design that missed its clock, so the bench cannot get
-  past the MAC on the real top until the receive path closes.
+  **There is no `oca_top` bitstream to load, and there will not be
+  one.** It misses 125 MHz on all 32 seeds, and `pack()` refuses to
+  write a bitstream for a design that missed its clock -- so the gate
+  held, and then the route it belongs to was retired on 2026-08-12 for a
+  reason no placement could have fixed.
 
-  What exists in the tree: `verilog-ethernet` as a submodule at
-  `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
+  What is in the tree from that route: `verilog-ethernet` as a submodule
+  at `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
   front end around the ECP5 DDR primitives, with the receive delay
   movable at run time rather than fixed in the bitstream (10 tests);
   `oca_clkrst.sv`, one PLL and three clock domains with a reset
@@ -957,7 +998,7 @@ core and never updated as the design grew by 3000 LUTs.
   depths).
 
   **The 8-to-64-bit width conversion is not in our clock domain**: at
-  ~48 MHz an 8-bit stream carries 384 Mbps, under the port it is meant
+  ~48 MHz an 8-bit stream carries 384 Mbps, under the port it was meant
   to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
   `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
   crossing in one instance. Upstream's testbench does not exercise that
@@ -1025,15 +1066,16 @@ core and never updated as the design grew by 3000 LUTs.
   lever. `oca_top`'s DESIGNS entry records 10 because it is the best
   measured, not because it works.
 
-  **This is the top open item.** The fix stays: a board that closes
-  timing and stops receiving on the first ping is worth less than one
-  that misses a clock, and the ICMP defect is proved by test while the
-  clock is a number in a report. What it needs is less logic competing
-  for the fabric around the receive path — the same conclusion the
-  occupancy study reached, now with a harder constraint. Not yet tried:
-  a vendor patch that discards non-UDP frames inside `udp_complete_64`
-  without exposing the raw-IP port at all, which would consume the frame
-  without keeping its datapath alive.
+  **This was the top open item until 2026-08-12, and it is not an item
+  any more**: the route closed for want of an RJ45 socket, which no
+  placement, no vendor patch and no seed could have supplied. The fix
+  that cost the clock stayed to the end, and for the right reason -- a
+  board that closes timing and stops receiving on the first ping is
+  worth less than one that misses a clock, and the ICMP defect is proved
+  by test while the clock is a number in a report. What it would have
+  needed is less logic competing for the fabric around the receive path,
+  the same conclusion the occupancy study reached, with a harder
+  constraint; nothing was found that delivered it.
 
   42.7% against the 47.3% the area sum predicted: adding a core measured
   alone to a port measured alone still counts twice the logic the
@@ -1127,12 +1169,17 @@ core and never updated as the design grew by 3000 LUTs.
   fix is proved load-bearing: reverting it fails only the new test,
   while the other six pass unchanged.
 
-  **Still not done, and none of it is simulation:** that bitstream has
-  been loaded onto nothing, and nothing has run on hardware.
+  **None of the Ethernet path ever ran on hardware, and none of it
+  will**: no `oca_top` bitstream was ever loaded, and the route was
+  retired on 2026-08-12. What did run on silicon is the ladder above --
+  the IDCODE, the blink, the PLL and the serial console.
 
-  What the board alone can settle is listed in the design document: the
-  RGMII delay value and the IO bank voltages above all. One trap is
-  written down in `oca_rgmii.sv` and in the bring-up skill: the receive
-  delay sits on the data lines by LiteEth precedent and not by geometry,
-  and a one-unit-interval misalignment cannot be repaired by any tap
-  value. `link_up` low while the PHY's own link LED is lit is the tell.
+  What the board alone could have settled is listed in that design
+  document, which is now marked closed: the RGMII delay value above all,
+  the other item on the list -- the IO bank voltages -- having been
+  closed on 2026-08-11 by the bank 6 measurement above. The delay trap
+  is written down there, in `oca_rgmii.sv` and in the bring-up skill, and
+  it is kept as history rather than as a sweep to run: the receive delay
+  sits on the data lines by LiteEth precedent and not by geometry, and a
+  one-unit-interval misalignment cannot be repaired by any tap value,
+  with `link_up` low while the PHY's own link LED is lit as the tell.
