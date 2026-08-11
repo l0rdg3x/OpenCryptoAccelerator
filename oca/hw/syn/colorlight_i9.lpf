@@ -129,7 +129,7 @@
 #     neither alone says anything.
 #  3. A FREQUENCY line naming a net that does not exist DOES warn —
 #     "net '<name>' does not exist in design, ignoring clock
-#     constraint" (common/kernel/basectx.cc:107). The two FREQUENCY
+#     constraint" (common/kernel/basectx.cc:108). The two FREQUENCY
 #     lines below therefore double as a spelling check on clk25 and
 #     rgmii_rx_clk.
 #

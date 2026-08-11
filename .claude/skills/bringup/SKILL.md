@@ -49,12 +49,46 @@ bench.
 
 ## 2. Something trivial that blinks
 
-Smallest possible design: the 25 MHz clock on **P3**, a counter, the LED
-on **L2**. No PLL, no Ethernet.
+`oca_blink.sv`: the 25 MHz clock on **P3**, a counter, the LED on **L2**,
+its own two-pin `colorlight_i9_blink.lpf`. No PLL, no Ethernet.
 
-This proves the clock is where we think, the bitstream path works end to
-end, and the LED polarity (**active low**) is what we assumed. If it
-does not blink, nothing after this is diagnosable.
+Build it from `oca/`, which is the only directory `run_synth.py`
+resolves against, and load it from the repository root, which is where
+`tools/` is. Two commands, two working directories:
+
+```sh
+(cd oca && .venv/bin/python hw/syn/run_synth.py oca_blink)
+tools/openFPGALoader/bin/openFPGALoader -b colorlight-i9 \
+    oca/hw/syn/build/oca_blink.bit
+```
+
+`-m --write-sram` is openFPGALoader's default, so that command loads
+volatile and leaves the board's flash untouched. Nothing here should
+touch flash.
+
+This proves the clock is where we think and that the bitstream path works
+end to end, and it settles the LED's polarity, which no source has ever
+measured. **Read the duty cycle, not the blink**: the counter is one
+eighth on and seven eighths off, so under the active-low assumption you
+see a short flash every 1.34 s. A long lit period
+with a short gap is the same bitstream on an active-high LED. That
+asymmetry is the only way this step can settle polarity, since a square
+wave looks identical either way round.
+
+If it does not blink, nothing after this is diagnosable.
+
+**Do not use `oca_top_stub` for this.** Its `led_n` is the AND of seven
+terms: `beat[24]`, `pll_locked`, `phy_ready`, `link_up`,
+`link_full_duplex`, `link_speed != 3` and `dly_cflag_seen`. The last one
+is a sticky bit fed by the receive delays' CFLAG, and the stub ties their
+MOVE low, so no move ever commands a pulse and whether CFLAG rests high
+is characterised in neither yosys, prjtrellis nor nextpnr.
+
+The consequence is not which way it reads, it is that **one reading
+covers two states**: `led_n` sits high and steady when the PLL never
+locked, and can sit high and steady on a board where everything worked.
+The comment in that file claimed the reading distinguished them, until
+2026-08-11.
 
 ## 3. The PLL
 

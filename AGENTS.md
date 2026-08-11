@@ -821,8 +821,22 @@ core and never updated as the design grew by 3000 LUTs.
 - **The Ethernet integration is merged** (`c153934`), designed in
   `docs/design/2026-08-05-ethernet-integration.md`. Everything it needed
   to be built is written and tested, section 8's whole-path testbench
-  included. **What is next is bring-up on the board**, expected
-  ~2026-08-17: everything that could be settled without it has been.
+  included. **The board arrived on 2026-08-11**, six days before it was
+  expected, and bring-up is what is next: everything that could be
+  settled without it has been.
+
+  **Step 2 of the ladder now has a design.** `oca_blink.sv` and its
+  two-pin `colorlight_i9_blink.lpf`: 25 flip-flops, two IO, floored at
+  all 25, and the counting proof on the .lpf shown non-vacuous by
+  renaming a LOCATE and watching the build stop. It is one eighth on and
+  seven eighths off so that the duty cycle settles the LED polarity,
+  which a symmetric blink cannot. `oca_top_stub` cannot do this job and
+  its LED comment claimed it could; both are corrected.
+
+  **There is no `oca_top` bitstream to load, and that is deliberate.**
+  It misses 125 MHz on all 32 seeds, and `pack()` refuses to write a
+  bitstream for a design that missed its clock, so the bench cannot get
+  past the MAC on the real top until the receive path closes.
 
   What exists in the tree: `verilog-ethernet` as a submodule at
   `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII

@@ -105,6 +105,16 @@ DESIGNS = {
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
+    # Bring-up step 2, and the only design here whose purpose is to be
+    # loaded rather than measured. Its own .lpf, not the seventeen-pin
+    # one: a design is required to constrain every IO it has, but an
+    # .lpf naming pins the design does not have is skipped without a
+    # word, so building this against colorlight_i9.lpf would pass while
+    # proving nothing about the fifteen lines it silently ignored.
+    "oca_blink": Design(
+        sv=["oca_blink.sv"],
+        lpf="colorlight_i9_blink.lpf",
+    ),
     # The first pinned build this project has. It carries no crypto: it
     # exists to place the clocking and the RGMII pads against the real
     # .lpf and report which clocks nextpnr constrained, which is the one
@@ -255,6 +265,14 @@ DESIGNS = {
 # figure would still be met by 2313 live registers and the check would
 # pass over a half-empty netlist.
 NETLIST_FF_FLOOR = {
+    # All 25 bits of the blink counter, floored at exactly 25 because
+    # that is a whole design and there is nothing in it to move. This is
+    # the one build here whose result an operator reads by eye, and a
+    # counter one bit short does not fail -- it blinks twice as fast,
+    # which at the bench is indistinguishable from the oscillator not
+    # being the 25 MHz we think it is. That reading is the entire purpose
+    # of the step, so the thing it depends on is checked.
+    "oca_blink": {"oca_blink.sv": 25},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
     # The board build. Same two floors as oca_core, since it contains
