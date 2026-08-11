@@ -6,7 +6,8 @@
 # PROVENANCE OF EVERY BALL. Each one was read out of prjtrellis's own IO
 # database for this device and package —
 # tools/trellis/share/trellis/database/ECP5/LFE5U-45F/iodb.json, package
-# CABGA381, 203 balls — for existence, bank and clock capability, then
+# CABGA381, whose 381 balls carry 203 user IO pads in that database —
+# for existence, bank and clock capability, then
 # cross-checked against two independent pin lists: litex-boards'
 # colorlight_i5.py (_io_v7_2, BSD-2-Clause) and the board vendor's own
 # colorlight_i9_v7.2.md. All three agree on all seventeen pins below.

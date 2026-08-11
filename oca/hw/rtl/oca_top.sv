@@ -597,8 +597,15 @@ module oca_top #(
     // The remaining signals have no place in the LED's meaning but must
     // not dangle: busy and good-frame strobes move constantly, so folding
     // them into the blink would make it unreadable. They are OR-reduced
-    // into a bit that cannot change what the LED shows and cannot be
-    // optimised away either.
+    // into a bit that cannot change what the LED shows, which is what
+    // stops `verilator --lint-only -Wall` calling them unused.
+    //
+    // It does not survive synthesis and is not meant to: `activity &
+    // 1'b0` folds to zero, so no net of that name is in the netlist and
+    // `led_n` is exactly `~lit`. This comment claimed the opposite until
+    // 2026-08-11 -- that the bit "cannot be optimised away" -- which was
+    // wrong in a way nothing would have caught, since the construct does
+    // its real job either way.
     logic activity;
 
     always_comb activity = |{tx_fifo_good_frame, rx_fifo_good_frame,
