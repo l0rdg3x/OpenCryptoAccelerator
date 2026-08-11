@@ -117,6 +117,13 @@ DESIGNS = {
         sv=["oca_blink.sv"],
         lpf="colorlight_i9_blink.lpf",
     ),
+    # The receive half of the console. J17 is settled; H18 is litex's
+    # pairing and nothing more until a byte travels it, which is what an
+    # echo makes the operator prove by supplying the expected value.
+    "oca_uart_echo": Design(
+        sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_uart_echo.sv"],
+        lpf="colorlight_i9_echo.lpf",
+    ),
     # Which pin is the DAPLink's UART on. Two transmitters, each naming
     # its own pin, because litex offers two candidates and offering two
     # is the evidence that neither is certain.
@@ -309,6 +316,15 @@ NETLIST_FF_FLOOR = {
     # message still counts 52, measured rather than assumed. That one is
     # an elaboration guard in oca_uart_probe.sv instead.
     "oca_uart_probe": {"oca_uart_probe.sv": 27, "oca_uart_tx.sv": 52},
+    # 32 for the receiver: 8-bit divisor, 3-bit index, 8-bit shifter, the
+    # state, the outputs, and the TWO SYNCHRONISER FLOPS on rx. Those two
+    # are why the floor is here at all. Nothing downstream notices if a
+    # mapper folds a synchroniser to one stage: the design still receives
+    # in every simulation, and what it loses is mean time between
+    # failures on a boundary no test reaches.
+    # 22 for the transmitter, 1 for the top's LED toggle.
+    "oca_uart_echo": {"oca_uart_rx.sv": 32, "oca_uart_tx8.sv": 22,
+                      "oca_uart_echo.sv": 1},
     # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
     # bits that compare is unreachable and therefore constant false, so
     # tx_beat never toggles and yosys folds the counter and the toggle

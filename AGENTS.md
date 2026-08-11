@@ -888,7 +888,14 @@ core and never updated as the design grew by 3000 LUTs.
   payloads naming themselves, and `/dev/ttyACM0` at 115200 8N1 returned
   **`PIN=J17`** once a second: the DAPLink is on litex's `serial`, the
   v7.0 pair, not on the `serialx` at E5/F4 that the v7.2 section adds.
-  The receive pin is H18 by that pairing and is not yet tested. Bank 2's
+  **The receive pin is H18, confirmed the same day** by `oca_uart_echo`:
+  eight bytes sent one every 300 ms came back in order and byte exact,
+  `4f 43 41 00 01 55 aa ff`. Sent back to back, alternate bytes are
+  dropped and "OCA" returns "OA", which is this design's documented
+  behaviour and what its testbench asserts, so bench and simulation
+  agree on the failure as well as on the success. **The channel works in
+  both directions**; a console needs a holding register or a FIFO before
+  it can take a line at speed. Bank 2's
   VCCIO stays unmeasured: a clean decode says the DAPLink accepted the
   levels, which a 2.5 V swing into a 3.3 V input generally is.
 
