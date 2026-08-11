@@ -115,6 +115,13 @@ DESIGNS = {
         sv=["oca_blink.sv"],
         lpf="colorlight_i9_blink.lpf",
     ),
+    # oca_blink plus four bank 6 pins held at fixed levels, so a meter on
+    # the header reads VCCIO6 off a driven pad instead of off a capacitor
+    # nobody can identify. Its own .lpf for the same reason as above.
+    "oca_vccio": Design(
+        sv=["oca_vccio.sv"],
+        lpf="colorlight_i9_vccio.lpf",
+    ),
     # The first pinned build this project has. It carries no crypto: it
     # exists to place the clocking and the RGMII pads against the real
     # .lpf and report which clocks nextpnr constrained, which is the one
@@ -273,6 +280,9 @@ NETLIST_FF_FLOOR = {
     # being the 25 MHz we think it is. That reading is the entire purpose
     # of the step, so the thing it depends on is checked.
     "oca_blink": {"oca_blink.sv": 25},
+    # Same counter and same reason: the blink is the only sign that the
+    # bitstream is live while the meter is on the header.
+    "oca_vccio": {"oca_vccio.sv": 25},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
     # The board build. Same two floors as oca_core, since it contains

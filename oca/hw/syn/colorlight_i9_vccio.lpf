@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — bank 6 VCCIO measurement, six pins.
+#
+# clk25 and led_n are colorlight_i9.lpf's, unchanged, and the provenance
+# argument for them is written there in full. The four probes are bank 6
+# balls that colorlight_i9.lpf does not use, read out of prjtrellis's
+# iodb.json for LFE5U-45F / CABGA381 (bank 6 has 33 balls, seventeen of
+# which colorlight_i9.lpf constrains) and cross-checked against
+# litex-boards' colorlight_i5.py, which routes all four to pmodk:
+#
+#   M4 = pmodk index 1      N4 = pmodk index 4
+#   L5 = pmodk index 2      L4 = pmodk index 5
+#
+# K5 is bank 6 and on pmodh, and is left alone: it is VREF1_6.
+#
+# Six constraints against six ports, which is the check. A stale LOCATE
+# here is skipped in silence (ecp5/lpf.cc:144), but the port it stopped
+# covering then fails the build with "IO '<name>' is unconstrained in
+# LPF" (ecp5/main.cc:287).
+#
+# IO_TYPE=LVCMOS33 IS THE HYPOTHESIS UNDER TEST, not a setting. If bank 6
+# is really at 2.5 V these pads output 2.5 V and this file's declaration
+# was wrong, which is the answer we came for. It is safe either way: an
+# output cannot exceed its own bank rail, and with every output in the
+# bank declared alike there is no VCCIO conflict for nextpnr to reject.
+#
+# DRIVE=4, the weakest the ECP5 offers, on the probes only. That these
+# four balls are unconnected is litex's claim rather than a measurement,
+# and a wrong claim means this design drives against whatever else does.
+#
+# The FREQUENCY line is also the spelling check on clk25: a net that does
+# not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
+
+FREQUENCY PORT "clk25" 25 MHZ;
+
+LOCATE COMP "clk25" SITE "P3";
+IOBUF  PORT "clk25" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n" SITE "L2";
+IOBUF  PORT "led_n" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "probe_m4" SITE "M4";
+IOBUF  PORT "probe_m4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_l5" SITE "L5";
+IOBUF  PORT "probe_l5" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_n4" SITE "N4";
+IOBUF  PORT "probe_n4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_l4" SITE "L4";
+IOBUF  PORT "probe_l4" IO_TYPE=LVCMOS33 DRIVE=4;
