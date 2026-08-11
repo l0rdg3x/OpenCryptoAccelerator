@@ -438,14 +438,7 @@ module oca_top #(
         .local_mac   (LOCAL_MAC),
         .local_ip    (stack_local_ip),
         .gateway_ip  (GATEWAY_IP),
-        .subnet_mask (SUBNET_MASK),
-
-        // Nothing flushes the cache at runtime. Stated rather than left to
-        // the toolchain: it gates arp_cache's query and write ports
-        // (arp_cache.v:158, :181), and a pin that reads 0 because two
-        // flows happen to resolve undriven nets that way is not the same
-        // thing as a pin that is held low on purpose.
-        .clear_arp_cache (1'b0)
+        .subnet_mask (SUBNET_MASK)
     );
 
     // ------------------------------------------------------------------
