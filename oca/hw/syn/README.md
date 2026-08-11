@@ -43,8 +43,9 @@ the post-synthesis netlist and the nextpnr JSON report.
   *not* enforced is `--freq`, which is nextpnr's fallback for an
   unconstrained net rather than a target this design set for itself.
 - The placer seed comes from the design (`Design.seed`), and `--seed`
-  overrides it. `oca_top` records 6 — see the sweep at the end of this
-  file — and everything else falls back to 1, so runs stay comparable.
+  overrides it. `oca_top` records 10, the best of the 32 in the sweep at
+  the end of this file and not one that closes; everything else falls
+  back to 1, so runs stay comparable.
 - Two checks bracket synthesis, because nothing downstream would catch
   what they catch: `check_cmp2lut()` probes the toolchain before it is
   trusted, and `check_netlist()` asserts the netlist still contains the
@@ -55,15 +56,21 @@ the post-synthesis netlist and the nextpnr JSON report.
   work, and would corrupt one frame in some number nobody is counting —
   packing it turns a build failure into a bench mystery.
 
-  Measured both ways on `oca_top`: at its own seed 6 the run exits 0 and
-  writes `oca_top.bit`, 527142 bytes, header `Part:
-  LFE5U-45F-6CABGA381`, which `ecpunpack` decodes back to a
+  Measured both ways on `oca_top` **as it stood before `54a2df8`**, the
+  last netlist of it that closed anything: at seed 6 the run exited 0
+  and wrote `oca_top.bit`, 527142 bytes, header `Part:
+  LFE5U-45F-6CABGA381`, which `ecpunpack` decoded back to a
   configuration naming the same part with USERCODE and DONE set. At seed
-  1 it exits 1 and writes no `.bit`, **two constraints having been
+  1 it exited 1 and wrote no `.bit`, **two constraints having been
   missed** — `clk_tx` 124.69 against 125 and `rgmii_rx_clk` 115.77
-  against 125, while `clk_sys` (52.16) and `clk25` (486.85) pass.
+  against 125, while `clk_sys` (52.16) and `clk25` (486.85) passed.
   `b9f68ea`'s commit message says three; it is two, and the report it
   was measured on is the one described here.
+
+  **On the design in the tree today neither half reproduces**: it misses
+  its constraints on every seed, so `run_synth.py oca_top` always takes
+  the failing branch and there is no `oca_top.bit` at all. What still
+  demonstrates the passing side is `oca_top_stub`, 163854 bytes.
 
   **Not packing was not enough, and that was found by reading rather
   than at the bench.** `pack()` is simply not reached when the check
@@ -83,9 +90,9 @@ the post-synthesis netlist and the nextpnr JSON report.
   writes neither the report nor the configuration unless place and route
   both succeed (`common/kernel/command.cc`), so on those failures the
   old report is still standing and the old bitstream still matches it.
-  The difference is not academic on this design: only 1 seed of 13
-  closes, so retrying with `--seed` and `--pnr-arg` is the normal way to
-  work here. `pack()` separately removes a `.bit` that `ecppack` failed
+  The difference is not academic on this design: no seed of the 32
+  tried closes it, so retrying with `--seed` and `--pnr-arg` is the
+  normal way to work here. `pack()` separately removes a `.bit` that `ecppack` failed
   partway through, since a truncated bitstream is one a programmer will
   load.
 

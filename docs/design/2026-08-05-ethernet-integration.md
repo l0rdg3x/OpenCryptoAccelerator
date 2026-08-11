@@ -148,12 +148,15 @@ given.
 `clk_tx` is an integer division of the same VCO, so the VCO must be a
 multiple of 125 MHz; the 400-800 MHz band leaves 500, 625 and 750, and
 from those `clk_sys` can be 45.45, 46.88, **48.08**, 50.00 or 52.08 —
-nothing between 48.08 and 50.00. **50.00 was built on 2026-08-11 and
-does not close**: `CLKOP_DIV` 4 with `CLKOS_DIV` 10 gives a 500 MHz VCO,
-`clk_tx` exactly 125 and `clk_sys` exactly 50.000, and the design
-reaches 48.22 against it. The ladder offers nothing above 48.0769 this
-design can take. The device carries four PLLs and this design uses one,
-which is the other unopened door.
+nothing between 48.08 and 50.00. **50.00 was asked for on 2026-08-11, at one
+seed, and that placement reached 48.22 against it**: `CLKOP_DIV` 4 with
+`CLKOS_DIV` 10 gives a 500 MHz VCO, `clk_tx` exactly 125 and `clk_sys`
+exactly 50.000. One placement is not a sweep, and the repository's own
+data argues for caution in the other direction: on the 48.08-constrained
+sweep `clk_sys` reaches 50.44 at its best and clears 50.00 on three of
+32 seeds, so the rung above is **untested, not ruled out**. It is also
+moot until `rgmii_rx_clk` closes. The device carries four PLLs and this
+design uses one, which is the other unopened door.
 
 **Second amendment, 2026-08-11: the design no longer closes at all.**
 `54a2df8` connected `m_ip_hdr_ready` and `m_ip_payload_axis_tready`,
@@ -421,8 +424,11 @@ as a sequence that checks one thing at a time.
 `openFPGALoader` **is in the tree**: pinned at `85be4fa0` (v1.1.1) in
 `scripts/build-toolchain.sh` like everything else, built into
 `tools/openFPGALoader/`. It has native support for the i9
-(`colorlight-i9`, cable `cmsisdap`). It now has something to load, too:
-`run_synth.py` packs `oca_top.bit` and prints the command.
+(`colorlight-i9`, cable `cmsisdap`). `run_synth.py` packs a bitstream
+and prints the command that loads it — but **not for `oca_top`**, which
+misses its constraints on every seed tried and therefore never reaches
+the packing step. What packs today is `oca_top_stub`, which carries
+neither crypto nor MAC.
 
 This section previously read "there is no programmer of any kind in the
 tree", which was true when it was written on 2026-08-05 and stopped

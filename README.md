@@ -24,9 +24,13 @@ The full project specification is in [SPEC.md](SPEC.md).
   Poly1305, AEAD ChaCha20-Poly1305 (encrypt + decrypt), plus the host
   protocol layer (`oca_core`) that turns a UDP payload into an AEAD
   operation and back. The Ethernet integration is merged: `oca_top`
-  reaches from the RGMII pads to `oca_core` and back, closes timing on
-  the LFE5U-45F and packs into a bitstream. Next is bring-up on the
-  board, which nothing here has run on.
+  reaches from the RGMII pads to `oca_core` and back, and a whole-path
+  testbench drives a synthetic Ethernet frame through it and checks the
+  frame that comes out. **It does not close timing**: the receive clock
+  misses 125 MHz on all 32 placer seeds tried, the best reaching 124.22,
+  so no bitstream is produced. That is the project's first open item —
+  `AGENTS.md` carries the measurements and what has been ruled out.
+  Nothing here has run on a board.
 
 ## Quick start
 
