@@ -21,16 +21,17 @@
  * and a symmetric blink proves only two of them: that the oscillator is
  * on P3 at the frequency we think, and that the bitstream reached the
  * device. It cannot prove the third, the LED's polarity, because a square
- * wave looks the same whichever way round the diode sits -- and the
- * polarity is an assumption we have never checked on silicon. litex's
- * user_led_n says active low; the pin moved from U16 to L2 in the v7.2
- * revision and nothing in either source is a measurement.
+ * wave looks the same whichever way round the diode sits.
  *
- * So the beat is one eighth on and seven eighths off. Under the active-
- * low assumption the LED shows a short flash every 1.34 s. If it is
- * actually active high, the same bitstream shows a long lit period with a
- * short gap -- the complementary pattern, unmistakable across the room
- * and needing no instrument.
+ * So the beat is one eighth on and seven eighths off: led_n low for
+ * 168 ms and high for 1174 ms. Active low shows a short flash every
+ * 1.34 s, active high the complementary pattern, and the two are
+ * unmistakable across the room without an instrument.
+ *
+ * Run on the board 2026-08-11, D2 showed the short flash. The LED is
+ * ACTIVE LOW and litex's user_led_n is right. Until then it was an
+ * assumption: the pin had moved from U16 to L2 in the v7.2 revision and
+ * nothing in either source was a measurement.
  */
 `default_nettype none
 

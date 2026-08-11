@@ -93,14 +93,18 @@ tools/openFPGALoader/bin/openFPGALoader -b colorlight-i9 \
 volatile and leaves the board's flash untouched. Nothing here should
 touch flash.
 
-This proves the clock is where we think and that the bitstream path works
-end to end, and it settles the LED's polarity, which no source has ever
-measured. **Read the duty cycle, not the blink**: the counter is one
-eighth on and seven eighths off, so under the active-low assumption you
-see a short flash every 1.34 s. A long lit period
-with a short gap is the same bitstream on an active-high LED. That
-asymmetry is the only way this step can settle polarity, since a square
-wave looks identical either way round.
+This proves the clock is where we think, that the bitstream path works
+end to end, and the LED's polarity. **Read the duty cycle, not the
+blink**: the counter is one eighth on and seven eighths off, so an
+active-low LED shows a short flash every 1.34 s and an active-high one
+shows a long lit period with a short gap. That asymmetry is the only way
+this step can settle polarity, since a square wave looks identical either
+way round.
+
+Run here 2026-08-11: D2 gave the short flash, so the LED is active low
+and litex's `user_led_n` is right. A steady LED is the other reading
+worth knowing, because a frozen counter leaves `led_n` low: no clock on
+P3 shows as steadily lit, not as nothing at all.
 
 If it does not blink, nothing after this is diagnosable.
 

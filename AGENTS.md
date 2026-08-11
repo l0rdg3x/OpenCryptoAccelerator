@@ -835,13 +835,18 @@ core and never updated as the design grew by 3000 LUTs.
   with the `--package CABGA381 --speed 6` the build targets, so every
   LOCATE in `colorlight_i9.lpf` rests on the right ball map.
 
-  **Step 2 of the ladder now has a design.** `oca_blink.sv` and its
+  **Step 2 of the ladder is done, on the board.** `oca_blink.sv` and its
   two-pin `colorlight_i9_blink.lpf`: 25 flip-flops, two IO, floored at
   all 25, and the counting proof on the .lpf shown non-vacuous by
   renaming a LOCATE and watching the build stop. It is one eighth on and
   seven eighths off so that the duty cycle settles the LED polarity,
-  which a symmetric blink cannot. `oca_top_stub` cannot do this job and
-  its LED comment claimed it could; both are corrected.
+  which a symmetric blink cannot. Loaded into SRAM 2026-08-11, D2 gave
+  the short flash and not its complement, which settles three things at
+  once: **the LED is active low**, litex's `user_led_n` being right on a
+  point no source had measured; the 25 MHz oscillator is on P3, since
+  the period is the predicted 1.34 s; and the bitstream path runs end to
+  end. `oca_top_stub` cannot do this job and its LED comment claimed it
+  could; both are corrected.
 
   **There is no `oca_top` bitstream to load, and that is deliberate.**
   It misses 125 MHz on all 32 seeds, and `pack()` refuses to write a

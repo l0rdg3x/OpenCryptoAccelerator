@@ -167,8 +167,10 @@ module oca_top_stub (
     // The defect is not which way round it reads. It is that ONE READING
     // COVERS TWO STATES the operator needs to tell apart, so the whole
     // sentence is stated below in terms of led_n, the level this module
-    // drives, and never in terms of lit or dark -- the polarity is
-    // litex's user_led_n and has never been seen on silicon either.
+    // drives, and never in terms of lit or dark. oca_blink measured the
+    // polarity on 2026-08-11 and it is active low, so led_n high does
+    // now mean a dark LED. That changes nothing here: the defect is two
+    // states sharing one reading, and no polarity separates them.
     //
     // A PLL that never locks drives led_n HIGH AND STEADY. oca_clkrst
     // gates arst_n on pll_locked (oca_clkrst.sv:378), so rst_n_sys stays
