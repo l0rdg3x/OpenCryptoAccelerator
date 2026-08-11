@@ -920,9 +920,19 @@ core and never updated as the design grew by 3000 LUTs.
   Superseded, and kept because the comparison is the finding: on the RTL
   before the fix, `rgmii_rx_clk` cleared its target on two seeds of
   thirteen, `clk_tx` on six, and they coincided once. The whole sweep is
-  in `hw/syn/README.md`. What would give real margin is less competition
-  for the fabric around the receive path — the MAC alone closes at
-  132.98 MHz with 6.4% to spare, so the shortfall was never the module.
+  in `hw/syn/README.md`, with the levers that have been ruled out and
+  the measurements that ruled them out.
+
+  **The failing path is entirely inside the MAC's receive FIFO**, 64%
+  routing and 30% logic, which says congestion rather than depth — and
+  the same module alone says it louder: rebuilt on this toolchain,
+  `oca_top_mac` reaches **146.35 MHz** on `rgmii_rx_clk`, 17% clear of
+  the target, against 124.22 for the same path in the whole design. Those
+  22 MHz are what the rest of the design costs it. (This entry said
+  132.98 MHz until 2026-08-11, measured on an earlier state of that
+  target.) Nothing about the MAC, the FIFO or the placer settings will
+  return them; what is left is the conclusion the occupancy study kept
+  reaching, that there is too much logic on this device.
 
   **Two vendor defects had to be patched to get here, and both were
   blocking.** They live in `hw/vendor/patches/`, applied to an extracted
