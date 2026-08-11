@@ -107,8 +107,8 @@ DESIGNS = {
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
     # Bring-up step 2, and the first design here whose purpose is to be
     # loaded rather than measured. It said "only" until 2026-08-11, and
-    # oca_vccio and oca_pll were added to the same list afterwards.
-    # Its own .lpf, not the seventeen-pin
+    # oca_vccio, oca_pll and oca_uart_probe were added to the same
+    # list afterwards. Its own .lpf, not the seventeen-pin
     # one: a design is required to constrain every IO it has, but an
     # .lpf naming pins the design does not have is skipped without a
     # word, so building this against colorlight_i9.lpf would pass while
@@ -116,6 +116,13 @@ DESIGNS = {
     "oca_blink": Design(
         sv=["oca_blink.sv"],
         lpf="colorlight_i9_blink.lpf",
+    ),
+    # Which pin is the DAPLink's UART on. Two transmitters, each naming
+    # its own pin, because litex offers two candidates and offering two
+    # is the evidence that neither is certain.
+    "oca_uart_probe": Design(
+        sv=["oca_uart_tx.sv", "oca_uart_probe.sv"],
+        lpf="colorlight_i9_uart.lpf",
     ),
     # Bring-up step 3. oca_clkrst as the real design instantiates it, and
     # a counter sized to turn 125 MHz into a 1 Hz blink, so the reading
@@ -293,6 +300,15 @@ NETLIST_FF_FLOOR = {
     # being the 25 MHz we think it is. That reading is the entire purpose
     # of the step, so the thing it depends on is checked.
     "oca_blink": {"oca_blink.sv": 25},
+    # 27 for the probe: a 25-bit tick counter, the send pulse and led_n.
+    # 52 for the two transmitters, 26 each, so both instances have to
+    # keep their storage.
+    #
+    # It does NOT check that the two carry different payloads, which is
+    # the failure that would actually matter: giving both the same
+    # message still counts 52, measured rather than assumed. That one is
+    # an elaboration guard in oca_uart_probe.sv instead.
+    "oca_uart_probe": {"oca_uart_probe.sv": 27, "oca_uart_tx.sv": 52},
     # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
     # bits that compare is unreachable and therefore constant false, so
     # tx_beat never toggles and yosys folds the counter and the toggle
