@@ -260,8 +260,41 @@ NETLIST_FF_FLOOR = {
     # is worth its own floor because its header queue is the one place
     # in this design where losing storage does not break anything
     # visible -- it just starts addressing replies to the wrong peer.
+    #
+    # And the vendor stack, every module of it that carries state. This
+    # is not belt and braces: until 2026-08-11 the census keyed on a .sv
+    # filename, so no vendor module could ever produce a bucket, and
+    # arp_cache.v went from 130 live flip-flops to ZERO between two
+    # builds with nobody noticing. The design that closed timing, packed
+    # a bitstream and was published had no ARP cache in it at all -- the
+    # same shape as the cmp2lut trap, and invisible for the same reason:
+    # nothing counted it.
+    #
+    # Floored 5% under measured, because the failure worth catching is a
+    # module vanishing rather than a register moving. Re-measure when the
+    # pin, the patches or a parameter changes; the census printed below
+    # is where the numbers come from.
     "oca_top": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
-                "oca_udp_seam.sv": 270},
+                "oca_udp_seam.sv": 270,
+                "arp.v": 335,                   # 353 measured
+                "arp_cache.v": 123,             # 130
+                "arp_eth_rx.v": 266,            # 280
+                "arp_eth_tx.v": 272,            # 287
+                "axis_adapter.v": 166,          # 175
+                "axis_async_fifo.v": 355,       # 374
+                "axis_fifo.v": 89,              # 94
+                "axis_gmii_rx.v": 99,           # 105
+                "axis_gmii_tx.v": 67,           # 71
+                "eth_arb_mux.v": 194,           # 205
+                "eth_axis_rx.v": 229,           # 242
+                "eth_axis_tx.v": 249,           # 263
+                "ip_64.v": 52,                  # 55
+                "ip_arb_mux.v": 238,            # 251
+                "ip_eth_rx_64.v": 389,          # 410
+                "ip_eth_tx_64.v": 431,          # 454
+                "udp_checksum_gen_64.v": 137,   # 145
+                "udp_ip_rx_64.v": 295,          # 311
+                "udp_ip_tx_64.v": 384},         # 405
 }
 
 # The AEAD engine's own storage — ChaCha20's block state, Poly1305's
@@ -501,7 +534,13 @@ def live_ff_census(top, netlist):
             continue
         total += 1
         src = c.get("attributes", {}).get("src", "")
-        for f in sorted(set(re.findall(r"([\w.]+\.sv):", src))) or ["(none)"]:
+        # A mapped cell cites its own techmap rule as well as the RTL it
+        # came from, so every cell in the design names cells_map_trellis.v
+        # and it would swamp the census with the total.
+        design_srcs = [part for part in src.split("|")
+                       if "/share/yosys/" not in part]
+        keys = sorted(set(re.findall(r"([\w.-]+\.s?v):", "|".join(design_srcs))))
+        for f in keys or ["(none)"]:
             census[f] = census.get(f, 0) + 1
     return census, total
 

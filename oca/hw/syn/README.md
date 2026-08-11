@@ -1605,12 +1605,23 @@ line, so `run_synth.py oca_top` reproduced it. But a seed is not margin:
 any RTL change reshuffles the placement and the seed has to be found
 again, and there is no reason to expect the next one to exist.
 
-**It did not exist. Amended 2026-08-11.** `54a2df8` connected the raw-IP
-ready pins on `udp_complete_64`, which the board needs -- without them
-one non-UDP frame stops reception for good -- and that made the path
-live where yosys had been folding it away: **+917 TRELLIS_COMB and +400
-TRELLIS_FF, all of the flip-flops in the vendor bucket and none in our
-RTL**, landing around the one path in this design that had no margin.
+**It did not exist, and the reason is worse than a lost seed. Amended
+2026-08-11.** `54a2df8` connected three pins on `udp_complete_64`. Two
+of them, the raw-IP ready pair, fix a wedge the board could not survive
+— one non-UDP frame and reception stops for good — and cost **nothing**:
+built with only those two, the netlist is 16849 flip-flops, exactly what
+it was.
+
+The third, `clear_arp_cache`, is the whole of the **+917 TRELLIS_COMB
+and +400 TRELLIS_FF**, and what it bought is `arp_cache.v` going from
+**0 live flip-flops to 130**. The earlier netlist — the one that closed
+on seed 6 and was packed into a bitstream — had no ARP cache in it at
+all, because an undriven input is not an input reading zero: yosys may
+take it as don't-care and pick the value that simplifies most, here a
+cache held permanently in reset.
+
+So the sweep below is not a regression against 129.87 MHz. It is the
+first sweep of a complete design.
 
 Thirty-two seeds on that netlist, place and route only:
 
@@ -1658,9 +1669,37 @@ and `clk_sys` on 20, and no seed carries all three.
 Seed 10 is recorded in the DESIGNS entry as the best measured, not as
 one that works, and `run_synth.py oca_top` exits 1 and packs nothing.
 
-What would give real margin is still less competition for the fabric
-around the receive path -- the MAC alone closes at 132.98 MHz with 6.4%
-to spare, so the shortfall was never the module. Untried, and the
-obvious next thing: a third vendor patch that discards non-UDP frames
-inside `udp_complete_64` rather than exposing the raw-IP port, which
-would consume the frame without keeping its datapath alive.
+#### Where the failing path is, and what has been ruled out
+
+The receive path's critical path is **entirely inside the MAC's receive
+FIFO** — 23 segments, 8.050 ns, every slow one a hop within
+`u_mac.eth_mac_1g_fifo_inst.rx_fifo.fifo_inst`. It is **64% routing**
+and 30% logic, which says congestion rather than depth.
+
+The same module on its own says so too. Rebuilt on this toolchain,
+`oca_top_mac` — clocking, RGMII and the MAC, no crypto — reaches
+**146.35 MHz** on `rgmii_rx_clk`, 17% clear of the target. The same
+path in the whole design reaches 124.22. Those 22 MHz are what the rest
+of the design costs it by competing for the fabric around it.
+
+Ruled out, each measured rather than assumed:
+
+| lever | result |
+|---|---|
+| 32 placer seeds | `rgmii_rx_clk` clears 125 on none; best 124.22 |
+| `--placer-heap-beta` 0.5, 0.7 | no effect at all, and it cannot have one: `ecp5/arch.cc:655` hard-sets `cfg.beta = 0.75` after the command line is read |
+| `--placer-heap-critexp 4` | placement identical to the baseline — same wirelen 168511, same timing cost 1450, same three Fmax |
+| `--placer-heap-timingweight 35` | applied and worse: 103.25 at seed 10, 108.32 at seed 23 |
+| `--placer-heap-alpha 0.2` | applied and worse: 108.24 |
+| a 50.00 MHz `clk_sys` | reaches 48.22; the PLL rung above 48.0769 does not help |
+| `router2` | diverges on this design (recorded above) |
+
+What is left is architectural, and it is the conclusion the occupancy
+study reached from the other direction: **there is too much logic on
+this device for the receive path to route freely**. One `oca_core` is
+28% of it. Nothing about the MAC, the FIFO depth or the placer settings
+is going to return 22 MHz.
+
+Note for anyone repeating this: `--placer-heap-beta` is documented by
+`--help` and silently discarded by the ECP5 backend, so a sweep over it
+produces a table of identical numbers that looks like a measurement.
