@@ -25,6 +25,7 @@ async def setup(dut):
     dut.rst_n.value = 0
     dut.rx_data.value = 0
     dut.rx_valid.value = 0
+    dut.rx_delivered.value = 0
     dut.frame_error.value = 0
     dut.rx_overflow.value = 0
     dut.tx_ready.value = 1
@@ -100,12 +101,16 @@ async def test_counters_report_what_happened(dut):
 
     await strobe(dut, "frame_error", 3)
     await strobe(dut, "rx_overflow", 2)
-    await command(dut, "p")          # R=1 C=1 after this
+    await strobe(dut, "rx_delivered", 5)
+    await command(dut, "p")
     out.clear()
-    await command(dut, "s")          # R=2 C=2 by the time it answers
+    await command(dut, "s")
 
+    # R counts at the receiver and C at the command, so five delivered
+    # bytes against two commands is exactly the case that would have been
+    # unrepresentable while they were one register.
     line = bytes(out).decode()
-    assert line == "R=0002 E=0003 O=0002 C=0002\n", f"s answered {line!r}"
+    assert line == "R=0005 E=0003 O=0002 C=0002\n", f"s answered {line!r}"
 
 
 @cocotb.test()
@@ -115,6 +120,7 @@ async def test_zero_clears_and_is_not_counted_into_what_it_cleared(dut):
     collect(dut, out)
 
     await strobe(dut, "frame_error", 5)
+    await strobe(dut, "rx_delivered", 1)
     await command(dut, "p")
     out.clear()
     await command(dut, "z")
@@ -123,7 +129,7 @@ async def test_zero_clears_and_is_not_counted_into_what_it_cleared(dut):
     out.clear()
     await command(dut, "s")
     line = bytes(out).decode()
-    assert line == "R=0001 E=0000 O=0000 C=0001\n", (
+    assert line == "R=0000 E=0000 O=0000 C=0001\n", (
         f"after z the counters read {line!r}; the s that reported them is the "
         f"only thing that should be in there")
 
@@ -150,6 +156,39 @@ async def test_counters_saturate_rather_than_wrap(dut):
 
 
 @cocotb.test()
+async def test_events_during_a_z_response_are_not_wiped(dut):
+    """The window that end-of-response zeroing used to open.
+
+    Clearing at the end of the reply meant an error raised while `ok`
+    was going out got counted by one branch and wiped by another in the
+    same always_ff, and the clear won. That is a counted event
+    disappearing in silence, which is the thing this module argues
+    against. Clearing on the accept closes it, and this is what says so.
+    """
+    await setup(dut)
+    out = []
+    collect(dut, out)
+
+    dut.rx_data.value = ord("z")
+    dut.rx_valid.value = 1
+    await RisingEdge(dut.clk)
+    while dut.rx_pop.value != 1:
+        await RisingEdge(dut.clk)
+    dut.rx_valid.value = 0
+    # Now inside the z response: raise events that must survive it.
+    await strobe(dut, "frame_error", 2)
+    await strobe(dut, "rx_delivered", 3)
+    await ClockCycles(dut.clk, 200)
+
+    out.clear()
+    await command(dut, "s")
+    line = bytes(out).decode()
+    assert line == "R=0003 E=0002 O=0000 C=0001\n", (
+        f"events raised during the z response read back as {line!r}; they "
+        f"were counted and then wiped")
+
+
+@cocotb.test()
 async def test_a_full_transmit_side_stalls_without_losing_bytes(dut):
     """tx_ready low must pause the response, not drop part of it."""
     await setup(dut)
@@ -164,7 +203,10 @@ async def test_a_full_transmit_side_stalls_without_losing_bytes(dut):
     assert illegal == [], (
         f"tx_push was raised {len(illegal)} times while tx_ready was low; a "
         f"FIFO would have refused those bytes and the response would be short")
-    assert out == [], "bytes were accepted while tx_ready was low"
+    # `out` is necessarily empty here -- the collector only appends when
+    # tx_ready is high and it has been low throughout -- so asserting on
+    # it would be asserting on the collector. The response arriving whole
+    # after the stall is the observation that can fail.
 
     dut.tx_ready.value = 1
     await ClockCycles(dut.clk, 4)

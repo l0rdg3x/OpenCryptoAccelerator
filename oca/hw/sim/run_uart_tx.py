@@ -34,11 +34,12 @@ SIM_DIR = Path(__file__).resolve().parent
 # "PIN=J17\n", the payload oca_uart_probe's J17 instance carries.
 #
 # A SIZED SystemVerilog LITERAL, not a Python int. Passed as an int the
-# runner writes -GMSG=5786930903936473354 and Verilator takes it as 32
-# bits wide, silently keeping the low half: the transmitter then sends
+# runner writes the value undecorated and Verilator takes it as 32 bits
+# wide, silently keeping the low half: the transmitter then sends
 # "J17\n" preceded by four zero bytes and the testbench catches it. On
 # the board there is no testbench, so this would have named the wrong
-# pin with a straight face.
+# pin with a straight face. (This comment quoted a decimal for the
+# payload until 2026-08-11; the number was not the payload.)
 MSG_J17 = "64'h50494E3D4A31370A"
 
 

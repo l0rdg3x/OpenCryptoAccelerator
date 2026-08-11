@@ -895,13 +895,24 @@ core and never updated as the design grew by 3000 LUTs.
   editor, a length limit and a policy for the limit, and each is a place
   to put a bug into the only channel available for finding bugs. `p`
   answers `OCA`, `?` lists `psz?`, `z` zeroes, anything unknown answers
-  `?`, and `s` gives `R=xxxx E=xxxx O=xxxx C=xxxx`: bytes delivered,
-  frames refused, bytes the input FIFO had no room for, commands run.
+  `?`, and `s` gives `R=xxxx E=xxxx O=xxxx C=xxxx`: bytes the receiver
+  delivered, frames it refused, bytes the input FIFO had no room for,
+  commands run. R is taken at the receiver and C at the command, so
+  `R >= C` and the difference is what the queue holds plus what O
+  refused. They were one register until 2026-08-11, bumped in the same
+  branch, which made them equal for every input and the status line
+  three numbers wearing four labels.
   The counters saturate rather than wrap, since a wrapped counter reads
   like a healthy one. Run 2026-08-11 the board answered every command
   and reported `R=0006 E=0000 O=0000 C=0006` for the six sent, and `pp`
   with no gap produced two complete answers, which is the exact failure
-  `oca_uart_echo` had before the FIFOs existed.
+  `oca_uart_echo` had before the FIFOs existed. **The output FIFO is
+  what fixes it**; the input one is insurance and is not load bearing at
+  this baud, since the console empties a response into the output queue
+  in a few cycles and is free again long before the next byte lands.
+  That figure was measured with R and C sharing a register, so their
+  agreement in it is tautological: what says nothing was lost is
+  `E=0000 O=0000`.
 
   **The receive pin is H18, confirmed the same day** by `oca_uart_echo`:
   eight bytes sent one every 300 ms came back in order and byte exact,

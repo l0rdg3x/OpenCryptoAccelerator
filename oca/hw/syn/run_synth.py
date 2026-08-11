@@ -334,12 +334,18 @@ NETLIST_FF_FLOOR = {
     # 22 for the transmitter, 1 for the top's LED toggle.
     "oca_uart_echo": {"oca_uart_rx.sv": 32, "oca_uart_tx8.sv": 22,
                       "oca_uart_echo.sv": 1},
-    # 81 for the console: four 16-bit counters, the latched command, the
-    # response index and length, and the sending flag. The counters are
-    # the load-bearing part -- they are what the channel reports about
-    # itself, and 64 of the 81 are them.
-    # 33 for the receiver, one more than in oca_uart_echo because rst_n
-    # reaches it here.
+    # 81 for the console. The declared state is 83 bits -- four 16-bit
+    # counters, the latched command, the response index and length, the
+    # sending flag -- and two do not survive the mapper. Which two is not
+    # established: ABC renames everything it touches and the netlist
+    # cannot be read back per signal, so the floor is the measured
+    # figure rather than a decomposition. The load-bearing part is not
+    # in doubt: 64 of the 83 are the counters, which is what the channel
+    # reports about itself.
+    # 33 for the receiver, one more than in oca_uart_echo. NOT because
+    # of a reset: oca_uart_rx has no reset port and no reset branch. The
+    # extra flop is frame_error, which oca_uart_echo leaves unconnected
+    # and yosys therefore drops, and which the console counts.
     #
     # 23 for the FIFO, and that is BOTH instances together: the pointers
     # and the overflow flag only. The storage is not in flops at all --

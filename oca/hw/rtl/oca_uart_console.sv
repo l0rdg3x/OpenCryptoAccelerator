@@ -3,19 +3,29 @@
  * The diagnostic console on the board: UART both ways, a FIFO on each
  * side, and oca_console between them.
  *
- * WHY A FIFO ON EACH SIDE, since the console answers one command at a
- * time. On the receive side, because a byte arriving while a response is
- * going out has nowhere else to wait: that is exactly what oca_uart_echo
- * demonstrated on 2026-08-11, where "OCA" typed at speed came back "OA".
- * On the transmit side, because oca_console produces a byte per cycle
- * when allowed and the transmitter takes ten bit times to move one; with
- * no buffer the console would stall for the whole line, which is
- * harmless here and would not be once it has a subsystem to poll.
+ * WHICH FIFO ACTUALLY FIXES THE ECHO, since only one of them does.
+ *
+ * THE OUTPUT ONE. oca_uart_echo dropped alternate bytes because its
+ * transmitter was still busy when the next byte arrived; here the
+ * console pushes into a buffer and is free again in a few cycles, and
+ * the transmitter drains at its own pace.
+ *
+ * THE INPUT ONE IS INSURANCE AND IS NOT LOAD BEARING TODAY, which this
+ * comment claimed it was until 2026-08-11. The console empties a
+ * response into the output FIFO at about a byte a cycle -- four cycles
+ * for `p`, twenty-eight for `s` -- while bytes arrive every 2170. So
+ * `sending` has fallen long before the next byte lands, and no sequence
+ * a UART can deliver at this baud reaches the input queue at all. It
+ * earns its place when a command's answer outgrows the output FIFO or
+ * takes real time to produce, which is what happens as soon as there is
+ * a subsystem to poll. Until then the honest statement is that the test
+ * suite cannot exercise it through the UART, and does not claim to.
  *
  * DEPTHS. 16 in, 32 out. The output holds the longest response, 28
- * bytes, with room to spare, so a full line never stalls mid-way. The
- * input is sized for a human typing and will overflow under a paste,
- * which is what the O counter is for.
+ * bytes, so a line that starts into an empty FIFO never stalls mid-way;
+ * one that starts while a previous line is still draining can. The
+ * input is sized for a human typing, and O is what says when it was
+ * not enough.
  *
  * RESET. There is no reset pin on this board and no PLL here to lock, so
  * rst_n comes from a small power-on counter: ECP5 flip-flops come out of
@@ -87,6 +97,9 @@ module oca_uart_console (
         .rx_data     (cmd_byte),
         .rx_valid    (cmd_avail),
         .rx_pop      (cmd_pop),
+        // Straight off the receiver, not off the queue, so R counts what
+        // arrived rather than what was consumed.
+        .rx_delivered (rx_valid),
         .frame_error (rx_frame_error),
         .rx_overflow (rx_fifo_overflow),
         .tx_data     (tx_byte),

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Run the FIFO tests under the project-local Verilator.
+"""Run the console command-logic tests under the project-local Verilator.
 
 Exit code is the contract: runner.test() only inspects results.xml under
 pytest and Verilator exits 0 on $finish however the assertions went, so

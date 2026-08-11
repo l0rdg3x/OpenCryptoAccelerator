@@ -115,7 +115,10 @@ async def test_a_byte_arriving_mid_echo_is_dropped_not_spliced(dut):
     await send_frame(dut, 0x42)
     await ClockCycles(dut.clk25, DIV * 24)
 
-    assert out, "nothing was echoed at all"
     assert all(b in (0x41, 0x42) for b in out), (
         f"the echo contains a byte neither end sent: {out}")
-    assert out[0] == 0x41, f"the first byte echoed was {out[0]:#04x}, not 0x41"
+    assert out == [0x41], (
+        f"expected exactly the first byte back, got {[hex(b) for b in out]}. "
+        f"This design drops the second by construction and the whole reason "
+        f"oca_uart_console exists is that it must not; a variant that queues "
+        f"instead returns both and belongs there, not here.")

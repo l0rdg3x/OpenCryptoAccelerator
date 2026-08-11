@@ -23,6 +23,13 @@
  * as O rising. A console that dropped either in silence would be a
  * console whose silence has two meanings.
  *
+ * R and C measure different points on purpose and R >= C always: R is
+ * taken at the receiver, C at the command. They were the same register
+ * until 2026-08-11, incremented in one branch, which made them equal at
+ * every cycle for every input and the difference between them
+ * unreadable. The difference is the interesting part -- it is what the
+ * queue is holding plus what O refused.
+ *
  * COUNTERS SATURATE, they do not wrap. A counter that wraps reads as a
  * small number after a long run and is indistinguishable from a healthy
  * one, which is the failure this whole file exists to avoid. At 0xFFFF
@@ -45,6 +52,16 @@ module oca_console (
     output var logic       rx_pop,
 
     // Events counted but not otherwise acted on.
+    //
+    // rx_delivered is a separate port from rx_valid ON PURPOSE, and the
+    // first version of this module did not have it: R was bumped in the
+    // same branch as C, which made the two provably equal at every
+    // cycle for every input and the status line three numbers wearing
+    // four labels. R is meant to be what the RECEIVER delivered, which
+    // is upstream of the queue, so a byte the input FIFO had no room
+    // for now shows in R and in O and never reaches C. R minus C minus
+    // O is what is still waiting.
+    input  var logic       rx_delivered,
     input  var logic       frame_error,
     input  var logic       rx_overflow,
 
@@ -162,30 +179,41 @@ module oca_console (
             resp_len   <= '0;
             sending    <= 1'b0;
         end else begin
-            if (frame_error) err_count <= bump(err_count);
-            if (rx_overflow) ovf_count <= bump(ovf_count);
+            if (rx_delivered) rx_count  <= bump(rx_count);
+            if (frame_error)  err_count <= bump(err_count);
+            if (rx_overflow)  ovf_count <= bump(ovf_count);
 
             if (!sending) begin
                 if (rx_valid) begin
-                    rx_count   <= bump(rx_count);
                     cmd_count  <= bump(cmd_count);
                     command    <= rx_data;
                     resp_index <= '0;
                     resp_len   <= resp_length(rx_data);
                     sending    <= 1'b1;
-                end
-            end else if (tx_ready) begin
-                if (resp_index == resp_len - 5'd1) begin
-                    sending <= 1'b0;
-                    // Zeroing happens at the END of the response, so the
-                    // reply to `z` is not itself counted into the numbers
-                    // it just cleared and `s` straight after reads C=0001.
-                    if (command == "z") begin
+                    // Zeroing happens HERE, on the accept, and not at the
+                    // end of the response. Ending it there left a window
+                    // the length of the reply in which a frame_error or
+                    // an overflow was counted by the branch above and
+                    // then wiped by the clear, silently: the two are
+                    // non-blocking assignments to one register in one
+                    // always_ff and the later wins. Clearing on the
+                    // accept means everything from the next cycle counts,
+                    // and the only event that can be lost is one in the
+                    // same cycle as the z itself, which is the cycle the
+                    // operator asked to be the new zero.
+                    //
+                    // These override the bumps above by being later, so
+                    // the z is not counted into what it just cleared.
+                    if (rx_data == "z") begin
                         rx_count  <= '0;
                         err_count <= '0;
                         ovf_count <= '0;
                         cmd_count <= '0;
                     end
+                end
+            end else if (tx_ready) begin
+                if (resp_index == resp_len - 5'd1) begin
+                    sending <= 1'b0;
                 end else begin
                     resp_index <= resp_index + 5'd1;
                 end
