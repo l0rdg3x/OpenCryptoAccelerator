@@ -115,6 +115,13 @@ DESIGNS = {
         sv=["oca_blink.sv"],
         lpf="colorlight_i9_blink.lpf",
     ),
+    # Bring-up step 3. oca_clkrst as the real design instantiates it, and
+    # a counter sized to turn 125 MHz into a 1 Hz blink, so the reading
+    # is a frequency a stopwatch can check rather than a lock flag.
+    "oca_pll": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_pll.sv"],
+        lpf="colorlight_i9_pll.lpf",
+    ),
     # oca_blink plus four bank 6 pins held at fixed levels, so a meter on
     # the header reads VCCIO6 off a driven pad instead of off a capacitor
     # nobody can identify. Its own .lpf for the same reason as above.
@@ -280,6 +287,19 @@ NETLIST_FF_FLOOR = {
     # being the 25 MHz we think it is. That reading is the entire purpose
     # of the step, so the thing it depends on is checked.
     "oca_blink": {"oca_blink.sv": 25},
+    # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
+    # it wraps at 33.5 M and the LED runs at 1.86 Hz instead of 1.00, and
+    # a rate nobody can predict to three digits is a rate no stopwatch
+    # can hold the PLL to. 26 counter, 1 toggle, 23 for the clk25 beat
+    # that reports a PLL which never locked.
+    # oca_clkrst contributes 2, not the thirty-odd it holds: oca_pll
+    # consumes pll_locked and rst_n_tx and nothing else, so the PHY reset
+    # timer and the sys and rx synchronisers are optimised away. Those
+    # belong to step 4. The 2 that remain are the tx reset synchroniser,
+    # and they are worth a floor of their own: if rst_n_tx ever came out
+    # constant high the tx counter would run before lock, and the three
+    # readings this design exists to separate would collapse into two.
+    "oca_pll": {"oca_pll.sv": 50, "oca_clkrst.sv": 2},
     # 27 bits, two more than oca_blink, because led_n has to alternate
     # slowly enough for a meter to settle on each level: bit 26 gives
     # 2.684 s per state. Two bits short and it is 0.67 s, which a digital
@@ -389,6 +409,11 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}
 # pinned designs, because all three carry one oca_rgmii and one
 # oca_clkrst.
 NETLIST_PRIM_COUNT = {
+    # Bring-up step 3 carries the PLL and nothing else physical: no DDR
+    # register and no delay, because it touches no RGMII pad. The entry
+    # exists mainly to reach check_pll, which is called from here and
+    # cannot run for a top this table does not list.
+    "oca_pll": {"EHXPLLL": 1},
     "oca_top": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
                 "DELAYF": 5, "DELAYG": 6},
     "oca_top_mac": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
@@ -413,6 +438,14 @@ NETLIST_PRIM_COUNT = {
 # quietly making every Gbps figure in the documents wrong.
 PLL_INPUT_HZ = 25_000_000
 NETLIST_PLL_PARAMS = {
+    # Bring-up step 3 checks the same four, and it is the one build where
+    # they carry a bench consequence rather than a synthesis one. The
+    # LED measures CLKOP at 125 MHz to stopwatch precision, which fixes
+    # the VCO at 625 MHz; CLKOS is that same VCO over CLKOS_DIV, so a
+    # checked 13 here is what makes 48.0769 MHz a conclusion rather than
+    # an untested second output nothing in this design consumes.
+    "oca_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                "CLKOS_DIV": 13},
     "oca_top": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                 "CLKOS_DIV": 13},
     "oca_top_mac": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
@@ -630,6 +663,16 @@ def check_prims(top, netlist):
     """
     want = NETLIST_PRIM_COUNT.get(top)
     if not want:
+        # Silence here would have been indistinguishable from a pass, and
+        # was: oca_pll built once with no entry in this table, so its PLL
+        # parameters went unchecked and check_pll never ran at all, since
+        # this is the only place that calls it. The flip-flop census says
+        # so when it has no floor; this now says so too.
+        print(f"WARNING: {top} has no NETLIST_PRIM_COUNT entry — this run "
+              f"checked no physical-interface primitive and did not check "
+              f"the PLL parameters either, since check_pll is reached only "
+              f"from here. Not fatal: add an entry once this top carries a "
+              f"PLL, a DDR register or a delay.", file=sys.stderr)
         return 0
     cells = json.loads(netlist.read_text())["modules"][top]["cells"]
     have = {}
