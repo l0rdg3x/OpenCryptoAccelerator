@@ -13,35 +13,40 @@ bitstream that does not work.
 step that "seems fine" and is not becomes a symptom three steps later,
 where it looks like something else entirely.
 
-## Before the RGMII pins are driven
+## Bank 6, and why it still matters
+
+**Bank 6 is at 3.3 V**, 3.28 V read on a driven pad on 2026-08-11, so
+`LVCMOS33` throughout `colorlight_i9.lpf` is right. The step that made
+this urgent is retired with the Ethernet route, so what is left here is
+a measured fact and a method, not a gate on anything.
+
+Keep it for two reasons. Bank 6 carries the LED and the 25 MHz clock,
+which every design here still uses, so the rail is not academic. And the
+method generalises: it is how to read ANY bank's VCCIO on a board whose
+regulators you cannot identify, and banks 2 and 7 -- where the console's
+UART lives -- are still unmeasured.
 
 This section used to be called "Before power" and used to be first,
 which stopped describing it once the measurement became a bitstream:
-what follows needs the board powered and an FPGA configured, so it
-happens after step 1 and can happen after step 2. It stays at the top
-because it gates step 4, and step 4 is where a wrong answer is silent.
+what follows needs the board powered and an FPGA configured.
 
-**Measure bank 6's VCCIO before the RGMII pins are ever driven.**
-Measured on this board 2026-08-11 and it is **3.3 V** (3.28 V read on a
-driven pad), so `LVCMOS33` throughout `colorlight_i9.lpf` is right and
-what follows in this section is why it mattered, not an open item.
-
-What it is not is a damage risk, and this paragraph said it was until
+What it was never is a damage risk, and this paragraph said it was until
 2026-08-11. An output pad is powered from its own bank rail and cannot
 be made to exceed it by a line of text; what a wrong rail costs is a
 build error in one direction and receiver margin in the other. Both are
 below, and the second is the one worth the meter.
 
-Ethernet port 0 and the LED share **bank 6**; port 1 is entirely in
-**bank 3**. Our two sources for this board contradict each other exactly
-on the LED's standard (the vendor's `blink.lpf` says `LVCMOS25`, litex
-says the RGMII pins are `LVCMOS33`), and nextpnr enforces one VCCIO per
-bank across outputs, so the wrong combination is a fatal build error.
+**Why it mattered, kept because the shape recurs.** Bank 6 carried the
+LED and, on the retired route, Ethernet port 0. Two sources contradicted
+each other on the LED's standard (the vendor's `blink.lpf` says
+`LVCMOS25`, litex says `LVCMOS33`), and nextpnr enforces one VCCIO per
+bank across outputs, so the wrong pair is a fatal build error.
 
-The corollary is worse and silent: **an input declared at the wrong
-voltage produces no diagnostic at all**. RGMII receive pins declared
-`LVCMOS33` in a bank actually at 2.5 V will synthesise, place, route and
-program without a word. That is the case the measurement ruled out.
+The corollary is worse and silent, and it is the part worth carrying to
+any future bank: **an input declared at the wrong voltage produces no
+diagnostic at all**. It will synthesise, place, route and program
+without a word, and show up as a link that comes up and drops packets --
+or, on a slow interface, as nothing at all until the day it matters.
 
 **How it was measured, since the rail is a plane inside the module and
 no capacitor on it is identifiable from anything we hold.** An LVCMOS
@@ -212,59 +217,33 @@ There is no 90-degree copy to build: this step asked for one until
 2026-08-09, and `oca_rgmii.sv` makes the transmit clock from an
 `ODDRX1F` fed by a constant edge pair instead.
 
-## 4. RGMII, and the delay sweep
+## 4 and 5, which were RGMII and traffic — RETIRED 2026-08-12
 
-This is the step with an unknown in it, and the unknown is a number.
+**Do not do these. There is nothing to plug a cable into.** The i9 v7.2
+carries both B50612D PHYs on the module and routes their MDI pairs to
+the SO-DIMM edge, but the RJ45 sockets and the magnetics live on a
+carrier no kit sold with this module includes. And the die is an LFE5U,
+with no SERDES, so this part can never be the PCIe platform either: it
+is a vehicle for proving the core on silicon, not a prototype of the
+product.
 
-**Our static timing analysis cannot check this path.** prjtrellis's
-timing database contains no characterisation of `DELAYG` or `DELAYF` at
-all, so nextpnr's report says nothing useful about it. The value is
-empirical and must be found at the bench.
+The host interface is the board's USB serial, which `SPEC.md` PHASE 2
+allowed from the start. It is on **J17 (tx) and H18 (rx)**, 115200 8N1,
+appearing as `/dev/ttyACM0` once `cdc_acm` is loaded. `oca_uart_console`
+is the design that uses it.
 
-Start where the field is: **RX 2 ns (80 taps at LiteEth's 25 ps per
-tap), TX 0**. Then sweep the RX delay and find the window where the link
-is stable, rather than accepting the first value that brings the link
-up. A link that works at exactly one tap is a link that will fail on a
-warm day.
-
-Two traps: `DEL_VALUE` is a 7-bit field, so **128 wraps silently to 0**;
-and the 25 ps per tap is LiteEth's empirical constant, not a Lattice
-figure, so the tap count that corresponds to 2 ns may not be 80.
-
-Also unverified: whether the B50612D applies an internal delay by
-default. Its datasheet is a scanned image. If the PHY delays and we
-delay too, the link will not come up and nothing in the FPGA will say
-why.
-
-**Before sweeping, decide whether a sweep can help at all.** Our delay
-is on the data lines and not on the clock, which is LiteEth's
-arrangement and is right by their precedent rather than by geometry: the
-two choices sit one unit interval apart, so they disagree about which
-nibble the `IDDRX1F` captures on the rising edge. If that alignment is
-wrong, no tap value repairs it. 0 to 127 taps span about 3.2 ns, under
-one 4 ns UI, and in the wrong direction.
-
-The tell is `link_up`. With a one-UI error it decodes the falling
-in-band nibble, which RGMII holds at 0000 between frames. **`link_up`
-reading 0 while the PHY's own link LED is lit means nibble alignment,
-not tap count**, and the fix is to invert the `SCLK` into the `IDDRX1F`
-or move the delay onto `RXC`, not to keep sweeping.
-
-## 5. Traffic
-
-Only now: a frame in, a frame out, at the MAC level before the UDP
-stack. Then the stack. Then a real OCA command through `proto_model.py`.
-
-**Wire the drop counters to something visible before running traffic**,
-not after. The MAC's receive FIFO defaults to dropping oversized frames,
-bad frames and frames arriving when full, and the receive path has no
-back pressure. If our side stalls, frames vanish with no indication.
-Reading `rx_fifo_overflow`, `rx_fifo_bad_frame` and `rx_error_bad_fcs`
-is the difference between "it does not work" and knowing why.
+What those two steps used to say is not lost: the delay-sweep reasoning,
+the DELAYF characterisation gap, the nibble-alignment tell and the drop
+counters are all in `docs/design/2026-08-05-ethernet-integration.md`,
+which is marked closed and kept as history. Read it if the route ever
+reopens on different hardware; do not work from it here.
 
 ## Recording what you find
 
-Every number found at the bench goes back into
-`docs/design/2026-08-05-ethernet-integration.md` section 9, which lists
-these as open. A value discovered and not written down will be
-rediscovered.
+Every number found at the bench goes into `AGENTS.md`, beside the step
+that produced it, with what it does NOT establish stated next to it. A
+value discovered and not written down will be rediscovered; a value
+written down without its limits will be trusted further than it earns.
+
+It used to say these went to section 9 of the Ethernet design document.
+That document is closed, and nothing new belongs in it.

@@ -1,4 +1,14 @@
-# verilog-ethernet patches
+# verilog-ethernet patches — RETIRED 2026-08-12
+
+**The Ethernet route is closed and this file is history.** The
+Colorlight i9 v7.2 carries both B50612D PHYs on the module and routes
+their MDI pairs to the SO-DIMM edge, but the RJ45 sockets and the
+magnetics are on a carrier no kit sold with the module includes: there
+is nothing to plug a cable into. See `SPEC.md`, PHASE 2. Nothing below
+is work to do. It is kept because both patches were measured, because
+the code they patch is still in the tree, and because the second one
+carries a before/after table of what moving a comparison off a critical
+path bought.
 
 Local patches to the pinned `verilog-ethernet` submodule. The submodule
 itself is never edited: `../vendor_patches.py` extracts the pinned commit
@@ -78,8 +88,8 @@ What must not move, and how each is checked in
 The MII path is held to the same rule: `gmii_rxd_d5` shifts inside
 `if (mii_odd)` with the rest of the delay line, so it stays in step with
 a state machine that only advances on odd cycles. That path is not
-exercised by any test here — this project runs the port at gigabit and
-ties `mii_select` low — and it is reasoned, not measured.
+exercised by any test here — this project ran the port at gigabit and
+tied `mii_select` low — and it is reasoned, not measured.
 
 ### What it measured, on `oca_top`, seed 1, LFE5U-45F-6BG381C
 
@@ -98,8 +108,9 @@ CRC at all: it is the receive frame FIFO's commit loop, from
 `m_axis_tlast` into `wr_ptr_sync_commit_reg` — 2.43 ns of logic and
 6.20 ns of routing, spread over three placement columns. 125 MHz needs
 8.00 ns, so what is left is a 7.4% shortfall in `axis_async_fifo`'s
-frame-drop path, routing-dominated, and it wants a different lever from
-the one this patch was.
+frame-drop path, routing-dominated. No further lever was tried on it:
+the route was retired on 2026-08-12 for want of a socket, not for want
+of that 7.4%.
 
 **`clk_tx` regressed and now fails by 0.25%.** Its critical path is
 entirely inside `axis_gmii_tx` — `frame_ptr_reg` through `frame_reg` to

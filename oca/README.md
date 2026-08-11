@@ -63,9 +63,9 @@
   and no plaintext at all.
 - `hw/rtl/oca_core.sv` — wiring only: the two packet buffers, the key
   store, the protocol FSM and the AEAD engine behind a pair of 64-bit
-  AXI-Stream ports with `tkeep`. This is the module the Ethernet
-  integration will instantiate; the conversion to the 8 bits
-  `verilog-ethernet` hands over belongs outside it, at the MAC boundary.
+  AXI-Stream ports with `tkeep`. It knows nothing of any transport, and
+  any width conversion belongs outside it. That boundary is why retiring
+  the Ethernet route on 2026-08-12 cost nothing in this list.
 - `hw/sim/chacha20_model.py` — ChaCha20 reference model (plain integer
   arithmetic from RFC 8439 2.3), the oracle for the randomised tests.
 - `hw/sim/test_chacha20.py` — cocotb testbench; vectors parsed from the
@@ -151,13 +151,19 @@ Python 3.14).
 .venv/bin/python hw/sim/run_oca_core.py
 .venv/bin/python hw/sim/run_attack.py
 .venv/bin/python hw/sim/run_clkrst.py
-.venv/bin/python hw/sim/run_rgmii.py
-.venv/bin/python hw/sim/run_eth_mac.py         # needs `python hw/vendor/vendor_patches.py build`
-.venv/bin/python hw/sim/run_udp_seam.py
-.venv/bin/python hw/sim/run_oca_path.py        # the whole path, frame in to frame out
 .venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
 cd hw/sim && ../../.venv/bin/python test_proto_model.py
+```
+
+Four suites belong to the Ethernet route retired on 2026-08-12. The code
+is still in the tree and they still pass; nothing new is built on them:
+
+```sh
+.venv/bin/python hw/sim/run_rgmii.py
+.venv/bin/python hw/sim/run_eth_mac.py         # needs `python hw/vendor/vendor_patches.py build`
+.venv/bin/python hw/sim/run_udp_seam.py
+.venv/bin/python hw/sim/run_oca_path.py        # frame in to frame out
 ```
 
 `run_attack.py` drives the same DUT as `run_oca_core.py` but is written
@@ -207,8 +213,9 @@ full-width masking stages becoming one quarter-width one. Three engines
 now take 50.3% of an LFE5U-45F's LUTs instead of 68.7%. That does **not**
 buy a fourth engine — 4 x 20 = 80 multipliers against the device's 72,
 unchanged by this pass — and it does not buy throughput; what it buys is
-headroom for the GbE MAC, packet buffering and top-level glue that do not
-exist yet, none of which is in these out-of-context numbers. Fmax is not
+headroom for the port logic, packet buffering and top-level glue that did
+not exist when it was measured, none of which is in these out-of-context
+numbers. Fmax is not
 claimed either: over four placer seeds the engine means 50.72 -> 52.83
 MHz while the standalone core shows no effect at all, and the critical
 path is structurally the same quarter round it was.
@@ -219,7 +226,10 @@ two `oca_core` route at 22313 LUTs (50.9%), 40 multipliers (55.6%) and
 49.28 MHz, while three take 33484 LUTs (76.4%) and 60 multipliers
 (83.3%) — both under budget — and **never route**, with roughly 50000
 arcs left unrouted whether the constraint is 100, 45, 40 or 35 MHz. It
-is congestion, not timing. What two engines are worth depends on how
+is congestion, not timing. **Every port and line-rate figure from here
+to the end of this passage belongs to the Ethernet route, retired
+2026-08-12; they are kept as measurements, not as a target.** What two
+engines are worth depends on how
 they are wired to the ports, and `oca_dual` gives each core its own
 AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
 56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
@@ -236,13 +246,13 @@ occupancy study"). **Amended 2026-08-09: whether two ports fit was still
 open here, and it is settled — they do not.** One GbE port costs 8422
 LUTs measured (19.2% of the device), so two cores with two ports would
 take 94.5%, and two cores behind one port 75.3% against the 76.4% at
-which this device stopped routing above. The configuration that fits the
-current RTL is **one core on one port, 0.581 Gbps at MTU** — one core
+which this device stopped routing above. The configuration that fitted
+the RTL was **one core on one port, 0.581 Gbps at MTU** — one core
 alone means the single core's own 49.91 MHz mean, not the pair's. That
 clock was measured on the core placed **alone and out of context**: no
 MAC beside it, no IO, no PLL, so it is the ceiling that configuration
-could reach rather than a measurement of it. **That netlist has since
-been built**: `oca_top` is one core and one port against the real pin
+could reach rather than a measurement of it. **That netlist was
+built**: `oca_top` is one core and one port against the real pin
 map, 18719 LUTs — 42.7%, not the 47.3% the sum predicted, because the
 sum counts twice the logic the optimiser shares. **And it does not run
 at 0.581 Gbps**, because it cannot run at 49.91 MHz: `oca_clkrst`
@@ -250,19 +260,25 @@ delivers `clk_sys` at 625/13 = **48.0769 MHz**, and the next frequency
 this PLL can offer, 50.00, has been built and does not close. At the
 clock it gets, the same cycle model gives **0.560 Gbps at MTU**.
 
-**But no build closes timing today.** Connecting the raw-IP ready pins
+**No build of it ever closed timing, and the route is retired as of
+2026-08-12** -- for want of an RJ45 socket on this board, not for want
+of a clock. Connecting the raw-IP ready pins
 on the UDP stack — required, or one non-UDP frame stops reception for
 good — came with a third connection, `clear_arp_cache`, that brought
 back 881 LUTs and 400 flip-flops of ARP logic yosys had been deleting,
 around the receive path, and
-across 32 placer seeds `rgmii_rx_clk` clears its 125 MHz on none of
+across 32 placer seeds `rgmii_rx_clk` cleared its 125 MHz on none of
 them, the best reaching 124.22. `AGENTS.md` carries the sweep and what
-has been ruled out. The two-port figures above stand as a cycle budget,
-not a configuration the board carries.
+was ruled out. Every port figure above is a cycle budget for a
+configuration the board never carried; the host interface is the
+DAPLink USB serial on J17/H18 (`SPEC.md`, PHASE 2).
 
 **The host protocol is implemented and verified**
-(`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD
-operation, a payload out, with no Ethernet in the simulation. Its
+(`docs/design/2026-08-03-host-protocol.md`): a request payload in, an
+AEAD operation, a payload out, with no transport in the simulation. The
+document says "UDP payload" throughout because that is what carried it
+when it was written; `oca_core` takes a 64-bit AXI-Stream and the words
+are interchangeable here. Its
 datapath is **64 bits end to end inside `oca_core`**, which is the sixth
 rework and the one that made the protocol layer stop being the limit.
 
@@ -310,8 +326,11 @@ and overlapping four packet stages across successive commands took it to
 the engine's own cost, so the protocol layer now adds nothing on top of
 it, and that is the floor until the engine changes.
 
-**What that is worth end to end is a projection, not a measurement.** At
-1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit pair,
+**What that is worth end to end is a projection, not a measurement, and
+the ports it divides across were retired on 2026-08-12** for want of an
+RJ45 socket on this board. The figures stay as measured cycle budgets.
+At 1.6 bytes per cycle and the 48.53 MHz measured for the last 64-bit
+pair,
 two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
 added together, and `oca_dual` wires them to two ports, one core each.
 One port therefore sees one core, **0.569 Gbps at a 1500-byte MTU** on
@@ -329,22 +348,25 @@ been placed and routed, on four seeds with every seed routing** —
 `AGENTS.md` carries what they measure, and it is deliberately not
 repeated here. **None of this has run on silicon.**
 
-**The Ethernet integration is merged**, designed in
-`docs/design/2026-08-05-ethernet-integration.md`: `verilog-ethernet`
-(MIT) as a submodule, the RGMII front end written by us around the ECP5
-DDR primitives, PLL, reset, the Colorlight i9 pin constraints, the seam
-onto `oca_core`, and `oca_top` placed, routed, timing-closed and packed
-into a bitstream. The 8-to-64-bit width conversion is not in our clock
+**The Ethernet integration was merged and is now retired**
+(2026-08-12), designed in
+`docs/design/2026-08-05-ethernet-integration.md`, which carries a closed
+header: `verilog-ethernet` (MIT) as a submodule, the RGMII front end
+written by us around the ECP5 DDR primitives, PLL, reset, the Colorlight
+i9 pin constraints, the seam onto `oca_core`, and `oca_top` placed and
+routed. Complete, it never closed timing, and no bitstream of it
+survives. What it established stays. The 8-to-64-bit width conversion is
+not in our clock
 domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
-is meant to feed, so it happens on the 125 MHz side inside
+was meant to feed, so it happens on the 125 MHz side inside
 `eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64` — not
 `eth_mac_1g_rgmii_fifo`, which embeds the `rgmii_phy_if` that has no
 ECP5 target. Upstream has no testbench for that configuration, so it
 has one of ours (`run_eth_mac.py`), beside one for the RGMII wrapper
 and one for the seam. **The whole path from a synthetic frame back out
 to one has `run_oca_path.py`** — 7 tests, and the first run of it found
-`oca_top` wedging its own receive path on any frame that is not UDP.
-Next is bring-up on the board.
+`oca_top` wedging its own receive path on any frame that is not UDP --
+found on the first run, which is what a whole-path testbench is for.
 
 ## Phase 1: abstract API + software backend
 
