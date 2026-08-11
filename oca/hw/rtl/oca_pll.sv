@@ -3,9 +3,14 @@
  * Bring-up step 3: the PLL, and whether its output is the frequency the
  * whole design is constrained against.
  *
- * oca_clkrst is instantiated with the same port connections the real top
- * uses, so the PLL under test is the one later steps depend on rather
- * than a copy of it. Most of the module is not under test all the same:
+ * oca_clkrst is the real module rather than a copy, so the PLL under
+ * test is the one later steps depend on. Two of its connections are NOT
+ * the top's, and one of them matters: ext_rst_n is tied high here where
+ * oca_top and oca_top_stub drive it from their power-on-reset counter,
+ * so arst_n is pll_locked alone instead of por_n && pll_locked, and the
+ * reset release path exercised here is not quite theirs. clk_rx is tied
+ * to clk25 where they pass gmii_rx_clk, which reaches nothing this
+ * design consumes. Most of the module is not under test either:
  * this design consumes pll_locked and rst_n_tx and nothing else, so the
  * PHY reset timer and the sys and rx synchronisers are optimised out and
  * only two flip-flops of oca_clkrst survive. Those two are the tx reset

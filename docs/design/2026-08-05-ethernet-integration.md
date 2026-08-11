@@ -421,14 +421,15 @@ Listed so that nobody mistakes the design for a validated one.
    available as a scanned PDF we could not extract text from, so whether
    the PHY applies an internal delay by default is unknown. If it does,
    ours must not.
-4. **Whether the i9 inherits the i5 pinout faithfully.** Three points of
-   it are now verified on i9 silicon and the rest is not. `L2` drives
-   the LED and is active low, and `P3` carries a 25 MHz clock, both from
-   bring-up step 2; and of the eight bank 6 balls `oca_vccio` drives,
-   two reach the carrier's P4, so the connector map is not wholesale
-   wrong. Which two is unknown, and none of this reaches the twelve
-   RGMII pins, which are the ones that matter and which only traffic
-   will settle.
+4. **Whether the i9 inherits the i5 pinout faithfully.** Parts of it are
+   now verified on i9 silicon and the rest is not. `L2` drives the LED
+   and is active low, from bring-up step 2; `P3` carries a clock at
+   roughly the expected rate, bounded by eye only, since no period has
+   been timed at any step. And the connector map holds where it has been
+   tested: of the eight bank 6 balls `oca_vccio` drives, exactly the two
+   that `colorlight_i5.py` places on P4, `F1` and `K4`, are the two that
+   appeared there. None of this reaches the twelve RGMII pins, which are
+   the ones that matter and which only traffic will settle.
 5. **The JTAG pin identities**, and whether the flash arrives write
    protected.
 

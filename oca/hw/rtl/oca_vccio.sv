@@ -14,29 +14,37 @@
  * 0603 pair a slipped probe can bridge, and the operator asked for a
  * target that cannot be shorted. Header holes cannot.
  *
- * WHICH HOLE, AND HOW IT SAYS SO ITSELF. Nothing on the carrier maps its
- * six connectors onto litex's pmod names, so the pins have to announce
- * themselves rather than be looked up. Every probe here toggles in step
- * with D2 and in the phase that makes the LED the indicator: probe high
- * exactly when D2 is lit. An operator walks the holes with a meter and
- * watches for a reading that swings in time with a light they can see.
- * Nothing undriven does that, at that period, in that phase.
+ * WHICH HOLE. colorlight_i5.py names the physical connector above each
+ * pmod pair: pmodc and pmodd on P2, pmodg and pmodh on P4, pmodi and
+ * pmodj on P5, pmodk and pmodl on P6. This comment claimed that mapping
+ * was undocumented until 2026-08-11, which was an artefact of the grep
+ * that read the file: it captured the tuples and discarded the comment
+ * lines between them.
+ *
+ * The probes toggle in step with D2 all the same, and it is still worth
+ * it. A documented mapping fixes the connector; it does not say which
+ * physical hole in a 2x13 header is a given pmod index, and nothing here
+ * documents that. A reading that swings in time with a light the
+ * operator can see identifies the hole itself, at the cost of nothing.
  *
  * beat[26] toggles every 2^26 cycles, which at 25 MHz is 2.684 s in each
  * state and 5.369 s round trip: long enough for a digital meter to
  * settle twice without hurry.
  *
- * EIGHT PROBES, ACROSS FOUR CONNECTORS. prjtrellis's iodb.json gives
- * bank 6 as 33 balls on CABGA381 and colorlight_i9.lpf constrains
- * seventeen. Of the sixteen left, litex-boards' colorlight_i5.py routes
- * eight to headers, and they are spread over pmodg, pmodh, pmodk and
- * pmodl rather than gathered on one, which is the point: the more
- * connectors carry a swinging pin, the sooner the walk ends.
+ * EIGHT PROBES, ON TWO CONNECTORS. prjtrellis's iodb.json gives bank 6
+ * as 33 balls on CABGA381 and colorlight_i9.lpf constrains seventeen. Of
+ * the sixteen left, colorlight_i5.py routes NINE to headers; eight are
+ * probed here and the ninth is K5, held out below. They land on two
+ * carrier connectors, not four, because pmodg and pmodh share P4 and
+ * pmodk and pmodl share P6:
  *
- *   F1 = pmodg 2    K4 = pmodh 6    M4 = pmodk 1    M1 = pmodl 3
- *                                   L5 = pmodk 2    N2 = pmodl 7
- *                                   N4 = pmodk 4
- *                                   L4 = pmodk 5
+ *   P4                    P6
+ *   F1 = pmodg 2          M4 = pmodk 1    N4 = pmodk 4    M1 = pmodl 3
+ *   K4 = pmodh 6          L5 = pmodk 2    L4 = pmodk 5    N2 = pmodl 7
+ *
+ * Which makes the bench result read all the way back: two probes were
+ * found swinging on P4, and F1 and K4 are the only two of the eight that
+ * P4 carries.
  *
  * K5 is bank 6, free, and on pmodh, and is deliberately not among them:
  * it is VREF1_6, the bank's own reference input.

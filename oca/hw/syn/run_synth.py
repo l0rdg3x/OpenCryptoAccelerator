@@ -105,8 +105,10 @@ DESIGNS = {
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
-    # Bring-up step 2, and the only design here whose purpose is to be
-    # loaded rather than measured. Its own .lpf, not the seventeen-pin
+    # Bring-up step 2, and the first design here whose purpose is to be
+    # loaded rather than measured. It said "only" until 2026-08-11, and
+    # oca_vccio and oca_pll were added to the same list afterwards.
+    # Its own .lpf, not the seventeen-pin
     # one: a design is required to constrain every IO it has, but an
     # .lpf naming pins the design does not have is skipped without a
     # word, so building this against colorlight_i9.lpf would pass while
@@ -122,9 +124,13 @@ DESIGNS = {
         sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_pll.sv"],
         lpf="colorlight_i9_pll.lpf",
     ),
-    # oca_blink plus four bank 6 pins held at fixed levels, so a meter on
-    # the header reads VCCIO6 off a driven pad instead of off a capacitor
-    # nobody can identify. Its own .lpf for the same reason as above.
+    # Eight free bank 6 pins toggling in step with D2, so a meter on a
+    # header hole reads VCCIO6 off a driven pad instead of off a
+    # capacitor nobody can identify, and a reading that swings with a
+    # visible light identifies which hole. Its own .lpf for the reason
+    # above. This entry described four pins at fixed levels until
+    # 2026-08-11, which was the design before the probes were made to
+    # announce themselves.
     "oca_vccio": Design(
         sv=["oca_vccio.sv"],
         lpf="colorlight_i9_vccio.lpf",
@@ -288,10 +294,14 @@ NETLIST_FF_FLOOR = {
     # of the step, so the thing it depends on is checked.
     "oca_blink": {"oca_blink.sv": 25},
     # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
-    # it wraps at 33.5 M and the LED runs at 1.86 Hz instead of 1.00, and
-    # a rate nobody can predict to three digits is a rate no stopwatch
-    # can hold the PLL to. 26 counter, 1 toggle, 23 for the clk25 beat
-    # that reports a PLL which never locked.
+    # bits that compare is unreachable and therefore constant false, so
+    # tx_beat never toggles and yosys folds the counter and the toggle
+    # out together: the census drops to 23, not 49, and the LED sits
+    # static while the PLL is locked. Static is the reading this design
+    # reserves for no bitstream and no clock, so the failure would not
+    # merely be a wrong rate, it would be the wrong diagnosis. 26
+    # counter, 1 toggle, 23 for the clk25 beat that reports a PLL which
+    # never locked.
     # oca_clkrst contributes 2, not the thirty-odd it holds: oca_pll
     # consumes pll_locked and rst_n_tx and nothing else, so the PHY reset
     # timer and the sys and rx synchronisers are optimised away. Those
@@ -623,6 +633,16 @@ def check_pll(top, params):
     """
     want = NETLIST_PLL_PARAMS.get(top)
     if not want:
+        # The same silent skip that was removed from check_prims, one
+        # level down: a top listed there but not here reaches this
+        # function with a real EHXPLLL in hand and returns ok without
+        # looking at it. No top is in that state today, which is exactly
+        # when a hole is cheap to close.
+        if params is not None:
+            print(f"WARNING: {top} has an EHXPLLL in its netlist and no "
+                  f"NETLIST_PLL_PARAMS entry — its dividers, and therefore "
+                  f"every clock derived from them, went unchecked.",
+                  file=sys.stderr)
         return 0
     if params is None:
         print("\nPLL: no EHXPLLL in the netlist", file=sys.stderr)

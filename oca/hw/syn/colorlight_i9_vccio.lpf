@@ -10,15 +10,17 @@
 # The eight probes are bank 6 balls colorlight_i9.lpf does not use, read
 # out of prjtrellis's iodb.json for LFE5U-45F / CABGA381 (bank 6 is 33
 # balls, seventeen of them already constrained there) and cross-checked
-# against litex-boards' colorlight_i5.py, which routes these eight to
-# headers across four different connectors:
+# against litex-boards' colorlight_i5.py, which routes nine of the
+# sixteen free ones to headers. Eight are probed; they sit on TWO
+# carrier connectors, because that file names the physical header above
+# each pmod pair and pmodg/pmodh are both P4, pmodk/pmodl both P6:
 #
-#   F1 = pmodg 2      M4 = pmodk 1      M1 = pmodl 3
-#   K4 = pmodh 6      L5 = pmodk 2      N2 = pmodl 7
-#                     N4 = pmodk 4
-#                     L4 = pmodk 5
+#   P4                     P6
+#   F1 = pmodg 2           M4 = pmodk 1     N4 = pmodk 4
+#   K4 = pmodh 6           L5 = pmodk 2     L4 = pmodk 5
+#                          M1 = pmodl 3     N2 = pmodl 7
 #
-# K5 is bank 6, free, and on pmodh, and is left alone: it is VREF1_6.
+# The ninth is K5, pmodh index 3, and it is left alone: it is VREF1_6.
 #
 # Ten constraints against ten ports, which is the check. A stale LOCATE
 # here is skipped in silence (ecp5/lpf.cc:144), but the port it stopped

@@ -841,16 +841,21 @@ core and never updated as the design grew by 3000 LUTs.
   renaming a LOCATE and watching the build stop. It is one eighth on and
   seven eighths off so that the duty cycle settles the LED polarity,
   which a symmetric blink cannot. Loaded into SRAM 2026-08-11, D2 gave
-  the short flash and not its complement, which settles three things at
-  once: **the LED is active low**, litex's `user_led_n` being right on a
-  point no source had measured; the 25 MHz oscillator is on P3, since
-  the period is the predicted 1.34 s; and the bitstream path runs end to
-  end. `oca_top_stub` cannot do this job and its LED comment claimed it
+  the short flash and not its complement, which settles two things and
+  bounds a third: **the LED is active low**, litex's `user_led_n` being
+  right on a point no source had measured; the bitstream path runs end
+  to end; and something is clocking P3 at roughly the rate expected,
+  since the blink was neither absent nor obviously fast or slow. **No
+  period was ever timed**, at step 2 or at step 3, so the oscillator's
+  frequency is bounded by eye and by nothing else. `oca_top_stub` cannot do this job and its LED comment claimed it
   could; both are corrected.
 
-  **Step 3 of the ladder is done, on the board.** `oca_pll.sv` with its
-  own two-pin `colorlight_i9_pll.lpf`: `oca_clkrst` wired as the real
-  top wires it, and D2 driven from a counter on `clk_tx` that counts
+  **Step 3 of the ladder is half done on the board**, and the half that
+  is missing is the half that makes it a measurement. `oca_pll.sv` with its
+  own two-pin `colorlight_i9_pll.lpf`: the real `oca_clkrst`, though two
+  of its fourteen connections are not the top's (`ext_rst_n` tied high
+  where the top passes `por_n`, `clk_rx` tied to `clk25` where it passes
+  `gmii_rx_clk`), and D2 driven from a counter on `clk_tx` that counts
   62,500,000 to halve 125 MHz on a decimal boundary, so the reading is a
   **frequency** rather than a lock flag. `EHXPLLL` raises LOCK when the
   loop closed, not when it closed on the right frequency, so a lock LED
@@ -879,9 +884,12 @@ core and never updated as the design grew by 3000 LUTs.
   driven high sits at its own bank's VCCIO, and a ten megohm meter loads
   it with under a microamp. `oca_vccio` drives eight free bank 6 balls
   toggling in step with D2, so a swinging reading beside a visible
-  blinking LED is what identifies them on a carrier whose connectors
-  nothing maps. Two surfaced on P4, pins 8 and 25: **3.28 V** driven
-  high, 0 V driven low. `LVCMOS33` throughout `colorlight_i9.lpf` is
+  blinking LED identifies which hole carries which. `colorlight_i5.py`
+  does name the connector each pmod sits on, contrary to what this
+  paragraph said until 2026-08-11, but nothing names the hole within it.
+  Two surfaced on **connector P4** (not ball P4, which is the PHY
+  reset), holes 8 and 25: **3.28 V** driven high, 0 V driven low. They
+  are **F1 and K4**, the only two of the eight probes that P4 carries. `LVCMOS33` throughout `colorlight_i9.lpf` is
   therefore right, and the silent case that file documents at length,
   RGMII inputs declared `LVCMOS33` in a 2.5 V bank, does not apply here.
 

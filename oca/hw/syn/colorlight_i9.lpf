@@ -35,8 +35,11 @@
 #
 # MEASURED 2026-08-11: 3.28 V, which is the 3.3 V rail. oca_vccio drove
 # eight free bank 6 balls high and low in step with D2; two of them
-# surface on the carrier's P4, at pins 8 and 25, and both read 3.28 V
-# driven high and 0 V driven low. An output cannot rise above its own
+# surface on the carrier's CONNECTOR P4 -- not ball P4, which this file
+# constrains as the PHY reset further down -- at holes 8 and 25, and
+# both read 3.28 V driven high and 0 V driven low. Those two are F1 and
+# K4, the only two of the eight that colorlight_i5.py puts on P4.
+# An output cannot rise above its own
 # bank rail, so a pad reading 3.28 V is a bank at 3.3 V within the
 # meter's accuracy, and 2.5 V is not a candidate at that distance. The
 # hard 0 V is what rules out an undriven pin reading a neighbour.

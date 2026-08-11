@@ -13,7 +13,13 @@ bitstream that does not work.
 step that "seems fine" and is not becomes a symptom three steps later,
 where it looks like something else entirely.
 
-## Before power
+## Before the RGMII pins are driven
+
+This section used to be called "Before power" and used to be first,
+which stopped describing it once the measurement became a bitstream:
+what follows needs the board powered and an FPGA configured, so it
+happens after step 1 and can happen after step 2. It stays at the top
+because it gates step 4, and step 4 is where a wrong answer is silent.
 
 **Measure bank 6's VCCIO before the RGMII pins are ever driven.**
 Measured on this board 2026-08-11 and it is **3.3 V** (3.28 V read on a
@@ -41,20 +47,34 @@ program without a word. That is the case the measurement ruled out.
 no capacitor on it is identifiable from anything we hold.** An LVCMOS
 output driven high sits at its own bank's VCCIO, and a ten megohm meter
 loads it with well under a microamp, so a driven open pad reads the rail
-directly. `oca_vccio` drives eight free bank 6 balls, toggling in step
-with D2 so that a swinging reading beside a visible blinking LED is the
-signature that finds them: nothing undriven swings on cue. Two surfaced
-on the carrier's P4, pins 8 and 25, both 3.28 V high and 0 V low.
+directly.
 
-Repeat it on any board that is not this one. It is one bitstream and two
-readings.
+```sh
+(cd oca && .venv/bin/python hw/syn/run_synth.py oca_vccio)
+tools/openFPGALoader/bin/openFPGALoader -b colorlight-i9 -m \
+    oca/hw/syn/build/oca_vccio.bit
+```
+
+That drives eight free bank 6 balls, toggling in step with D2 so a
+swinging reading beside a visible blinking LED is the signature that
+finds the hole: nothing undriven swings on cue. Black probe on the
+USB-C shell, red probe walking the header holes.
+
+Two surfaced on **connector P4** (the carrier's, not ball P4, which is
+the PHY reset), at holes 8 and 25, both 3.28 V high and 0 V low. Those
+two are **F1 and K4**: of the eight probes, `colorlight_i5.py` puts only
+those on P4, the other six being on P6.
+
+Repeat it on any board that is not this one.
 
 ## 1. Transport, before anything else
 
 Do not load a design. Establish that the programmer talks to the part.
-Name the cable: `--detect` alone probes every cable it knows, and this
-board's is the DAPLink on the carrier (`0d28:0204`), which is also what
-the `colorlight-i9` board profile selects.
+Name the cable: with neither `-c` nor `-b`, openFPGALoader does not probe
+anything, it warns and hard-defaults to `ft2232` (`src/main.cpp:231`),
+which is not on this carrier. This board's is the DAPLink (`0d28:0204`),
+which is also what the `colorlight-i9` board profile selects
+(`src/board.hpp:144`), so `-b colorlight-i9` would serve as well.
 
 ```sh
 tools/openFPGALoader/bin/openFPGALoader --detect -c cmsisdap
@@ -87,8 +107,12 @@ one: nothing in the flow rereads it for you.
 
 Expect a bare `empty` on the first line of output. It is an
 unconditional debug `printf` in openFPGALoader's own `src/main.cpp:1205`
-reporting whether `--mcufw` was given, and it shipped in the v1.1.1
-release commit (`85be4fa`). It says nothing about the board.
+reporting whether `--mcufw` was given, and it says nothing about the
+board. When it was introduced is not something this tree can answer:
+`tools/src/openFPGALoader` is a depth-1 shallow clone, so `git log -S`
+there attributes the whole file to the one commit present. This said it
+shipped in the v1.1.1 release commit until 2026-08-11, which was that
+artefact and not a finding.
 
 A bitstream that "loaded" but did not is the most expensive hour at the
 bench.
@@ -98,9 +122,11 @@ bench.
 `oca_blink.sv`: the 25 MHz clock on **P3**, a counter, the LED on **L2**,
 its own two-pin `colorlight_i9_blink.lpf`. No PLL, no Ethernet.
 
-Build it from `oca/`, which is the only directory `run_synth.py`
-resolves against, and load it from the repository root, which is where
-`tools/` is. Two commands, two working directories:
+Build it from `oca/` and load it from the repository root. Not because
+`run_synth.py` cares: it derives every path from `Path(__file__)` and has
+no working-directory dependency at all. It is the two relative paths in
+the commands themselves, `.venv/bin/python` and `tools/`, that live in
+different places. Two commands, two working directories:
 
 ```sh
 (cd oca && .venv/bin/python hw/syn/run_synth.py oca_blink)
