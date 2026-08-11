@@ -848,6 +848,31 @@ core and never updated as the design grew by 3000 LUTs.
   end. `oca_top_stub` cannot do this job and its LED comment claimed it
   could; both are corrected.
 
+  **Step 3 of the ladder is done, on the board.** `oca_pll.sv` with its
+  own two-pin `colorlight_i9_pll.lpf`: `oca_clkrst` wired as the real
+  top wires it, and D2 driven from a counter on `clk_tx` that counts
+  62,500,000 to halve 125 MHz on a decimal boundary, so the reading is a
+  **frequency** rather than a lock flag. `EHXPLLL` raises LOCK when the
+  loop closed, not when it closed on the right frequency, so a lock LED
+  reports a PLL multiplying by four exactly as it reports one
+  multiplying by five. Three states, three readings: 1 Hz symmetric is
+  locked at 125 MHz, a ~3 Hz flicker counted on `clk25` and carrying no
+  reset is live-but-unlocked, static is no bitstream or no clock.
+  Observed 2026-08-11: **1 Hz**, so the PLL locks and `clk_tx` runs. The
+  stopwatch check that would tighten that to 0.3% has not been done, so
+  what is established is lock and the absence of a gross error, not
+  125.0 MHz to three digits.
+
+  `check_prims` used to return early and silently for a top absent from
+  `NETLIST_PRIM_COUNT`, and `check_pll` is called from nowhere else, so
+  `oca_pll` built once with its PLL parameters unverified and said
+  nothing about it. It now warns the way the flip-flop census does. With
+  the entry added the check runs and passes: `CLKI_DIV 1`, `CLKFB_DIV
+  5`, `CLKOP_DIV 5`, `CLKOS_DIV 13`, VCO 625.00 MHz, `clk_tx` 125.0000,
+  `clk_sys` 48.0769. `clk_sys` is not measured on the board and does not
+  need to be: it is that same VCO over a divisor now checked in the
+  netlist.
+
   **Bank 6 is at 3.3 V, measured 2026-08-11.** The rail is a plane
   inside the module and no capacitor on it is identifiable from anything
   we hold, so it was read off a driven pad instead: an LVCMOS output

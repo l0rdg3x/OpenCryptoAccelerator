@@ -142,12 +142,49 @@ The comment in that file claimed the reading distinguished them, until
 
 ## 3. The PLL
 
-Add `oca_clkrst`'s two outputs, 125 MHz and 48 MHz, and divide one down
-to something visible. Proves the PLL locks from a 25 MHz input on the
-dedicated `LLC_GPLL0T_IN` pin before any logic depends on it. There is
-no 90-degree copy to build: this step asked for one until 2026-08-09,
-and `oca_rgmii.sv` makes the transmit clock from an `ODDRX1F` fed by a
-constant edge pair instead.
+`oca_pll.sv` and its two-pin `colorlight_i9_pll.lpf`. Proves the PLL
+locks from the 25 MHz input on the dedicated `LLC_GPLL0T_IN` pin before
+any logic depends on it.
+
+```sh
+(cd oca && .venv/bin/python hw/syn/run_synth.py oca_pll)
+tools/openFPGALoader/bin/openFPGALoader -b colorlight-i9 -m \
+    oca/hw/syn/build/oca_pll.bit
+```
+
+**Do not build the indicator on `LOCK`.** `EHXPLLL` raises it when the
+loop closed, not when it closed on the frequency you asked for, so a
+lock LED reports a PLL multiplying by four exactly as it reports one
+multiplying by five. D2 is driven instead from a counter on `clk_tx`
+that counts 62,500,000, halving 125 MHz on a decimal boundary:
+
+| D2 | meaning |
+|----|---------|
+| 1 Hz, symmetric | locked, and `clk_tx` is 125 MHz |
+| ~3 Hz flicker | live and clocked, PLL **not** locked |
+| static | no bitstream or no `clk25`, which step 2 separates |
+
+The flicker is counted on `clk25` and carries no reset on purpose:
+`rst_n_sys` is gated on `pll_locked`, so a reset-driven fallback would
+be dead in the one case it exists to report.
+
+**Then time it.** Start a stopwatch on one rising edge and count thirty:
+thirty seconds. That is what turns "about 1 Hz" into 125 MHz to a
+fraction of a percent, and it retro-tightens step 2, which fixed the
+oscillator only to the precision of a blink counted by eye. A 24 MHz
+crystal drifts this 2.4 s in a minute.
+
+Run here 2026-08-11: 1 Hz observed, stopwatch not run.
+
+`clk_sys` needs no separate measurement. It is the same VCO over
+`CLKOS_DIV`, and `run_synth.py` checks all four dividers in the netlist,
+so a measured `CLKOP` makes 625/13 = 48.0769 MHz a conclusion. That
+check reaches `check_pll` only through `NETLIST_PRIM_COUNT`; a top
+missing from that table used to skip both in silence.
+
+There is no 90-degree copy to build: this step asked for one until
+2026-08-09, and `oca_rgmii.sv` makes the transmit clock from an
+`ODDRX1F` fed by a constant edge pair instead.
 
 ## 4. RGMII, and the delay sweep
 
