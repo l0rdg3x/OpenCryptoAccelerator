@@ -878,6 +878,20 @@ core and never updated as the design grew by 3000 LUTs.
   need to be: it is that same VCO over a divisor now checked in the
   netlist.
 
+  **There is no Ethernet connector on this hardware, and there is a
+  serial console.** The module carries both B50612D PHYs and routes
+  their MDI pairs to the SO-DIMM edge; the RJ45s and the magnetics
+  belong on an extension board this kit does not include, so steps 4 and
+  5 have nowhere to plug a cable. What the carrier does have is a
+  DAPLink presenting a CDC pair beside the HID that carries CMSIS-DAP.
+  `oca_uart_probe` drove both of litex's candidate transmit pins with
+  payloads naming themselves, and `/dev/ttyACM0` at 115200 8N1 returned
+  **`PIN=J17`** once a second: the DAPLink is on litex's `serial`, the
+  v7.0 pair, not on the `serialx` at E5/F4 that the v7.2 section adds.
+  The receive pin is H18 by that pairing and is not yet tested. Bank 2's
+  VCCIO stays unmeasured: a clean decode says the DAPLink accepted the
+  levels, which a 2.5 V swing into a 3.3 V input generally is.
+
   **Bank 6 is at 3.3 V, measured 2026-08-11.** The rail is a plane
   inside the module and no capacitor on it is identifiable from anything
   we hold, so it was read off a driven pad instead: an LVCMOS output

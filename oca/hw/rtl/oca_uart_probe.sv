@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: CERN-OHL-P-2.0
 /*
- * Which pin is the DAPLink's UART on? Nothing we hold says.
+ * Which pin is the DAPLink's UART on? Nothing we held said.
+ *
+ * ANSWERED 2026-08-11: J17. Loaded on the board, the host's
+ * /dev/ttyACM0 at 115200 8N1 delivered "PIN=J17" once a second and
+ * nothing else, so the carrier wires the DAPLink to litex's `serial`,
+ * the pair inherited from the v7.0 map, and not to the `serialx` its
+ * own v7.2 section adds. By litex's pairing the receive pin is H18,
+ * which this design does not test: it drives no input.
+ *
+ * What that does NOT settle is bank 2's VCCIO. A clean decode says the
+ * DAPLink's receiver accepted the levels, and a 2.5 V swing into a
+ * 3.3 V CMOS input usually is accepted, so the rail is still unmeasured
+ * and the oca_vccio method is what would measure it.
  *
  * The carrier carries a DAPLink that presents three things on USB: mass
  * storage, a HID interface that is the CMSIS-DAP we program through, and
