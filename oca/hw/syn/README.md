@@ -1605,12 +1605,23 @@ line, so `run_synth.py oca_top` reproduced it. But a seed is not margin:
 any RTL change reshuffles the placement and the seed has to be found
 again, and there is no reason to expect the next one to exist.
 
-**It did not exist. Amended 2026-08-11.** `54a2df8` connected the raw-IP
-ready pins on `udp_complete_64`, which the board needs -- without them
-one non-UDP frame stops reception for good -- and that made the path
-live where yosys had been folding it away: **+917 TRELLIS_COMB and +400
-TRELLIS_FF, all of the flip-flops in the vendor bucket and none in our
-RTL**, landing around the one path in this design that had no margin.
+**It did not exist, and the reason is worse than a lost seed. Amended
+2026-08-11.** `54a2df8` connected three pins on `udp_complete_64`. Two
+of them, the raw-IP ready pair, fix a wedge the board could not survive
+— one non-UDP frame and reception stops for good — and cost **nothing**:
+built with only those two, the netlist is 16849 flip-flops, exactly what
+it was.
+
+The third, `clear_arp_cache`, is the whole of the **+917 TRELLIS_COMB
+and +400 TRELLIS_FF**, and what it bought is `arp_cache.v` going from
+**0 live flip-flops to 130**. The earlier netlist — the one that closed
+on seed 6 and was packed into a bitstream — had no ARP cache in it at
+all, because an undriven input is not an input reading zero: yosys may
+take it as don't-care and pick the value that simplifies most, here a
+cache held permanently in reset.
+
+So the sweep below is not a regression against 129.87 MHz. It is the
+first sweep of a complete design.
 
 Thirty-two seeds on that netlist, place and route only:
 

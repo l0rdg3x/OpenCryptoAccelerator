@@ -873,15 +873,27 @@ core and never updated as the design grew by 3000 LUTs.
   | `clk_tx` | 122.91 against 125 — FAILED |
   | `clk_sys` | 47.40 against 48.08 — FAILED |
 
-  **What happened, and it is not a lost seed.** Until the ICMP fix
-  (`54a2df8`) this design closed on seed 6 at 129.87 / 130.07 / 49.41,
-  measuring 17802 and 16849. Tying `m_ip_hdr_ready` and
-  `m_ip_payload_axis_tready` high makes the raw-IP receive path live
-  where it had been constant, so yosys keeps logic it used to delete:
-  **+917 TRELLIS_COMB and +400 TRELLIS_FF, every one of the flip-flops
-  in the vendor bucket and none in our RTL**. That logic lands around
-  the receive path, which is the one part of this design that never had
-  margin.
+  **What happened, and it is neither a lost seed nor a cost.** Until
+  `54a2df8` this design closed on seed 6 at 129.87 / 130.07 / 49.41,
+  measuring 17802 and 16849 — **and it had no ARP cache in it**.
+  `arp_cache.v` contributed zero live flip-flops to that netlist, with
+  `arp.v` at 225 against 353 and `ip_64.v` at 8 against 55. A board
+  built from it receives frames and can answer nobody.
+
+  What brought them back is one connection, attributed by building both
+  ways: `clear_arp_cache`. With the two `m_ip_*` ready pins connected
+  and that one left unconnected the netlist is 16849 flip-flops with
+  `arp_cache.v` still at 0; connecting it gives 17249 with the cache at
+  130. An undriven input is not an input reading zero — yosys may treat
+  it as don't-care and take the value that simplifies most, here "the
+  cache is permanently clearing", which kills its ports and its storage.
+  The two ready pins, which fix the ICMP wedge, cost nothing.
+
+  So **+917 TRELLIS_COMB and +400 TRELLIS_FF are not what the fix cost.
+  They are the design being complete for the first time**, and the
+  129.87 MHz belongs to a netlist that was missing part of it. There is
+  no regression to recover from: there is a whole design that has never
+  closed, and a partial one that did.
 
   **32 placer seeds, and `rgmii_rx_clk` clears 125 MHz on none of
   them.** Best 124.22 (seed 10, short by 0.63%), second best 117.32, and
