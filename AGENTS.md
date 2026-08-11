@@ -888,6 +888,21 @@ core and never updated as the design grew by 3000 LUTs.
   payloads naming themselves, and `/dev/ttyACM0` at 115200 8N1 returned
   **`PIN=J17`** once a second: the DAPLink is on litex's `serial`, the
   v7.0 pair, not on the `serialx` at E5/F4 that the v7.2 section adds.
+  **The diagnostic console runs on the board.** `oca_uart_console`:
+  `oca_uart_rx` and `oca_uart_tx8` with an `oca_fifo` on each side, 16
+  in and 32 out, and `oca_console` between them. Single-character
+  commands, deliberately, because a line parser needs a buffer, an
+  editor, a length limit and a policy for the limit, and each is a place
+  to put a bug into the only channel available for finding bugs. `p`
+  answers `OCA`, `?` lists `psz?`, `z` zeroes, anything unknown answers
+  `?`, and `s` gives `R=xxxx E=xxxx O=xxxx C=xxxx`: bytes delivered,
+  frames refused, bytes the input FIFO had no room for, commands run.
+  The counters saturate rather than wrap, since a wrapped counter reads
+  like a healthy one. Run 2026-08-11 the board answered every command
+  and reported `R=0006 E=0000 O=0000 C=0006` for the six sent, and `pp`
+  with no gap produced two complete answers, which is the exact failure
+  `oca_uart_echo` had before the FIFOs existed.
+
   **The receive pin is H18, confirmed the same day** by `oca_uart_echo`:
   eight bytes sent one every 300 ms came back in order and byte exact,
   `4f 43 41 00 01 55 aa ff`. Sent back to back, alternate bytes are

@@ -117,6 +117,15 @@ DESIGNS = {
         sv=["oca_blink.sv"],
         lpf="colorlight_i9_blink.lpf",
     ),
+    # The diagnostic console: UART both ways, a FIFO on each side so a
+    # byte arriving during a response has somewhere to wait, and
+    # single-character commands with counters for the two ways this
+    # channel loses input.
+    "oca_uart_console": Design(
+        sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_console.sv", "oca_uart_console.sv"],
+        lpf="colorlight_i9_console.lpf",
+    ),
     # The receive half of the console. J17 is settled; H18 is litex's
     # pairing and nothing more until a byte travels it, which is what an
     # echo makes the operator prove by supplying the expected value.
@@ -325,6 +334,24 @@ NETLIST_FF_FLOOR = {
     # 22 for the transmitter, 1 for the top's LED toggle.
     "oca_uart_echo": {"oca_uart_rx.sv": 32, "oca_uart_tx8.sv": 22,
                       "oca_uart_echo.sv": 1},
+    # 81 for the console: four 16-bit counters, the latched command, the
+    # response index and length, and the sending flag. The counters are
+    # the load-bearing part -- they are what the channel reports about
+    # itself, and 64 of the 81 are them.
+    # 33 for the receiver, one more than in oca_uart_echo because rst_n
+    # reaches it here.
+    #
+    # 23 for the FIFO, and that is BOTH instances together: the pointers
+    # and the overflow flag only. The storage is not in flops at all --
+    # yosys puts it in distributed RAM, which is the TRELLIS_RAMW in the
+    # resource table. So this floor guards the pointer arithmetic and
+    # says nothing about the bytes, and a mapper that lost the RAM would
+    # pass it. What catches that is test_fifo's order-across-a-wrap.
+    #
+    # 22 for the transmitter, 5 for the top's power-on counter and LED.
+    "oca_uart_console": {"oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
+                         "oca_fifo.sv": 23, "oca_console.sv": 81,
+                         "oca_uart_console.sv": 5},
     # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
     # bits that compare is unreachable and therefore constant false, so
     # tx_beat never toggles and yosys folds the counter and the toggle
