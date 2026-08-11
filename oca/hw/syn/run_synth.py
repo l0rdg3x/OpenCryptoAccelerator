@@ -105,6 +105,59 @@ DESIGNS = {
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
+    # Bring-up step 2, and the first design here whose purpose is to be
+    # loaded rather than measured. It said "only" until 2026-08-11, and
+    # oca_vccio, oca_pll and oca_uart_probe were added to the same
+    # list afterwards. Its own .lpf, not the seventeen-pin
+    # one: a design is required to constrain every IO it has, but an
+    # .lpf naming pins the design does not have is skipped without a
+    # word, so building this against colorlight_i9.lpf would pass while
+    # proving nothing about the fifteen lines it silently ignored.
+    "oca_blink": Design(
+        sv=["oca_blink.sv"],
+        lpf="colorlight_i9_blink.lpf",
+    ),
+    # The diagnostic console: UART both ways, a FIFO on each side so a
+    # byte arriving during a response has somewhere to wait, and
+    # single-character commands with counters for the two ways this
+    # channel loses input.
+    "oca_uart_console": Design(
+        sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_console.sv", "oca_uart_console.sv"],
+        lpf="colorlight_i9_console.lpf",
+    ),
+    # The receive half of the console. J17 is settled; H18 is litex's
+    # pairing and nothing more until a byte travels it, which is what an
+    # echo makes the operator prove by supplying the expected value.
+    "oca_uart_echo": Design(
+        sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_uart_echo.sv"],
+        lpf="colorlight_i9_echo.lpf",
+    ),
+    # Which pin is the DAPLink's UART on. Two transmitters, each naming
+    # its own pin, because litex offers two candidates and offering two
+    # is the evidence that neither is certain.
+    "oca_uart_probe": Design(
+        sv=["oca_uart_tx.sv", "oca_uart_probe.sv"],
+        lpf="colorlight_i9_uart.lpf",
+    ),
+    # Bring-up step 3. oca_clkrst as the real design instantiates it, and
+    # a counter sized to turn 125 MHz into a 1 Hz blink, so the reading
+    # is a frequency a stopwatch can check rather than a lock flag.
+    "oca_pll": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_pll.sv"],
+        lpf="colorlight_i9_pll.lpf",
+    ),
+    # Eight free bank 6 pins toggling in step with D2, so a meter on a
+    # header hole reads VCCIO6 off a driven pad instead of off a
+    # capacitor nobody can identify, and a reading that swings with a
+    # visible light identifies which hole. Its own .lpf for the reason
+    # above. This entry described four pins at fixed levels until
+    # 2026-08-11, which was the design before the probes were made to
+    # announce themselves.
+    "oca_vccio": Design(
+        sv=["oca_vccio.sv"],
+        lpf="colorlight_i9_vccio.lpf",
+    ),
     # The first pinned build this project has. It carries no crypto: it
     # exists to place the clocking and the RGMII pads against the real
     # .lpf and report which clocks nextpnr constrained, which is the one
@@ -255,6 +308,79 @@ DESIGNS = {
 # figure would still be met by 2313 live registers and the check would
 # pass over a half-empty netlist.
 NETLIST_FF_FLOOR = {
+    # All 25 bits of the blink counter, floored at exactly 25 because
+    # that is a whole design and there is nothing in it to move. This is
+    # the one build here whose result an operator reads by eye, and a
+    # counter one bit short does not fail -- it blinks twice as fast,
+    # which at the bench is indistinguishable from the oscillator not
+    # being the 25 MHz we think it is. That reading is the entire purpose
+    # of the step, so the thing it depends on is checked.
+    "oca_blink": {"oca_blink.sv": 25},
+    # 27 for the probe: a 25-bit tick counter, the send pulse and led_n.
+    # 52 for the two transmitters, 26 each, so both instances have to
+    # keep their storage.
+    #
+    # It does NOT check that the two carry different payloads, which is
+    # the failure that would actually matter: giving both the same
+    # message still counts 52, measured rather than assumed. That one is
+    # an elaboration guard in oca_uart_probe.sv instead.
+    "oca_uart_probe": {"oca_uart_probe.sv": 27, "oca_uart_tx.sv": 52},
+    # 32 for the receiver: 8-bit divisor, 3-bit index, 8-bit shifter, the
+    # state, the outputs, and the TWO SYNCHRONISER FLOPS on rx. Those two
+    # are why the floor is here at all. Nothing downstream notices if a
+    # mapper folds a synchroniser to one stage: the design still receives
+    # in every simulation, and what it loses is mean time between
+    # failures on a boundary no test reaches.
+    # 22 for the transmitter, 1 for the top's LED toggle.
+    "oca_uart_echo": {"oca_uart_rx.sv": 32, "oca_uart_tx8.sv": 22,
+                      "oca_uart_echo.sv": 1},
+    # 81 for the console. The declared state is 83 bits -- four 16-bit
+    # counters, the latched command, the response index and length, the
+    # sending flag -- and two do not survive the mapper. Which two is not
+    # established: ABC renames everything it touches and the netlist
+    # cannot be read back per signal, so the floor is the measured
+    # figure rather than a decomposition. The load-bearing part is not
+    # in doubt: 64 of the 83 are the counters, which is what the channel
+    # reports about itself.
+    # 33 for the receiver, one more than in oca_uart_echo. NOT because
+    # of a reset: oca_uart_rx has no reset port and no reset branch. The
+    # extra flop is frame_error, which oca_uart_echo leaves unconnected
+    # and yosys therefore drops, and which the console counts.
+    #
+    # 23 for the FIFO, and that is BOTH instances together: the pointers
+    # and the overflow flag only. The storage is not in flops at all --
+    # yosys puts it in distributed RAM, which is the TRELLIS_RAMW in the
+    # resource table. So this floor guards the pointer arithmetic and
+    # says nothing about the bytes, and a mapper that lost the RAM would
+    # pass it. What catches that is test_fifo's order-across-a-wrap.
+    #
+    # 22 for the transmitter, 5 for the top's power-on counter and LED.
+    "oca_uart_console": {"oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
+                         "oca_fifo.sv": 23, "oca_console.sv": 81,
+                         "oca_uart_console.sv": 5},
+    # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
+    # bits that compare is unreachable and therefore constant false, so
+    # tx_beat never toggles and yosys folds the counter and the toggle
+    # out together: the census drops to 23, not 49, and the LED sits
+    # static while the PLL is locked. Static is the reading this design
+    # reserves for no bitstream and no clock, so the failure would not
+    # merely be a wrong rate, it would be the wrong diagnosis. 26
+    # counter, 1 toggle, 23 for the clk25 beat that reports a PLL which
+    # never locked.
+    # oca_clkrst contributes 2, not the thirty-odd it holds: oca_pll
+    # consumes pll_locked and rst_n_tx and nothing else, so the PHY reset
+    # timer and the sys and rx synchronisers are optimised away. Those
+    # belong to step 4. The 2 that remain are the tx reset synchroniser,
+    # and they are worth a floor of their own: if rst_n_tx ever came out
+    # constant high the tx counter would run before lock, and the three
+    # readings this design exists to separate would collapse into two.
+    "oca_pll": {"oca_pll.sv": 50, "oca_clkrst.sv": 2},
+    # 27 bits, two more than oca_blink, because led_n has to alternate
+    # slowly enough for a meter to settle on each level: bit 26 gives
+    # 2.684 s per state. Two bits short and it is 0.67 s, which a digital
+    # meter cannot resolve into two clean readings, and the whole method
+    # is reading two clean levels off one pad.
+    "oca_vccio": {"oca_vccio.sv": 27},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
     # The board build. Same two floors as oca_core, since it contains
@@ -358,6 +484,11 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}
 # pinned designs, because all three carry one oca_rgmii and one
 # oca_clkrst.
 NETLIST_PRIM_COUNT = {
+    # Bring-up step 3 carries the PLL and nothing else physical: no DDR
+    # register and no delay, because it touches no RGMII pad. The entry
+    # exists mainly to reach check_pll, which is called from here and
+    # cannot run for a top this table does not list.
+    "oca_pll": {"EHXPLLL": 1},
     "oca_top": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
                 "DELAYF": 5, "DELAYG": 6},
     "oca_top_mac": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
@@ -382,6 +513,14 @@ NETLIST_PRIM_COUNT = {
 # quietly making every Gbps figure in the documents wrong.
 PLL_INPUT_HZ = 25_000_000
 NETLIST_PLL_PARAMS = {
+    # Bring-up step 3 checks the same four, and it is the one build where
+    # they carry a bench consequence rather than a synthesis one. The
+    # LED measures CLKOP at 125 MHz to stopwatch precision, which fixes
+    # the VCO at 625 MHz; CLKOS is that same VCO over CLKOS_DIV, so a
+    # checked 13 here is what makes 48.0769 MHz a conclusion rather than
+    # an untested second output nothing in this design consumes.
+    "oca_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                "CLKOS_DIV": 13},
     "oca_top": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                 "CLKOS_DIV": 13},
     "oca_top_mac": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
@@ -559,6 +698,16 @@ def check_pll(top, params):
     """
     want = NETLIST_PLL_PARAMS.get(top)
     if not want:
+        # The same silent skip that was removed from check_prims, one
+        # level down: a top listed there but not here reaches this
+        # function with a real EHXPLLL in hand and returns ok without
+        # looking at it. No top is in that state today, which is exactly
+        # when a hole is cheap to close.
+        if params is not None:
+            print(f"WARNING: {top} has an EHXPLLL in its netlist and no "
+                  f"NETLIST_PLL_PARAMS entry — its dividers, and therefore "
+                  f"every clock derived from them, went unchecked.",
+                  file=sys.stderr)
         return 0
     if params is None:
         print("\nPLL: no EHXPLLL in the netlist", file=sys.stderr)
@@ -599,6 +748,16 @@ def check_prims(top, netlist):
     """
     want = NETLIST_PRIM_COUNT.get(top)
     if not want:
+        # Silence here would have been indistinguishable from a pass, and
+        # was: oca_pll built once with no entry in this table, so its PLL
+        # parameters went unchecked and check_pll never ran at all, since
+        # this is the only place that calls it. The flip-flop census says
+        # so when it has no floor; this now says so too.
+        print(f"WARNING: {top} has no NETLIST_PRIM_COUNT entry — this run "
+              f"checked no physical-interface primitive and did not check "
+              f"the PLL parameters either, since check_pll is reached only "
+              f"from here. Not fatal: add an entry once this top carries a "
+              f"PLL, a DDR register or a delay.", file=sys.stderr)
         return 0
     cells = json.loads(netlist.read_text())["modules"][top]["cells"]
     have = {}

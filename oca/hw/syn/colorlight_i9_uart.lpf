@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — UART pin discovery, four pins across three banks.
+#
+# clk25 and led_n are colorlight_i9.lpf's, unchanged, in bank 6, which
+# measured 3.28 V on 2026-08-11 so LVCMOS33 there is not an assumption.
+#
+# The two transmit candidates come from litex-boards' colorlight_i5.py,
+# which defines two UARTs for this module and thereby says that neither
+# is certain:
+#
+#   serial   tx J17  rx H18   bank 2   inherited from the v7.0 map
+#   serialx  tx E5   rx F4    bank 7   added for v7.2, its own comment
+#                                      calling it "optional, alternative
+#                                      uart location"
+#
+# Only the transmit pins are here. H18 and F4 are FPGA inputs, therefore
+# DAPLink outputs, and constraining them would mean driving them.
+#
+# BANKS 2 AND 7 ARE UNMEASURED. LVCMOS33 is litex's declaration carried
+# over, not a reading. If either bank sits at 2.5 V the pad swings 2.5 V,
+# which at 115200 baud is not a problem: what makes a wrong declaration
+# dangerous is receiver threshold against a 125 MHz DDR edge. Measuring
+# them takes the oca_vccio method applied to a free pin in each, and is
+# worth doing before anything fast lands in either.
+#
+# DRIVE=4 on both transmitters, the weakest the ECP5 offers, because
+# litex's claim that these pins are free is a claim about a carrier litex
+# has not seen either.
+#
+# Four constraints against four ports, which is the check: a stale LOCATE
+# is skipped in silence (ecp5/lpf.cc:144), but the port it stopped
+# covering fails the build with "IO <name> is unconstrained in LPF"
+# (ecp5/main.cc:287).
+#
+# The FREQUENCY line is also the spelling check on clk25: a net that does
+# not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
+
+FREQUENCY PORT "clk25" 25 MHZ;
+
+LOCATE COMP "clk25" SITE "P3";
+IOBUF  PORT "clk25" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n" SITE "L2";
+IOBUF  PORT "led_n" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uart_j17" SITE "J17";
+IOBUF  PORT "uart_j17" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "uart_e5" SITE "E5";
+IOBUF  PORT "uart_e5" IO_TYPE=LVCMOS33 DRIVE=4;

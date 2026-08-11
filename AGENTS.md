@@ -821,8 +821,129 @@ core and never updated as the design grew by 3000 LUTs.
 - **The Ethernet integration is merged** (`c153934`), designed in
   `docs/design/2026-08-05-ethernet-integration.md`. Everything it needed
   to be built is written and tested, section 8's whole-path testbench
-  included. **What is next is bring-up on the board**, expected
-  ~2026-08-17: everything that could be settled without it has been.
+  included. **The board arrived on 2026-08-11**, six days before it was
+  expected, and bring-up is what is next: everything that could be
+  settled without it has been.
+
+  **Step 1 of the ladder is done.** `openFPGALoader --detect -c
+  cmsisdap` reads `idcode 0x41112043`, LFE5U-45, over the carrier's
+  DAPLink. That excludes a wrong die and not a wrong package, since
+  prjtrellis lists six packages against that one code with `caBGA256`
+  among them, so the package was settled the only way it can be, off
+  the chip: the marking reads `LFE5U-45F` / `6BG381C`, speed grade 6,
+  caBGA381, commercial. Both halves now agree with `BOM-MVP.md` and
+  with the `--package CABGA381 --speed 6` the build targets, so every
+  LOCATE in `colorlight_i9.lpf` rests on the right ball map.
+
+  **Step 2 of the ladder is done, on the board.** `oca_blink.sv` and its
+  two-pin `colorlight_i9_blink.lpf`: 25 flip-flops, two IO, floored at
+  all 25, and the counting proof on the .lpf shown non-vacuous by
+  renaming a LOCATE and watching the build stop. It is one eighth on and
+  seven eighths off so that the duty cycle settles the LED polarity,
+  which a symmetric blink cannot. Loaded into SRAM 2026-08-11, D2 gave
+  the short flash and not its complement, which settles two things and
+  bounds a third: **the LED is active low**, litex's `user_led_n` being
+  right on a point no source had measured; the bitstream path runs end
+  to end; and something is clocking P3 at roughly the rate expected,
+  since the blink was neither absent nor obviously fast or slow. **No
+  period was ever timed**, at step 2 or at step 3, so the oscillator's
+  frequency is bounded by eye and by nothing else. `oca_top_stub` cannot do this job and its LED comment claimed it
+  could; both are corrected.
+
+  **Step 3 of the ladder is half done on the board**, and the half that
+  is missing is the half that makes it a measurement. `oca_pll.sv` with its
+  own two-pin `colorlight_i9_pll.lpf`: the real `oca_clkrst`, though two
+  of its fourteen connections are not the top's (`ext_rst_n` tied high
+  where the top passes `por_n`, `clk_rx` tied to `clk25` where it passes
+  `gmii_rx_clk`), and D2 driven from a counter on `clk_tx` that counts
+  62,500,000 to halve 125 MHz on a decimal boundary, so the reading is a
+  **frequency** rather than a lock flag. `EHXPLLL` raises LOCK when the
+  loop closed, not when it closed on the right frequency, so a lock LED
+  reports a PLL multiplying by four exactly as it reports one
+  multiplying by five. Three states, three readings: 1 Hz symmetric is
+  locked at 125 MHz, a ~3 Hz flicker counted on `clk25` and carrying no
+  reset is live-but-unlocked, static is no bitstream or no clock.
+  Observed 2026-08-11: **1 Hz**, so the PLL locks and `clk_tx` runs. The
+  stopwatch check that would tighten that to 0.3% has not been done, so
+  what is established is lock and the absence of a gross error, not
+  125.0 MHz to three digits.
+
+  `check_prims` used to return early and silently for a top absent from
+  `NETLIST_PRIM_COUNT`, and `check_pll` is called from nowhere else, so
+  `oca_pll` built once with its PLL parameters unverified and said
+  nothing about it. It now warns the way the flip-flop census does. With
+  the entry added the check runs and passes: `CLKI_DIV 1`, `CLKFB_DIV
+  5`, `CLKOP_DIV 5`, `CLKOS_DIV 13`, VCO 625.00 MHz, `clk_tx` 125.0000,
+  `clk_sys` 48.0769. `clk_sys` is not measured on the board and does not
+  need to be: it is that same VCO over a divisor now checked in the
+  netlist.
+
+  **There is no Ethernet connector on this hardware, and there is a
+  serial console.** The module carries both B50612D PHYs and routes
+  their MDI pairs to the SO-DIMM edge; the RJ45s and the magnetics
+  belong on an extension board this kit does not include, so steps 4 and
+  5 have nowhere to plug a cable. What the carrier does have is a
+  DAPLink presenting a CDC pair beside the HID that carries CMSIS-DAP.
+  `oca_uart_probe` drove both of litex's candidate transmit pins with
+  payloads naming themselves, and `/dev/ttyACM0` at 115200 8N1 returned
+  **`PIN=J17`** once a second: the DAPLink is on litex's `serial`, the
+  v7.0 pair, not on the `serialx` at E5/F4 that the v7.2 section adds.
+  **The diagnostic console runs on the board.** `oca_uart_console`:
+  `oca_uart_rx` and `oca_uart_tx8` with an `oca_fifo` on each side, 16
+  in and 32 out, and `oca_console` between them. Single-character
+  commands, deliberately, because a line parser needs a buffer, an
+  editor, a length limit and a policy for the limit, and each is a place
+  to put a bug into the only channel available for finding bugs. `p`
+  answers `OCA`, `?` lists `psz?`, `z` zeroes, anything unknown answers
+  `?`, and `s` gives `R=xxxx E=xxxx O=xxxx C=xxxx`: bytes the receiver
+  delivered, frames it refused, bytes the input FIFO had no room for,
+  commands run. R is taken at the receiver and C at the command, so
+  `R >= C` and the difference is what the queue holds plus what O
+  refused. They were one register until 2026-08-11, bumped in the same
+  branch, which made them equal for every input and the status line
+  three numbers wearing four labels.
+  The counters saturate rather than wrap, since a wrapped counter reads
+  like a healthy one. Run 2026-08-11 the board answered every command
+  and reported `R=0006 E=0000 O=0000 C=0006` for the six sent, and `pp`
+  with no gap produced two complete answers, which is the exact failure
+  `oca_uart_echo` had before the FIFOs existed. **The output FIFO is
+  what fixes it**; the input one is insurance and is not load bearing at
+  this baud, since the console empties a response into the output queue
+  in a few cycles and is free again long before the next byte lands.
+  That figure was measured with R and C sharing a register, so their
+  agreement in it is tautological: what says nothing was lost is
+  `E=0000 O=0000`.
+
+  **The receive pin is H18, confirmed the same day** by `oca_uart_echo`:
+  eight bytes sent one every 300 ms came back in order and byte exact,
+  `4f 43 41 00 01 55 aa ff`. Sent back to back, alternate bytes are
+  dropped and "OCA" returns "OA", which is this design's documented
+  behaviour and what its testbench asserts, so bench and simulation
+  agree on the failure as well as on the success. **The channel works in
+  both directions**; a console needs a holding register or a FIFO before
+  it can take a line at speed. Bank 2's
+  VCCIO stays unmeasured: a clean decode says the DAPLink accepted the
+  levels, which a 2.5 V swing into a 3.3 V input generally is.
+
+  **Bank 6 is at 3.3 V, measured 2026-08-11.** The rail is a plane
+  inside the module and no capacitor on it is identifiable from anything
+  we hold, so it was read off a driven pad instead: an LVCMOS output
+  driven high sits at its own bank's VCCIO, and a ten megohm meter loads
+  it with under a microamp. `oca_vccio` drives eight free bank 6 balls
+  toggling in step with D2, so a swinging reading beside a visible
+  blinking LED identifies which hole carries which. `colorlight_i5.py`
+  does name the connector each pmod sits on, contrary to what this
+  paragraph said until 2026-08-11, but nothing names the hole within it.
+  Two surfaced on **connector P4** (not ball P4, which is the PHY
+  reset), holes 8 and 25: **3.28 V** driven high, 0 V driven low. They
+  are **F1 and K4**, the only two of the eight probes that P4 carries. `LVCMOS33` throughout `colorlight_i9.lpf` is
+  therefore right, and the silent case that file documents at length,
+  RGMII inputs declared `LVCMOS33` in a 2.5 V bank, does not apply here.
+
+  **There is no `oca_top` bitstream to load, and that is deliberate.**
+  It misses 125 MHz on all 32 seeds, and `pack()` refuses to write a
+  bitstream for a design that missed its clock, so the bench cannot get
+  past the MAC on the real top until the receive path closes.
 
   What exists in the tree: `verilog-ethernet` as a submodule at
   `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII

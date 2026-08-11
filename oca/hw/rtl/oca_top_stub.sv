@@ -160,9 +160,46 @@ module oca_top_stub (
         end
     end
 
-    // The LED is the only thing this board can say without a link. It
-    // blinks from clk_sys, so a lit-and-steady LED means the PLL never
-    // locked and a dark one means no bitstream at all. Active low (L2).
+    // THIS LED IS NOT A BRING-UP INDICATOR, and the sentence that used
+    // to stand here said it was: "a lit-and-steady LED means the PLL
+    // never locked and a dark one means no bitstream at all".
+    //
+    // The defect is not which way round it reads. It is that ONE READING
+    // COVERS TWO STATES the operator needs to tell apart, so the whole
+    // sentence is stated below in terms of led_n, the level this module
+    // drives, and never in terms of lit or dark. oca_blink measured the
+    // polarity on 2026-08-11 and it is active low, so led_n high does
+    // now mean a dark LED. That changes nothing here: the defect is two
+    // states sharing one reading, and no polarity separates them.
+    //
+    // A PLL that never locks drives led_n HIGH AND STEADY. oca_clkrst
+    // gates arst_n on pll_locked (oca_clkrst.sv:378), so rst_n_sys stays
+    // low, beat stays at zero, and the seven-term AND below is zero.
+    //
+    // A healthy board with a link can drive led_n high and steady too,
+    // and nothing here can rule it out. The AND includes dly_cflag_seen,
+    // a sticky bit set by any high LEVEL on dly_cflag, not by a pulse
+    // (the always_ff below). dly_cflag is the OR of the receive DELAYFs'
+    // CFLAG (oca_rgmii.sv:154), and this stub ties dly_move low and
+    // dly_loadn high at the instance above, so no move is ever
+    // commanded. Whether CFLAG nonetheless RESTS high is characterised
+    // nowhere we can read: yosys carries DELAYF as a bare blackbox
+    // (techlibs/lattice/cells_bb_ecp5.v), prjtrellis ships no simulation
+    // model for it, and nextpnr only moves the port to the IOLOGIC bel
+    // (ecp5/pack.cc:2116). So the term is unknown, in a design that
+    // needs it true.
+    //
+    // What that leaves is a signal that says the same thing when the
+    // clocking failed and when everything worked, which is the one thing
+    // a bring-up indicator may not do. Whether an unconfigured device
+    // gives a third reading is not claimed here: this file has no
+    // PULLMODE and no source for the pad state during configuration.
+    //
+    // Bring-up step 2 is oca_blink.sv, which is two pins and no PLL for
+    // this reason. Left as it is rather than repaired: this build is a
+    // measurement instrument for clock constraints, and the AND exists
+    // to keep the status outputs from being optimised away, which it
+    // still does.
     logic [24:0] beat;
 
     always_ff @(posedge clk_sys or negedge rst_n_sys) begin

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — bring-up step 3, two pins.
+#
+# Both balls and both IO_TYPEs are colorlight_i9.lpf's, unchanged, and
+# the provenance argument for them is written there in full. LVCMOS33 is
+# no longer an assumption here: bank 6 measured 3.28 V on 2026-08-11, so
+# the declaration matches the rail.
+#
+# Two constraints against two ports, which is the check: a stale LOCATE
+# is skipped in silence (ecp5/lpf.cc:144), but the port it stopped
+# covering then fails the build with "IO <name> is unconstrained in LPF"
+# (ecp5/main.cc:287).
+#
+# clk25 is the only pin nextpnr is told about. clk_tx and clk_sys are
+# PLL outputs and are constrained by what EHXPLLL's parameters say they
+# are, which is the point of building this: the report has to show
+# nextpnr constraining a 125 MHz domain that exists only if the PLL was
+# elaborated as intended.
+#
+# WHAT THIS BUILD CANNOT SETTLE. Nothing here touches the PHY, the RGMII
+# pads or bank 6's twelve Ethernet pins, so a working 1 Hz says the
+# clocking is right and says nothing whatever about the receive path.
+# That is step 4, and the delay value it needs is empirical: prjtrellis
+# carries no timing characterisation of DELAYG or DELAYF at all.
+#
+# The FREQUENCY line is also the spelling check on clk25: a net that does
+# not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
+
+FREQUENCY PORT "clk25" 25 MHZ;
+
+LOCATE COMP "clk25" SITE "P3";
+IOBUF  PORT "clk25" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n" SITE "L2";
+IOBUF  PORT "led_n" IO_TYPE=LVCMOS33;

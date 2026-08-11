@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — bank 6 VCCIO measurement, ten pins.
+#
+# clk25 and led_n are colorlight_i9.lpf's, unchanged, and the provenance
+# argument for them is written there in full. led_n is here as the
+# indicator rather than as the measurement point: D2 is what the operator
+# watches while walking the header holes with a meter.
+#
+# The eight probes are bank 6 balls colorlight_i9.lpf does not use, read
+# out of prjtrellis's iodb.json for LFE5U-45F / CABGA381 (bank 6 is 33
+# balls, seventeen of them already constrained there) and cross-checked
+# against litex-boards' colorlight_i5.py, which routes nine of the
+# sixteen free ones to headers. Eight are probed; they sit on TWO
+# carrier connectors, because that file names the physical header above
+# each pmod pair and pmodg/pmodh are both P4, pmodk/pmodl both P6:
+#
+#   P4                     P6
+#   F1 = pmodg 2           M4 = pmodk 1     N4 = pmodk 4
+#   K4 = pmodh 6           L5 = pmodk 2     L4 = pmodk 5
+#                          M1 = pmodl 3     N2 = pmodl 7
+#
+# The ninth is K5, pmodh index 3, and it is left alone: it is VREF1_6.
+#
+# Ten constraints against ten ports, which is the check. A stale LOCATE
+# here is skipped in silence (ecp5/lpf.cc:144), but the port it stopped
+# covering then fails the build with "IO <name> is unconstrained in LPF"
+# (ecp5/main.cc:287).
+#
+# IO_TYPE=LVCMOS33 IS THE HYPOTHESIS UNDER TEST, not a setting. If bank 6
+# is really at 2.5 V these pads output 2.5 V and this file's declaration
+# was wrong, which is the answer we came for. It is safe either way: an
+# output cannot exceed its own bank rail, and with every output in the
+# bank declared alike there is no VCCIO conflict for nextpnr to reject.
+#
+# DRIVE=4, the weakest the ECP5 offers, on the probes only. That these
+# eight balls are unconnected is litex's claim and not a measurement, and
+# a wrong claim means this design drives against whatever else does.
+# led_n keeps colorlight_i9.lpf's drive so that what is measured is the
+# configuration the real design uses.
+#
+# The FREQUENCY line is also the spelling check on clk25: a net that does
+# not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
+
+FREQUENCY PORT "clk25" 25 MHZ;
+
+LOCATE COMP "clk25" SITE "P3";
+IOBUF  PORT "clk25" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n" SITE "L2";
+IOBUF  PORT "led_n" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "probe_f1" SITE "F1";
+IOBUF  PORT "probe_f1" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_k4" SITE "K4";
+IOBUF  PORT "probe_k4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_m4" SITE "M4";
+IOBUF  PORT "probe_m4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_l5" SITE "L5";
+IOBUF  PORT "probe_l5" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_n4" SITE "N4";
+IOBUF  PORT "probe_n4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_l4" SITE "L4";
+IOBUF  PORT "probe_l4" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_m1" SITE "M1";
+IOBUF  PORT "probe_m1" IO_TYPE=LVCMOS33 DRIVE=4;
+
+LOCATE COMP "probe_n2" SITE "N2";
+IOBUF  PORT "probe_n2" IO_TYPE=LVCMOS33 DRIVE=4;

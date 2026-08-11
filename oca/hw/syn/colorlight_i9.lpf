@@ -33,6 +33,17 @@
 # (ecp5/bitstream.cc:684). Bank 6's VCCIO is a board rail. It is
 # measured, never declared.
 #
+# MEASURED 2026-08-11: 3.28 V, which is the 3.3 V rail. oca_vccio drove
+# eight free bank 6 balls high and low in step with D2; two of them
+# surface on the carrier's CONNECTOR P4 -- not ball P4, which this file
+# constrains as the PHY reset further down -- at holes 8 and 25, and
+# both read 3.28 V driven high and 0 V driven low. Those two are F1 and
+# K4, the only two of the eight that colorlight_i5.py puts on P4.
+# An output cannot rise above its own
+# bank rail, so a pad reading 3.28 V is a bank at 3.3 V within the
+# meter's accuracy, and 2.5 V is not a candidate at that distance. The
+# hard 0 V is what rules out an undriven pin reading a neighbour.
+#
 # ----------------------------------------------------------------------
 # IO_TYPE: LVCMOS33, and what would follow from that being wrong
 # ----------------------------------------------------------------------
@@ -75,7 +86,10 @@
 # What each wrong combination actually does, since "it is wrong" is not
 # a symptom anyone can look for:
 #
-#  * Bank 6 is 3V3, declared LVCMOS33 (the assumption). Correct.
+#  * Bank 6 is 3V3, declared LVCMOS33. THIS IS THE MEASURED CASE, and
+#    it is correct. The four below are kept because a later revision or
+#    a different board makes them live again, and because "it is wrong"
+#    is not a symptom anyone can look for.
 #
 #  * Bank 6 is 2V5, declared LVCMOS33 — OUTPUTS. Builds, programs, runs.
 #    BASE_TYPE becomes OUTPUT_LVCMOS33 (ecp5/bitstream.cc:832) and the
@@ -95,17 +109,19 @@
 #    about 1.25 V to about 0.85 V on five DDR lines at 125 MHz. There is
 #    no diagnostic anywhere in the flow. This is the combination that
 #    produces a link which comes up and drops packets, and it is why the
-#    rail is measured before the first bitstream and not after the first
-#    symptom.
+#    rail was measured before the RGMII pins were ever driven rather
+#    than after the first symptom. It is not the case this board is in.
 #
 #  * Bank 6 is 3V3, declared LVCMOS25. Builds. Receiver threshold sits
 #    near 1.25 V against a 3.3 V swing, which is generous on the high
 #    side and thin on the low side, and DRIVE is silently unavailable.
 #
-# The blink test of bring-up step 2 cannot resolve any of this. On the
-# i5 the LED was U16, in bank 3; the v7.2 deep copy moved it to L2, in
-# bank 6. A blink design contains one output, so that output alone fixes
-# bank 6's VCCIO in the bitstream and the LED lights on either rail.
+# The blink test of bring-up step 2 cannot resolve any of this, which is
+# why oca_vccio exists. On the i5 the LED was U16, in bank 3; the v7.2
+# deep copy moved it to L2, in bank 6. A blink design contains one
+# output, so that output alone fixes bank 6's VCCIO in the bitstream and
+# the LED lights on either rail. What settles the rail is reading a
+# driven pad with a meter, which is what oca_vccio is for.
 #
 # ----------------------------------------------------------------------
 # HOW THIS FILE CAN BE WRONG WITHOUT SAYING SO, AND WHAT CATCHES IT
@@ -129,7 +145,7 @@
 #     neither alone says anything.
 #  3. A FREQUENCY line naming a net that does not exist DOES warn —
 #     "net '<name>' does not exist in design, ignoring clock
-#     constraint" (common/kernel/basectx.cc:107). The two FREQUENCY
+#     constraint" (common/kernel/basectx.cc:108). The two FREQUENCY
 #     lines below therefore double as a spelling check on clk25 and
 #     rgmii_rx_clk.
 #
@@ -220,9 +236,10 @@ FREQUENCY PORT "rgmii_rx_clk" 125 MHZ;
 # pair. It is an ordinary PIO and driving it as an output is fine, but
 # it does mean the differential form of this PLL input is spoken for.
 #
-# L2 is the LED. Active low, from litex's user_led_n; unverified on
-# silicon. It moved here from U16 in the v7.2 revision, which is what
-# put it in the same bank as Ethernet port 0.
+# L2 is the LED, D2 on the silkscreen. Active low, from litex's
+# user_led_n and confirmed on the board 2026-08-11 by oca_blink's
+# asymmetric duty cycle. It moved here from U16 in the v7.2 revision,
+# which is what put it in the same bank as Ethernet port 0.
 
 LOCATE COMP "clk25"     SITE "P3";
 IOBUF  PORT "clk25"     IO_TYPE=LVCMOS33;
