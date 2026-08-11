@@ -699,8 +699,8 @@ core and never updated as the design grew by 3000 LUTs.
   **The one row that has since been built came in 2011 LUTs under its
   sum**, because adding a core measured alone to a port measured alone
   counts twice the logic the optimiser shares. (It was 2928 under until
-  `54a2df8`, which added 917 of vendor logic the earlier netlist did not
-  keep.) The two rows above it are
+  `54a2df8`, whose `clear_arp_cache` connection restored 881 LUTs of ARP
+  logic the earlier netlist had deleted.) The two rows above it are
   sums of the same kind and neither has been built, so they are
   estimates of unknown tightness in the same direction. **On the current
   RTL the MVP that fits is one core on one port, 0.581 Gbps at MTU** —
@@ -889,7 +889,8 @@ core and never updated as the design grew by 3000 LUTs.
   cache is permanently clearing", which kills its ports and its storage.
   The two ready pins, which fix the ICMP wedge, cost nothing.
 
-  So **+917 TRELLIS_COMB and +400 TRELLIS_FF are not what the fix cost.
+  So **+881 of the 917 TRELLIS_COMB and all 400 TRELLIS_FF are not what
+  the ICMP fix cost — the ready pair costs 36 LUTs and no flip-flops.
   They are the design being complete for the first time**, and the
   129.87 MHz belongs to a netlist that was missing part of it. There is
   no regression to recover from: there is a whole design that has never
@@ -923,8 +924,9 @@ core and never updated as the design grew by 3000 LUTs.
   in `hw/syn/README.md`, with the levers that have been ruled out and
   the measurements that ruled them out.
 
-  **The failing path is entirely inside the MAC's receive FIFO**, 64%
-  routing and 30% logic, which says congestion rather than depth — and
+  **The failing path is entirely inside the MAC's receive FIFO** —
+  `rx_fifo`, its async FIFO and the width adapter beside it — 64%
+  routing and 30% logic, which says congestion rather than depth, and
   the same module alone says it louder: rebuilt on this toolchain,
   `oca_top_mac` reaches **146.35 MHz** on `rgmii_rx_clk`, 17% clear of
   the target, against 124.22 for the same path in the whole design. Those

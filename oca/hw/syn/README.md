@@ -1536,11 +1536,18 @@ measured apart still overestimates, though by 10% rather than the 14%
 the first build showed.
 
 **This table read 17802 / 40.6% until 2026-08-11**, on the netlist
-before `54a2df8` connected the raw-IP ready pins. That fix is required
-— without it one non-UDP frame stops reception permanently — and it
-costs +917 TRELLIS_COMB and +400 TRELLIS_FF of vendor logic that yosys
-had been folding away, which is also why the design no longer closes.
-See the sweep below.
+before `54a2df8`. That commit connected three pins, and the growth
+splits unevenly between them — measured by building with only the first
+two:
+
+| connected | TRELLIS_COMB | TRELLIS_FF |
+|---|---|---|
+| `m_ip_hdr_ready`, `m_ip_payload_axis_tready` | +36 | 0 |
+| `clear_arp_cache` | +881 | +400 |
+
+The ready pair is the ICMP fix and is nearly free. `clear_arp_cache` is
+almost all of it, and what it buys is `arp_cache.v` going from **0 live
+flip-flops to 130** — see the sweep below.
 
 #### The receive clock, and what it took
 
@@ -1608,17 +1615,26 @@ again, and there is no reason to expect the next one to exist.
 **It did not exist, and the reason is worse than a lost seed. Amended
 2026-08-11.** `54a2df8` connected three pins on `udp_complete_64`. Two
 of them, the raw-IP ready pair, fix a wedge the board could not survive
-— one non-UDP frame and reception stops for good — and cost **nothing**:
-built with only those two, the netlist is 16849 flip-flops, exactly what
-it was.
+— one non-UDP frame and reception stops for good — and cost **36
+TRELLIS_COMB and no flip-flops at all**: built with only those two, the
+netlist is 17838 / 16849 against 17802 / 16849 before.
 
-The third, `clear_arp_cache`, is the whole of the **+917 TRELLIS_COMB
-and +400 TRELLIS_FF**, and what it bought is `arp_cache.v` going from
-**0 live flip-flops to 130**. The earlier netlist — the one that closed
+The third, `clear_arp_cache`, is **+881 TRELLIS_COMB and all 400
+TRELLIS_FF** of it, and what it bought is `arp_cache.v` going from **0
+live flip-flops to 130**. The earlier netlist — the one that closed
 on seed 6 and was packed into a bitstream — had no ARP cache in it at
 all, because an undriven input is not an input reading zero: yosys may
 take it as don't-care and pick the value that simplifies most, here a
 cache held permanently in reset.
+
+What that costs a board is worth stating exactly, because it is not
+"ARP stops working". `arp.v:294-301` builds the reply to an incoming
+who-has straight from the received frame and never consults the cache,
+and every `outgoing_*` register survives at full width in the pre-fix
+netlist — so the board still answers a peer asking for its address.
+What dies is the other direction: `arp_inst.cache_query_response_valid`
+is a constant 0 in that netlist, so the board's own lookup never
+returns and nothing it wants to send ever gets a destination MAC.
 
 So the sweep below is not a regression against 129.87 MHz. It is the
 first sweep of a complete design.
@@ -1672,9 +1688,11 @@ one that works, and `run_synth.py oca_top` exits 1 and packs nothing.
 #### Where the failing path is, and what has been ruled out
 
 The receive path's critical path is **entirely inside the MAC's receive
-FIFO** — 23 segments, 8.050 ns, every slow one a hop within
-`u_mac.eth_mac_1g_fifo_inst.rx_fifo.fifo_inst`. It is **64% routing**
-and 30% logic, which says congestion rather than depth.
+FIFO** — 23 segments, 8.050 ns, every hop within
+`u_mac.eth_mac_1g_fifo_inst.rx_fifo`: mostly its `fifo_inst`, with three
+segments in the width adapter beside it, one of them the second-largest
+routing delay on the path. It is **64% routing** and 30% logic, which
+says congestion rather than depth.
 
 The same module on its own says so too. Rebuilt on this toolchain,
 `oca_top_mac` — clocking, RGMII and the MAC, no crypto — reaches
@@ -1688,7 +1706,7 @@ Ruled out, each measured rather than assumed:
 |---|---|
 | 32 placer seeds | `rgmii_rx_clk` clears 125 on none; best 124.22 |
 | `--placer-heap-beta` 0.5, 0.7 | no effect at all, and it cannot have one: `ecp5/arch.cc:655` hard-sets `cfg.beta = 0.75` after the command line is read |
-| `--placer-heap-critexp 4` | placement identical to the baseline — same wirelen 168511, same timing cost 1450, same three Fmax |
+| `--placer-heap-critexp 4` | discarded as well, and doubly so: `ecp5/arch.cc:641` sets `cfg.criticalityExponent = 4`, which is also the value swept. Identical placement — same wirelen 168511, same timing cost 1450, same three Fmax |
 | `--placer-heap-timingweight 35` | applied and worse: 103.25 at seed 10, 108.32 at seed 23 |
 | `--placer-heap-alpha 0.2` | applied and worse: 108.24 |
 | a 50.00 MHz `clk_sys` | reaches 48.22; the PLL rung above 48.0769 does not help |
@@ -1700,6 +1718,10 @@ this device for the receive path to route freely**. One `oca_core` is
 28% of it. Nothing about the MAC, the FIFO depth or the placer settings
 is going to return 22 MHz.
 
-Note for anyone repeating this: `--placer-heap-beta` is documented by
-`--help` and silently discarded by the ECP5 backend, so a sweep over it
-produces a table of identical numbers that looks like a measurement.
+Note for anyone repeating this: `--placer-heap-beta` and
+`--placer-heap-critexp` are documented by `--help` and silently
+discarded by the ECP5 backend, which sets both itself
+(`ecp5/arch.cc:641,655`) after the command line has been parsed. A sweep
+over either produces a table of identical numbers that looks like a
+measurement. `--placer-heap-alpha` and `--placer-heap-timingweight` do
+reach the placer.

@@ -252,7 +252,9 @@ clock it gets, the same cycle model gives **0.560 Gbps at MTU**.
 
 **But no build closes timing today.** Connecting the raw-IP ready pins
 on the UDP stack — required, or one non-UDP frame stops reception for
-good — added 917 LUTs of vendor logic around the receive path, and
+good — came with a third connection, `clear_arp_cache`, that brought
+back 881 LUTs and 400 flip-flops of ARP logic yosys had been deleting,
+around the receive path, and
 across 32 placer seeds `rgmii_rx_clk` clears its 125 MHz on none of
 them, the best reaching 124.22. `AGENTS.md` carries the sweep and what
 has been ruled out. The two-port figures above stand as a cycle budget,
