@@ -15,9 +15,16 @@ where it looks like something else entirely.
 
 ## Before power
 
-**Measure the IO bank voltages.** This is the only item here that can
-damage hardware rather than waste time, and it must happen before any
-bitstream drives those pins.
+**Measure bank 6's VCCIO before the RGMII pins are ever driven.**
+Measured on this board 2026-08-11 and it is **3.3 V** (3.28 V read on a
+driven pad), so `LVCMOS33` throughout `colorlight_i9.lpf` is right and
+what follows in this section is why it mattered, not an open item.
+
+What it is not is a damage risk, and this paragraph said it was until
+2026-08-11. An output pad is powered from its own bank rail and cannot
+be made to exceed it by a line of text; what a wrong rail costs is a
+build error in one direction and receiver margin in the other. Both are
+below, and the second is the one worth the meter.
 
 Ethernet port 0 and the LED share **bank 6**; port 1 is entirely in
 **bank 3**. Our two sources for this board contradict each other exactly
@@ -28,7 +35,19 @@ bank across outputs, so the wrong combination is a fatal build error.
 The corollary is worse and silent: **an input declared at the wrong
 voltage produces no diagnostic at all**. RGMII receive pins declared
 `LVCMOS33` in a bank actually at 2.5 V will synthesise, place, route and
-program without a word.
+program without a word. That is the case the measurement ruled out.
+
+**How it was measured, since the rail is a plane inside the module and
+no capacitor on it is identifiable from anything we hold.** An LVCMOS
+output driven high sits at its own bank's VCCIO, and a ten megohm meter
+loads it with well under a microamp, so a driven open pad reads the rail
+directly. `oca_vccio` drives eight free bank 6 balls, toggling in step
+with D2 so that a swinging reading beside a visible blinking LED is the
+signature that finds them: nothing undriven swings on cue. Two surfaced
+on the carrier's P4, pins 8 and 25, both 3.28 V high and 0 V low.
+
+Repeat it on any board that is not this one. It is one bitstream and two
+readings.
 
 ## 1. Transport, before anything else
 

@@ -333,9 +333,16 @@ voltage produces no warning at all. RGMII receive inputs declared
 `LVCMOS33` in a bank actually at 2.5 V would pass synthesis and place and
 route without a word.
 
-**This must be measured on the board before the first bitstream that
-drives those pins.** It is the one item on this list that could damage
-hardware rather than merely fail to work.
+**Measured on the board 2026-08-11: bank 6 is at 3.3 V** (3.28 V read on
+a bank 6 pad driven high by `oca_vccio`, 0 V driven low, on two pins of
+the carrier's P4). `LVCMOS33` throughout `colorlight_i9.lpf` is right
+and the silent case above does not apply to this board.
+
+This paragraph called the measurement the one item here that could
+damage hardware, until 2026-08-11. It could not: an output pad is
+powered from its own bank rail and cannot be driven above it by a
+declaration. What a wrong rail costs is a build error in one direction
+and receiver noise margin in the other.
 
 Also unresolved: litex's `eth0`/`eth1` numbering is inverted with respect
 to the connector silkscreen, by its own comment, because of the PHY
@@ -406,14 +413,22 @@ Listed so that nobody mistakes the design for a validated one.
 
 1. **The RGMII delay value.** Empirical, uncheckable by our STA, and the
    most likely cause of a link that comes up and passes no traffic.
-2. **The IO bank voltages**, which decide whether the pin declarations
-   above are right or quietly wrong.
+2. ~~**The IO bank voltages**~~ **Closed 2026-08-11.** Bank 6 measures
+   3.3 V on a driven pad, so the `LVCMOS33` declarations are right.
+   Bank 3, which carries Ethernet port 1, is still unmeasured and
+   nothing in the MVP drives it.
 3. **The B50612D's default configuration.** Its datasheet is only
    available as a scanned PDF we could not extract text from, so whether
    the PHY applies an internal delay by default is unknown. If it does,
    ours must not.
-4. **Whether the i9 inherits the i5 pinout faithfully**, given that the
-   platform file assumes it and nobody has verified it on i9 silicon.
+4. **Whether the i9 inherits the i5 pinout faithfully.** Three points of
+   it are now verified on i9 silicon and the rest is not. `L2` drives
+   the LED and is active low, and `P3` carries a 25 MHz clock, both from
+   bring-up step 2; and of the eight bank 6 balls `oca_vccio` drives,
+   two reach the carrier's P4, so the connector map is not wholesale
+   wrong. Which two is unknown, and none of this reaches the twelve
+   RGMII pins, which are the ones that matter and which only traffic
+   will settle.
 5. **The JTAG pin identities**, and whether the flash arrives write
    protected.
 

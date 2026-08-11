@@ -848,6 +848,18 @@ core and never updated as the design grew by 3000 LUTs.
   end. `oca_top_stub` cannot do this job and its LED comment claimed it
   could; both are corrected.
 
+  **Bank 6 is at 3.3 V, measured 2026-08-11.** The rail is a plane
+  inside the module and no capacitor on it is identifiable from anything
+  we hold, so it was read off a driven pad instead: an LVCMOS output
+  driven high sits at its own bank's VCCIO, and a ten megohm meter loads
+  it with under a microamp. `oca_vccio` drives eight free bank 6 balls
+  toggling in step with D2, so a swinging reading beside a visible
+  blinking LED is what identifies them on a carrier whose connectors
+  nothing maps. Two surfaced on P4, pins 8 and 25: **3.28 V** driven
+  high, 0 V driven low. `LVCMOS33` throughout `colorlight_i9.lpf` is
+  therefore right, and the silent case that file documents at length,
+  RGMII inputs declared `LVCMOS33` in a 2.5 V bank, does not apply here.
+
   **There is no `oca_top` bitstream to load, and that is deliberate.**
   It misses 125 MHz on all 32 seeds, and `pack()` refuses to write a
   bitstream for a design that missed its clock, so the bench cannot get

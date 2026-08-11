@@ -17,10 +17,12 @@
 # decides bank 6's VCCIO in the bitstream and the LED lights on a 2.5 V
 # rail as readily as on a 3.3 V one. Whether bank 6 is actually at 3.3 V
 # — the question that decides whether the RGMII receive pins later sit at
-# the right threshold — is measured with a meter before this or any other
-# bitstream is loaded. See colorlight_i9.lpf, "IO_TYPE: LVCMOS33, and
-# what would follow from that being wrong": the dangerous combination
-# produces no diagnostic anywhere in the flow.
+# the right threshold — takes a meter on a driven pad, which is what
+# oca_vccio and colorlight_i9_vccio.lpf are for. Measured 2026-08-11 at
+# 3.28 V, so the rail is 3V3 and LVCMOS33 here is right. See
+# colorlight_i9.lpf, "IO_TYPE: LVCMOS33, and what would follow from that
+# being wrong", for what the other combinations would have done: the
+# dangerous one produces no diagnostic anywhere in the flow.
 #
 # The FREQUENCY line is also the spelling check on clk25: a net that does
 # not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
