@@ -243,15 +243,20 @@ clock was measured on the core placed **alone and out of context**: no
 MAC beside it, no IO, no PLL, so it is the ceiling that configuration
 could reach rather than a measurement of it. **That netlist has since
 been built**: `oca_top` is one core and one port against the real pin
-map, 17802 LUTs — 40.6%, not the 47.3% the sum predicted, because the
+map, 18719 LUTs — 42.7%, not the 47.3% the sum predicted, because the
 sum counts twice the logic the optimiser shares. **And it does not run
 at 0.581 Gbps**, because it cannot run at 49.91 MHz: `oca_clkrst`
-delivers `clk_sys` at 625/13 = **48.0769 MHz**, which seed 6 closes with
-49.41 MHz of Fmax, 2.8% of margin. The next frequency this PLL can offer
-is 50.00, and no build has ever asked for it. At the clock it
-gets, the same cycle model gives
-**0.560 Gbps at MTU**. The two-port figures above stand as a cycle
-budget, not a configuration the board carries.
+delivers `clk_sys` at 625/13 = **48.0769 MHz**, and the next frequency
+this PLL can offer, 50.00, has been built and does not close. At the
+clock it gets, the same cycle model gives **0.560 Gbps at MTU**.
+
+**But no build closes timing today.** Connecting the raw-IP ready pins
+on the UDP stack — required, or one non-UDP frame stops reception for
+good — added 917 LUTs of vendor logic around the receive path, and
+across 32 placer seeds `rgmii_rx_clk` clears its 125 MHz on none of
+them, the best reaching 124.22. `AGENTS.md` carries the sweep and what
+has been ruled out. The two-port figures above stand as a cycle budget,
+not a configuration the board carries.
 
 **The host protocol is implemented and verified**
 (`docs/design/2026-08-03-host-protocol.md`): a UDP payload in, an AEAD

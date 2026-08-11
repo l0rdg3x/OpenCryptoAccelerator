@@ -1506,26 +1506,34 @@ The cycle side is measured and does not depend on any of that: a
 64-byte block costs **40 cycles** end to end through `oca_core`, exactly
 linear (231, 391, 551, 711 cycles for 4, 8, 12, 16 blocks).
 
-### The whole board, pinned: oca_top closes, on one seed in thirteen
+### The whole board, pinned: oca_top places, and does not close
 
 The first design in this project that is a board rather than a core:
 clocking, RGMII front end, MAC, Ethernet header parse and build,
 ARP/IP/UDP, the seam and `oca_core`, against `colorlight_i9.lpf` with
-real IO. LFE5U-45F CABGA381 speed 6.
+real IO. LFE5U-45F CABGA381 speed 6, seed 10.
 
 | resource | used | of device |
 |---|---|---|
-| TRELLIS_COMB | 17802 | 40.6% |
-| TRELLIS_FF | 16849 | 38.4% |
+| TRELLIS_COMB | 18719 | 42.7% |
+| TRELLIS_FF | 17249 | 39.3% |
 | DP16KD | 13 | 12.0% |
 | MULT18X18D | 20 | 27.8% |
 | TRELLIS_IO | 17 | 6.9% |
 | EHXPLLL | 1 | 25.0% |
 
-**40.6%, against the 47.3% the area sum predicted.** One core measured
+**42.7%, against the 47.3% the area sum predicted.** One core measured
 12308 LUTs alone and one port 8422, which adds to 20730; the optimiser
 shares logic the two separate measurements each counted. Adding areas
-measured apart overestimates, and by 14% here.
+measured apart still overestimates, though by 10% rather than the 14%
+the first build showed.
+
+**This table read 17802 / 40.6% until 2026-08-11**, on the netlist
+before `54a2df8` connected the raw-IP ready pins. That fix is required
+— without it one non-UDP frame stops reception permanently — and it
+costs +917 TRELLIS_COMB and +400 TRELLIS_FF of vendor logic that yosys
+had been folding away, which is also why the design no longer closes.
+See the sweep below.
 
 #### The receive clock, and what it took
 
@@ -1558,7 +1566,9 @@ the critical path now in the receive FIFO's commit loop. Still short.
 
 #### The seed sweep, and the honest reading of it
 
-Thirteen seeds on the patched netlist, place and route only:
+Thirteen seeds on the patched netlist, place and route only. **This
+table is the netlist before `54a2df8` and is kept for the comparison
+below; it is not the design that is in the tree.**
 
 | seed | rgmii_rx_clk | clk_tx | clk_sys |
 |---|---|---|---|
@@ -1581,11 +1591,68 @@ on two seeds of thirteen, `clk_tx` on six, `clk_sys` on twelve — and
 all three coincide on **one**. Both 125 MHz clocks swing about 20% across
 the sweep and they do not swing together.
 
-**So the design closes, and it has no margin of its own.** Seed 6 is
-recorded in `run_synth.py`'s DESIGNS entry, not passed on a command line,
-so `run_synth.py oca_top` reproduces it. But a seed is not margin: any
-RTL change reshuffles the placement and the seed has to be found again,
-and there is no reason to expect the next one to exist. What would give
-real margin is less competition for the fabric around the receive path —
-the MAC alone closes at 132.98 MHz with 6.4% to spare, so the shortfall
-was never the module.
+**So the design closed, and it had no margin of its own.** Seed 6 was
+recorded in `run_synth.py`'s DESIGNS entry, not passed on a command
+line, so `run_synth.py oca_top` reproduced it. But a seed is not margin:
+any RTL change reshuffles the placement and the seed has to be found
+again, and there is no reason to expect the next one to exist.
+
+**It did not exist. Amended 2026-08-11.** `54a2df8` connected the raw-IP
+ready pins on `udp_complete_64`, which the board needs -- without them
+one non-UDP frame stops reception for good -- and that made the path
+live where yosys had been folding it away: **+917 TRELLIS_COMB and +400
+TRELLIS_FF, all of the flip-flops in the vendor bucket and none in our
+RTL**, landing around the one path in this design that had no margin.
+
+Thirty-two seeds on that netlist, place and route only:
+
+| seed | rgmii_rx_clk | clk_tx | clk_sys |
+|---|---|---|---|
+| 1 | 105.43 | 122.53 | 47.63 |
+| 2 | 107.77 | **130.86** | **48.38** |
+| 3 | 111.35 | 122.91 | **49.99** |
+| 4 | 115.42 | 121.36 | 46.93 |
+| 5 | 105.93 | 124.02 | **48.51** |
+| 6 | 115.59 | 120.88 | **48.39** |
+| 7 | 110.98 | 123.70 | **50.18** |
+| 8 | 112.61 | **132.71** | **49.18** |
+| 9 | 111.02 | **130.01** | 47.98 |
+| **10** | 124.22 | 122.91 | 47.40 |
+| 11 | 113.82 | **129.42** | 47.78 |
+| 12 | 100.49 | **138.95** | **48.12** |
+| 13 | 106.25 | **128.87** | **49.23** |
+| 14 | 112.59 | 116.28 | 47.04 |
+| 15 | 107.52 | **134.97** | 44.96 |
+| 16 | 112.97 | **129.22** | **49.03** |
+| 17 | 107.65 | 124.81 | **50.44** |
+| 18 | 113.84 | **137.01** | **48.10** |
+| 19 | 109.10 | 124.81 | 46.56 |
+| 20 | 111.04 | **136.67** | 47.87 |
+| 21 | 105.89 | **132.73** | **49.98** |
+| 22 | 113.31 | **130.31** | 46.56 |
+| 23 | 117.32 | **129.48** | **49.97** |
+| 24 | 106.00 | **125.63** | **49.42** |
+| 25 | 99.49 | 121.97 | **48.94** |
+| 26 | 100.28 | **130.75** | 46.68 |
+| 27 | 109.53 | **130.98** | **48.94** |
+| 28 | 115.27 | 120.71 | 47.02 |
+| 29 | 116.05 | **140.94** | **48.23** |
+| 30 | 102.07 | 115.02 | **50.18** |
+| 31 | 107.07 | **131.06** | **49.13** |
+| 32 | 113.37 | 122.22 | **48.53** |
+
+**`rgmii_rx_clk` clears 125 MHz on none of the thirty-two.** Best 124.22
+at seed 10, short by 0.63%; second best 117.32; the bulk between 105 and
+117. That shape matters: the best is a tail event, not a cluster sitting
+just under the line, so more seeds are not a plan. `clk_tx` clears on 18
+and `clk_sys` on 20, and no seed carries all three.
+
+Seed 10 is recorded in the DESIGNS entry as the best measured, not as
+one that works, and `run_synth.py oca_top` exits 1 and packs nothing.
+
+What would give real margin is still less competition for the fabric
+around the receive path -- the MAC alone closes at 132.98 MHz with 6.4%
+to spare, so the shortfall was never the module. Untried, and the
+obvious next thing: a third vendor patch that discards non-UDP frames
+inside `udp_complete_64` rather than exposing the raw-IP port, which
+would consume the frame without keeping its datapath alive.
