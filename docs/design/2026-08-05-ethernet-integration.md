@@ -161,7 +161,9 @@ design uses one, which is the other unopened door.
 **Second amendment, 2026-08-11: the design no longer closes at all.**
 `54a2df8` connected `m_ip_hdr_ready` and `m_ip_payload_axis_tready`,
 without which one non-UDP frame stops reception permanently. That makes
-the raw-IP path live where yosys had been folding it away — **+917
+the raw-IP path live where yosys had been folding it away, and a third
+connection in the same commit, `clear_arp_cache`, restored an ARP cache
+that had been deleted from every netlist before it — **+917
 TRELLIS_COMB and +400 TRELLIS_FF, every flip-flop of it in the vendor
 bucket** — and the new logic lands around the receive path, the one
 part of this design that never had margin. Across 32 placer seeds

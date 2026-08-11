@@ -206,8 +206,10 @@ DESIGNS = {
         # It closed on seed 6 until 54a2df8, at 129.87 / 130.07 / 49.41.
         # Connecting the raw-IP ready pins there -- which the board needs,
         # since without them one non-UDP frame stops reception for good --
-        # made that path live and cost +917 LUTs and +400 flip-flops of
-        # vendor logic around the receive path, which never had margin.
+        # cost +36 LUTs -- while a third pin in the same commit,
+        # clear_arp_cache, brought back +881 LUTs and +400 flip-flops of
+        # ARP logic that had been optimised away, around the receive
+        # path, which never had margin.
         #
         # Recorded so that the published numbers reproduce by naming the
         # target. See hw/syn/README.md for the sweep and AGENTS.md for
@@ -264,14 +266,18 @@ NETLIST_FF_FLOOR = {
     # And the vendor stack, every module of it that carries state. This
     # is not belt and braces: until 2026-08-11 the census keyed on a .sv
     # filename, so no vendor module could ever produce a bucket, and
-    # arp_cache.v went from 130 live flip-flops to ZERO between two
-    # builds with nobody noticing. The design that closed timing, packed
-    # a bitstream and was published had no ARP cache in it at all -- the
-    # same shape as the cmp2lut trap, and invisible for the same reason:
-    # nothing counted it.
+    # arp_cache.v sat at ZERO live flip-flops in every netlist this
+    # project ever built -- it first reached 130 on 2026-08-11, when
+    # clear_arp_cache stopped being undriven. The design that closed
+    # timing, packed a bitstream and was published had no ARP cache in
+    # it at all: the same shape as the cmp2lut trap, and invisible for
+    # the same reason, nothing counted it.
     #
     # Floored 5% under measured, because the failure worth catching is a
-    # module vanishing rather than a register moving. Re-measure when the
+    # module vanishing rather than a register moving. This covers the
+    # 4281 flip-flops that carry a vendor .v in their src; the remaining
+    # 525 of the old unattributed lump carry no design source at all and
+    # are still guarded only by NETLIST_FF_TOTAL. Re-measure when the
     # pin, the patches or a parameter changes; the census printed below
     # is where the numbers come from.
     "oca_top": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,

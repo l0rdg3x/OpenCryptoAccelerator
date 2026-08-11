@@ -159,7 +159,8 @@ Hardware accelerator for:
 
   **Amended 2026-08-11: it does not close timing at all.** Connecting
   the raw-IP ready pins on the UDP stack, which the board needs or one
-  non-UDP frame stops reception for good, added 917 LUTs of vendor logic
+  non-UDP frame stops reception for good, came with a third connection
+  that restored 881 LUTs and 400 flip-flops of deleted ARP logic
   around the receive path; across 32 placer seeds `rgmii_rx_clk` clears
   125 MHz on none, the best being 124.22. The 0.560 Gbps above is
   therefore what this design delivers if a closing placement is found,
