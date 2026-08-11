@@ -8,7 +8,7 @@ prototype, see `SPEC.md`). Prices are indicative
 
 | Item | Spec / notes | Price |
 |------|--------------|-------|
-| Colorlight i9 v7.2 (Lattice ECP5 LFE5U-45F) | 44K LUTs, 8 MB SDRAM, W25Q64 flash, 2× GbE PHY (Broadcom B50612D). Get **Kit 2**: module + carrier board with DAPLink debugger (CMSIS-DAP JTAG, supported by openFPGALoader) and 6× dual-PMOD. ~40-55 € on AliExpress, ~69 € on Amazon. **Avoid listings labeled "i9+ XC7A50T"**: that is an Artix-7 board, not ECP5, incompatible with the open toolchain. The genuine i9+ (85K LUTs, LFE5U-85F) is fine but found mainly on AliExpress | 40-69 € |
+| Colorlight i9 v7.2 (Lattice ECP5 LFE5U-45F) | 44K LUTs, 8 MB SDRAM, W25Q64 flash, 2× GbE PHY (Broadcom B50612D) **and no Ethernet socket** -- the PHYs are on the module and their MDI pairs go to the SO-DIMM edge, but the RJ45s and the magnetics are on a carrier no kit sold with this module includes. This line listed the PHYs as if they were ports until 2026-08-12; a PHY is the chip, not the socket. The project does not need them: see SPEC.md PHASE 2. Get **Kit 2**: module + carrier board with DAPLink debugger (CMSIS-DAP JTAG, supported by openFPGALoader, and a USB CDC serial that reaches the FPGA on J17/H18 -- that is the host interface) and 6× dual-PMOD. ~40-55 € on AliExpress, ~69 € on Amazon. **Avoid listings labeled "i9+ XC7A50T"**: that is an Artix-7 board, not ECP5, incompatible with the open toolchain. The genuine i9+ (85K LUTs, LFE5U-85F) is fine but found mainly on AliExpress | 40-69 € |
 | USB-C PSU 5 V / 3 A | e.g. official Raspberry Pi 4 PSU (5.1 V / 3 A) | ~14 € |
 | 2× Ethernet cables, Cat5e or better | GbE link to the host | ~5 € |
 
