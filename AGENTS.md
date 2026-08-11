@@ -729,12 +729,14 @@ core and never updated as the design grew by 3000 LUTs.
   VCO, so the VCO must be a multiple of 125 MHz, and the 400-800 MHz
   band leaves exactly 500, 625 and 750. From those, `clk_sys` near this
   range can be 45.45, 46.88, **48.08**, 50.00 and 52.08 — nothing
-  between 48.08 and 50.00. **50.00 has now been built, and it does not
-  close**: `CLKOP_DIV` 4 with `CLKOS_DIV` 10 gives a 500 MHz VCO,
-  `clk_tx` exactly 125 and `clk_sys` exactly 50.000, and on that design
-  `clk_sys` reaches 48.22 against the 50.00 it would need. So the ladder
-  offers nothing above 48.0769 that this design can take, which is a
-  measurement rather than the expectation this paragraph used to carry.
+  between 48.08 and 50.00. **50.00 has now been asked for, at one seed,
+  and that placement reached 48.22**: `CLKOP_DIV` 4 with `CLKOS_DIV` 10
+  gives a 500 MHz VCO, `clk_tx` exactly 125 and `clk_sys` exactly
+  50.000. One placement is not a sweep, and this project's own rule
+  about seeds cuts both ways: on the 48.08-constrained sweep `clk_sys`
+  reaches 50.44 at best and clears 50.00 on three of 32 seeds. So the
+  rung above is **untested rather than unreachable**, and moot until the
+  receive clock closes.
   The device does carry four PLLs and this design uses one, so a second
   one for `clk_sys` is still a door nobody has opened — though it would
   not help until the receive clock closes.

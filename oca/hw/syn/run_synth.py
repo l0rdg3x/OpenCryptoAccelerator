@@ -81,10 +81,11 @@ class Design(NamedTuple):
     # design rather than passed on the command line so that a figure in
     # a document can be reproduced by naming the target and nothing else.
     pnr_args: list = []
-    # The placer seed this design is known to close timing on. None means
-    # the flow's default. A design that needs a particular seed says so
-    # here, because "it closes" and "it closes on seed 6" are different
-    # claims and only one of them reproduces.
+    # The placer seed a design's published figures were measured on.
+    # None means the flow's default. Recorded here because "it closes"
+    # and "it closes on seed 6" are different claims and only one of
+    # them reproduces -- and for the same reason a design that closes on
+    # nothing still records the seed its numbers came from.
     seed: int | None = None
     # Per-stage wall-clock bound, when DEFAULT_TIMEOUT is not enough.
     # Recorded here rather than left to the caller for the same reason as
@@ -982,8 +983,8 @@ def main():
     # Here and not earlier, twice over. A run that fails before this
     # point has changed nothing, and destroying the last good artefact
     # over a missing tool or a failed netlist check would cost more than
-    # it protects -- on a design that closes on one placer seed of
-    # thirteen, retrying is the normal way to work. And nextpnr writes
+    # it protects -- on a design this sensitive to placement, retrying
+    # with a different seed is the normal way to work. And nextpnr writes
     # neither the report nor the configuration unless place and route
     # both succeed, so a routing failure or a timeout leaves the old
     # report standing: deleting the bitstream that matches it would

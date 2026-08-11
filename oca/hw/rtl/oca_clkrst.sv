@@ -87,11 +87,14 @@
  * oca_dual 50.4 — was taken out of context, with no pins and no
  * Ethernet stack sharing the fabric, so it is an upper bound on what
  * the pinned design will reach and not a promise. oca_top bore that out
- * and then some: as of 2026-08-11 it does not close 48.08 either, the
- * best of 32 placer seeds reaching 47.40 on the seed that comes closest
- * overall. What it misses by more is rgmii_rx_clk, which no seed
- * clears, so moving clk_sys would not help. 50.00 has been built as
- * well -- CLKOP_DIV 4, CLKOS_DIV 10, VCO 500 -- and reaches 48.22.
+ * and then some: as of 2026-08-11 it closes nothing. clk_sys itself is
+ * not the problem -- it clears 48.08 on 20 of the 32 seeds measured and
+ * reaches 50.44 at best -- but rgmii_rx_clk clears 125 MHz on none of
+ * them, and the seed that comes closest overall (10) has clk_sys at
+ * 47.40. So moving clk_sys would not help until the receive clock
+ * closes. 50.00 has been asked for once, at one seed -- CLKOP_DIV 4,
+ * CLKOS_DIV 10, VCO 500 -- and reached 48.22; that is one placement,
+ * not a sweep, so the rung above is untested rather than ruled out.
  *
  * ----------------------------------------------------------------------
  * RESETS
