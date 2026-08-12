@@ -187,7 +187,9 @@ and three on the host datapath described below: the 64-bit widening,
 then the overlap inside a command, then the overlap across packets. The
 Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
 multipliers (90% -> 28% of an LFE5U-45F) and
-more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
+more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz as
+measured on the day; 55.41 MHz rebuilt on today's netlist, which has had
+its secret registers cleared on reset since — `hw/syn/README.md`). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
 26.10 -> 37.87 MHz. Rebuilding the wrapper's byte mask per byte instead

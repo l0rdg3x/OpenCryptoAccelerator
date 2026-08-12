@@ -1,6 +1,10 @@
 # Host protocol and engine adapter — design
 
-Date: 2026-08-03. Status: approved, not yet implemented.
+Date: 2026-08-03. **Status: implemented on 2026-08-04, merged in
+`ee54b06`**; the RTL landed in `283c97a` ("rtl: oca_proto and oca_core —
+the host protocol end to end") and is covered by `hw/sim/run_oca_core.py`
+(29/29) and `hw/sim/run_attack.py` (16/16). This line read "approved,
+not yet implemented" until 2026-08-12.
 Scope: the packet protocol and the logic between a UDP payload and
 `chacha20_poly1305.sv`. Everything here is verifiable in simulation.
 
@@ -10,9 +14,14 @@ RGMII interface, PLL, reset and pin constraints. See section 7.
 ## 1. Why this shape
 
 SPEC.md phase 2 asks for "a simple command queue to the host
-(documented protocol over UDP or USB FIFO)". The MVP board is a
-Colorlight i9 v7.2 whose only host link is Gigabit Ethernet, so the
-queue is a UDP protocol.
+(documented protocol over UDP or USB FIFO)". This paragraph then read
+"The MVP board is a Colorlight i9 v7.2 whose only host link is Gigabit
+Ethernet, so the queue is a UDP protocol", and **that was wrong about
+the board**: the i9 v7.2 has no RJ45 socket, and its only host link is
+the DAPLink USB serial. The queue is the same queue over the other
+alternative that clause always offered — SLIP frames on the serial line.
+Nothing below this paragraph changes: the packet format, the opcodes and
+the engine adapter never depended on which transport carried them.
 
 The Ethernet MAC, the RGMII interface and the IP/ARP/UDP stack are
 **not written here**. They come from `verilog-ethernet` (Alex
@@ -315,12 +324,16 @@ Three things this design does **not** protect, which belong in
 
 - **The key crosses the wire in the clear** in the load-key command.
   Once per key rather than once per packet, but in the clear. Anyone who
-  can observe that segment reads it.
-- **There is no authentication.** Anyone who can send packets to the
-  FPGA can encrypt and decrypt with whatever slots are loaded. The
-  accelerator trusts whoever talks to it, exactly as a PCIe accelerator
-  trusts its host — except an Ethernet cable is easier to reach than a
-  PCIe slot. The MVP deployment is a direct host-to-board link.
+  can read that link reads it.
+- **There is no authentication.** Anyone who can reach the FPGA can
+  encrypt and decrypt with whatever slots are loaded. The accelerator
+  trusts whoever talks to it, exactly as a PCIe accelerator trusts its
+  host. This entry added "except an Ethernet cable is easier to reach
+  than a PCIe slot. The MVP deployment is a direct host-to-board link"
+  until 2026-08-12: the transport is a USB serial line, so a direct
+  host-to-board link is the only deployment the hardware offers, and
+  reaching it takes host access or physical presence rather than a
+  route. `Security.md` section 6 is the current version of this list.
 - **The nonce comes from the host**, and reuse remains a host error the
   hardware cannot detect. This is already recorded for the engine and
   applies unchanged here.
@@ -365,5 +378,11 @@ confirm the plaintext leaks, then restore.
 The Ethernet integration is a separate spec: `verilog-ethernet` as a
 submodule, the RGMII wrapper with its ECP5 DDR primitives (permitted
 behind a wrapper by SPEC.md's portability rule), PLL, reset, and the
-Colorlight i9 pin constraints. It can be designed now but can only be
-*closed* with the board on the bench, expected around 2026-08-17.
+Colorlight i9 pin constraints. It was designed, built and tested, and it
+is now history: **the board arrived on 2026-08-11** — this line read
+"expected around 2026-08-17" — and carries no RJ45 socket, so the route
+was closed on 2026-08-12 with nothing left for the bench to settle. See
+`docs/design/2026-08-05-ethernet-integration.md`, which opens with that
+closure, and `SPEC.md`, PHASE 2. The host interface is the board's
+DAPLink USB serial; nothing in the sections above depends on which
+transport delivers the request.

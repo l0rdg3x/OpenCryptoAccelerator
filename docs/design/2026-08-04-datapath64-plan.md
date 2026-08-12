@@ -1,5 +1,15 @@
 # 64-bit host datapath — implementation plan
 
+> **Status: executed on 2026-08-04, in `fc429c1`** ("rtl: widen
+> oca_proto and oca_core to 64 bits") and `73658e6` ("rtl: stream the
+> response through a clock-enabled pipeline"), which is this plan's
+> second goal clause. The result is in `oca/hw/syn/README.md`: the
+> widening cost +280 LUTs, +386 flip-flops, +2 DP16KD and no extra
+> multipliers. **The `- [ ]` boxes below are the plan as it was written,
+> not work outstanding.** None is re-ticked here: a box ticked without
+> walking its step one by one would claim more than this line does, and
+> the commits and the measurement are the evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development to implement this plan
 > task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

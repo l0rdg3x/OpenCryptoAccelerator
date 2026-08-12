@@ -1,5 +1,22 @@
 # Host protocol implementation plan
 
+> **Status: executed and merged on 2026-08-04, in `ee54b06`** (branch
+> `feat/host-protocol`), the RTL having landed in `283c97a` ("rtl:
+> oca_proto and oca_core — the host protocol end to end").
+> `hw/sim/run_oca_core.py` covers it 29/29 and `hw/sim/run_attack.py`
+> drives the same DUT from the other side, 16/16. **The `- [ ]` boxes
+> below are the plan as it was written, not work outstanding.** None is
+> re-ticked here: a box ticked without walking its step one by one would
+> claim more than this line does, and the commits and the suites are the
+> evidence.
+>
+> The transport under this protocol changed on 2026-08-12, from UDP over
+> Ethernet to the board's USB serial, and the goal below still says "a
+> UDP payload". **`oca_core`'s interface did not change**: it is two
+> 64-bit AXI-Stream, and it never knew about the transport — see section
+> 7 of `2026-08-03-host-protocol.md` and
+> `2026-08-05-ethernet-integration.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development to implement this plan
 > task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

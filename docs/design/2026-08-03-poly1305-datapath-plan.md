@@ -1,5 +1,15 @@
 # Poly1305 datapath rework — implementation plan
 
+> **Status: executed on 2026-08-03, in `1205c68`** ("rtl: rework
+> Poly1305 into a 26-bit limb datapath"). The result is in
+> `oca/hw/syn/README.md` — 65 -> 20 MULT18X18D, and 22.94 -> 52.68 MHz
+> on the netlist of that day, 55.41 MHz on today's — and
+> `hw/sim/run_poly1305.py` covers it, 4/4 plus 4 more at
+> `ROWS_PER_CYCLE = 5`. **The `- [ ]` boxes below are the plan as it was
+> written, not work outstanding.** None is re-ticked here: a box ticked
+> without walking its step one by one would claim more than this line
+> does, and the commit and the suite are the evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps
