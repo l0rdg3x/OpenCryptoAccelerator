@@ -151,20 +151,26 @@ Python 3.14).
 .venv/bin/python hw/sim/run_oca_core.py
 .venv/bin/python hw/sim/run_attack.py
 .venv/bin/python hw/sim/run_clkrst.py
+.venv/bin/python hw/sim/run_console.py
+.venv/bin/python hw/sim/run_fifo.py
+.venv/bin/python hw/sim/run_uart_rx.py
+.venv/bin/python hw/sim/run_uart_tx.py
+.venv/bin/python hw/sim/run_uart_console.py
+.venv/bin/python hw/sim/run_uart_echo.py
+.venv/bin/python hw/sim/run_slip_rx.py
+.venv/bin/python hw/sim/run_slip_tx.py
+.venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
 .venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
 cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
-Four suites belong to the Ethernet route retired on 2026-08-12. The code
-is still in the tree and they still pass; nothing new is built on them:
-
-```sh
-.venv/bin/python hw/sim/run_rgmii.py
-.venv/bin/python hw/sim/run_eth_mac.py         # needs `python hw/vendor/vendor_patches.py build`
-.venv/bin/python hw/sim/run_udp_seam.py
-.venv/bin/python hw/sim/run_oca_path.py        # frame in to frame out
-```
+All 21 runners are above; there is no aggregate runner, so a suite left
+off this list is a suite nobody runs. Four more — `run_rgmii`,
+`run_eth_mac`, `run_udp_seam` and `run_oca_path` — belonged to the
+Ethernet route and were deleted with it on 2026-08-12, together with the
+`oca/hw/vendor/` tree they built against. No suite here needs
+`vendor_patches.py build`, or any vendored source, any more.
 
 `run_attack.py` drives the same DUT as `run_oca_core.py` but is written
 to break the packet overlap rather than to confirm it. The two
@@ -177,13 +183,22 @@ Current status: chacha20 5/5 tests pass at both `ROUNDS_PER_CYCLE`
 values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
 pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
-7/7, rgmii 10/10, eth_mac 8/8, udp_seam 10/10 at both `HDR_Q_DEPTH`
-values, oca_path 7/7, console 8/8, fifo 4/4, uart_console 4/4,
+7/7, console 8/8, fifo 4/4, uart_console 4/4,
 uart_echo 3/3, uart_rx 4/4, uart_tx 5/5, slip_rx 12/12 at both `BYTES`
 values, slip_tx 7/7, uart_crypto 7/7 across its two `LED_BITS` builds —
-**177**, plus thirty-nine re-runs at a second parameter — and
-post-synthesis keystore 4/4 and oca_proto 2/2;
-the protocol model checks pass as plain Python;
+**142**, plus twenty-nine re-runs at a second parameter — and
+post-synthesis keystore 4/4 and oca_proto 2/2, which is **177 passing
+executions over 21 runners** with no failures and two skips, measured
+2026-08-12. This read 183 tests over 25 runners and 222 executions until
+the Ethernet suites were deleted that day: rgmii 10/10, udp_seam 10/10
+at both `HDR_Q_DEPTH` values, eth_mac 8/8 and oca_path 7/7 all pass on
+`main`, and they are the 45 executions that went. The last two build
+from the patched vendor tree at `hw/vendor/build/`, which is gitignored,
+so in a fresh checkout or a new worktree they exit non-zero instead and
+the same before-figure reads 207 executions over 23 producing runners.
+Both numbers are real; they differ by whether `vendor_patches.py build`
+had run.
+The protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,
 and three on the host datapath described below: the 64-bit widening,
@@ -257,10 +272,10 @@ alone means the single core's own 49.91 MHz mean, not the pair's. That
 clock was measured on the core placed **alone and out of context**: no
 MAC beside it, no IO, no PLL, so it is the ceiling that configuration
 could reach rather than a measurement of it. **That netlist was
-built**: `oca_top` is one core and one port against the real pin
+built**: `oca_top` was one core and one port against the real pin
 map, 18719 LUTs — 42.7%, not the 47.3% the sum predicted, because the
-sum counts twice the logic the optimiser shares. **And it does not run
-at 0.581 Gbps**, because it cannot run at 49.91 MHz: `oca_clkrst`
+sum counts twice the logic the optimiser shares. **And it did not run
+at 0.581 Gbps**, because it could not run at 49.91 MHz: `oca_clkrst`
 delivers `clk_sys` at 625/13 = **48.0769 MHz**, and the next frequency
 this PLL can offer, 50.00, has been built and does not close. At the
 clock it gets, the same cycle model gives **0.560 Gbps at MTU**.
@@ -353,25 +368,30 @@ been placed and routed, on four seeds with every seed routing** —
 `AGENTS.md` carries what they measure, and it is deliberately not
 repeated here. **None of this has run on silicon.**
 
-**The Ethernet integration was merged and is now retired**
-(2026-08-12), designed in
+**The Ethernet integration was merged, retired and then deleted**
+(all 2026-08-12), designed in
 `docs/design/2026-08-05-ethernet-integration.md`, which carries a closed
-header: `verilog-ethernet` (MIT) as a submodule, the RGMII front end
-written by us around the ECP5 DDR primitives, PLL, reset, the Colorlight
-i9 pin constraints, the seam onto `oca_core`, and `oca_top` placed and
-routed. Complete, it never closed timing, and no bitstream of it
-survives. What it established stays. The 8-to-64-bit width conversion is
-not in our clock
+header and stays as history: `verilog-ethernet` (MIT) as a submodule,
+the RGMII front end written by us around the ECP5 DDR primitives, PLL,
+reset, the Colorlight i9 pin constraints, the seam onto `oca_core`, and
+`oca_top` placed and routed. Complete, it never closed timing, and no
+bitstream of it survives. **What it established stays; the sources do
+not** — the RTL, the four testbenches, the vendored tree and the three
+`oca_top*` synthesis targets were removed, and `docs/STATUS.md` lists
+the three pieces that deliberately stayed. The 8-to-64-bit width
+conversion was not in our clock
 domain: at ~48 MHz an 8-bit stream carries 384 Mbps, under the port it
-was meant to feed, so it happens on the 125 MHz side inside
+was meant to feed, so it happened on the 125 MHz side inside
 `eth_mac_1g_fifo` at `AXIS_DATA_WIDTH = 64` — not
 `eth_mac_1g_rgmii_fifo`, which embeds the `rgmii_phy_if` that has no
-ECP5 target. Upstream has no testbench for that configuration, so it
-has one of ours (`run_eth_mac.py`), beside one for the RGMII wrapper
+ECP5 target. Upstream had no testbench for that configuration, so it had
+one of ours (`run_eth_mac.py`), beside one for the RGMII wrapper
 and one for the seam. **The whole path from a synthetic frame back out
-to one has `run_oca_path.py`** — 7 tests, and the first run of it found
+to one had `run_oca_path.py`** — 7 tests, and the first run of it found
 `oca_top` wedging its own receive path on any frame that is not UDP --
 found on the first run, which is what a whole-path testbench is for.
+`run_uart_crypto` is the whole-path test that took over, over the
+serial line rather than over a frame.
 
 ## Phase 1: abstract API + software backend
 

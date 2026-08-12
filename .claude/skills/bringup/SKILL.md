@@ -158,18 +158,22 @@ P3 shows as steadily lit, not as nothing at all.
 
 If it does not blink, nothing after this is diagnosable.
 
-**Do not use `oca_top_stub` for this.** Its `led_n` is the AND of seven
-terms: `beat[24]`, `pll_locked`, `phy_ready`, `link_up`,
-`link_full_duplex`, `link_speed != 3` and `dly_cflag_seen`. The last one
-is a sticky bit fed by the receive delays' CFLAG, and the stub ties their
-MOVE low, so no move ever commands a pulse and whether CFLAG rests high
-is characterised in neither yosys, prjtrellis nor nextpnr.
+**Drive the indicator from one counter and nothing else**, which is what
+`oca_blink` does. The rule was paid for by `oca_top_stub`, deleted with
+the Ethernet route on 2026-08-12: its `led_n` was the AND of seven
+terms, `beat[24]`, `pll_locked`, `phy_ready`, `link_up`,
+`link_full_duplex`, `link_speed != 3` and `dly_cflag_seen`. The last was
+a sticky bit fed by
+the receive delays' CFLAG, and the stub tied their MOVE low, so no move
+ever commanded a pulse and whether CFLAG rests high is characterised in
+neither yosys, prjtrellis nor nextpnr.
 
-The consequence is not which way it reads, it is that **one reading
-covers two states**: `led_n` sits high and steady when the PLL never
-locked, and can sit high and steady on a board where everything worked.
-The comment in that file claimed the reading distinguished them, until
-2026-08-11.
+The consequence was not which way it read, it is that **one reading
+covers two states**: `led_n` sat high and steady when the PLL never
+locked, and could sit high and steady on a board where everything
+worked. The comment in that file claimed the reading distinguished them,
+until 2026-08-11. Any future bring-up indicator gated on more than one
+term inherits the same defect.
 
 ## 3. The PLL
 
@@ -214,10 +218,12 @@ check reaches `check_pll` only through `NETLIST_PRIM_COUNT`; a top
 missing from that table used to skip both in silence.
 
 There is no 90-degree copy to build: this step asked for one until
-2026-08-09, and `oca_rgmii.sv` makes the transmit clock from an
-`ODDRX1F` fed by a constant edge pair instead.
+2026-08-09, and `oca_rgmii.sv` made the transmit clock from an
+`ODDRX1F` fed by a constant edge pair instead. That file was deleted on
+2026-08-12 with the route, and `ecp5_prims.sv` kept only `EHXPLLL`,
+which is the one primitive this step needs.
 
-## 4 and 5, which were RGMII and traffic — RETIRED 2026-08-12
+## 4 and 5, which were RGMII and traffic: RETIRED 2026-08-12
 
 **Do not do these. There is nothing to plug a cable into.** The i9 v7.2
 carries both B50612D PHYs on the module and routes their MDI pairs to
@@ -237,6 +243,19 @@ the DELAYF characterisation gap, the nibble-alignment tell and the drop
 counters are all in `docs/design/2026-08-05-ethernet-integration.md`,
 which is marked closed and kept as history. Read it if the route ever
 reopens on different hardware; do not work from it here.
+
+**The code behind those steps was deleted on 2026-08-12**: the RGMII
+front end, the seam, the three `oca_top*` designs, their runners and the
+vendored `verilog-ethernet` tree. Two pieces stayed on purpose and this
+skill depends on both. `oca/hw/syn/colorlight_i9.lpf` is kept verbatim,
+its fifteen RGMII and PHY pins included (twelve `rgmii_*` plus
+`phy_mdc`, `phy_mdio` and `phy_rst_n`, out of the seventeen `LOCATE`s
+the file carries), because 270 of its 327 lines are
+the ECP5 analysis the bank section above rests on and because
+`run_synth.py` and the other `.lpf` files cite it; no surviving design
+builds against it. And `oca_clkrst.sv` keeps its B50612D reset
+sequencer, tested against the datasheet's Table 86, because it sits
+inside `oca_pll`, which step 3 above loads onto the board.
 
 ## Recording what you find
 

@@ -34,14 +34,17 @@ The full project specification is in [SPEC.md](SPEC.md).
 carries both PHYs on the module but no RJ45 socket, so there is nothing
 to plug a cable into, and the die is an LFE5U with no SERDES, so it
 cannot be the PCIe platform either ([SPEC.md](SPEC.md), PHASE 2). What
-that route measured is kept rather than deleted: `oca_top` reached from
-the RGMII pads to `oca_core` and back, a whole-path testbench drove a
-synthetic Ethernet frame through it and checked the frame that came out,
-and it never closed timing -- the receive clock missed 125 MHz on all 32
-placer seeds tried, the best reaching 124.22, so no bitstream was
-produced. `AGENTS.md` carries those measurements. `oca_core`'s ports are
-two 64-bit AXI-Stream and it never knew about Ethernet, so the crypto,
-the keystore, the packet buffer and the protocol are unaffected.
+that route measured is kept; the code that measured it is not. `oca_top`
+reached from the RGMII pads to `oca_core` and back, a whole-path
+testbench drove a synthetic Ethernet frame through it and checked the
+frame that came out, and it never closed timing -- the receive clock
+missed 125 MHz on all 32 placer seeds tried, the best reaching 124.22, so
+no bitstream was produced. `AGENTS.md` carries those measurements. **The
+RTL, the four testbenches and the vendored `verilog-ethernet` tree were
+deleted the same day**; `docs/STATUS.md` lists what deliberately stayed
+behind and why. `oca_core`'s ports are two 64-bit AXI-Stream and it never
+knew about Ethernet, so the crypto, the keystore, the packet buffer and
+the protocol are unaffected.
 
 ## Quick start
 
@@ -70,10 +73,23 @@ cd oca
 .venv/bin/python hw/sim/run_oca_core.py
 .venv/bin/python hw/sim/run_attack.py
 .venv/bin/python hw/sim/run_clkrst.py
+.venv/bin/python hw/sim/run_console.py
+.venv/bin/python hw/sim/run_fifo.py
+.venv/bin/python hw/sim/run_uart_rx.py
+.venv/bin/python hw/sim/run_uart_tx.py
+.venv/bin/python hw/sim/run_uart_console.py
+.venv/bin/python hw/sim/run_uart_echo.py
+.venv/bin/python hw/sim/run_slip_rx.py
+.venv/bin/python hw/sim/run_slip_tx.py
+.venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
 .venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
 .venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 ```
+
+That is all 21 of them, and they give **177 passing executions with no
+failures**, measured 2026-08-12. There is no aggregate runner, so a
+suite missing from this list is a suite nobody runs.
 
 The two `*_gate.py` runners need the project-local yosys as well: they
 replay tests on ECP5 primitives, because every other suite elaborates
@@ -81,22 +97,12 @@ the SystemVerilog and cannot see what synthesis did to it. The last line
 is not a simulation at all — the protocol model has no DUT and runs as
 plain Python.
 
-Four more suites belong to the Ethernet route retired on 2026-08-12.
-The code is still in the tree and they still pass; nothing new is built
-on them:
-
-```sh
-.venv/bin/python hw/sim/run_rgmii.py
-.venv/bin/python hw/vendor/vendor_patches.py build   # before the next two
-.venv/bin/python hw/sim/run_eth_mac.py
-.venv/bin/python hw/sim/run_udp_seam.py
-.venv/bin/python hw/sim/run_oca_path.py              # frame in to frame out
-```
-
-`run_eth_mac.py` and `run_oca_path.py` read a patched copy of the pinned
-`verilog-ethernet` tree rather than the submodule, which is why
-`vendor_patches.py build` comes first; each refuses to run against an
-unpatched tree instead of testing sources a board would not carry.
+Four further suites belonged to the Ethernet route and were deleted with
+it on 2026-08-12: `run_rgmii`, `run_eth_mac`, `run_udp_seam` and
+`run_oca_path`, along with the vendored `verilog-ethernet` tree and the
+`vendor_patches.py` that patched it. Nothing here needs a vendored tree
+to build any more. `run_uart_crypto` is the whole-path test that
+replaced `run_oca_path`, over the serial line instead of over a frame.
 
 ## Documentation
 

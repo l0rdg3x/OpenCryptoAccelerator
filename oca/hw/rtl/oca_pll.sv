@@ -5,17 +5,18 @@
  *
  * oca_clkrst is the real module rather than a copy, so the PLL under
  * test is the one later steps depend on. Two of its connections are NOT
- * the top's, and one of them matters: ext_rst_n is tied high here where
- * oca_top and oca_top_stub drive it from their power-on-reset counter,
- * so arst_n is pll_locked alone instead of por_n && pll_locked, and the
- * reset release path exercised here is not quite theirs. clk_rx is tied
- * to clk25 where they pass gmii_rx_clk, which reaches nothing this
- * design consumes. Most of the module is not under test either:
- * this design consumes pll_locked and rst_n_tx and nothing else, so the
- * PHY reset timer and the sys and rx synchronisers are optimised out and
- * only two flip-flops of oca_clkrst survive. Those two are the tx reset
- * synchroniser. The rest is step 4's to prove, along with the RGMII, the
- * PHY and the MAC, none of which is here.
+ * what a board top level would drive, and one of them matters:
+ * ext_rst_n is tied high here, so arst_n is pll_locked alone instead of
+ * por_n && pll_locked, and a top that gates it with a power-on-reset
+ * counter releases reset by a path this step never exercises. clk_rx is
+ * tied to clk25 rather than to a recovered receive clock, and reaches
+ * nothing this design consumes. Most of the module is not under test
+ * either: this design consumes pll_locked and rst_n_tx and nothing
+ * else, so the PHY reset timer and the sys and rx synchronisers are
+ * optimised out and only two flip-flops of oca_clkrst survive. Those
+ * two are the tx reset synchroniser. What this bitstream says about the
+ * rest of oca_clkrst is nothing at all; test_clkrst.py is where the
+ * rest is proven, and it is proven in simulation only.
  *
  * THE READING IS A FREQUENCY, NOT A LIGHT. A lock flag on an LED says
  * only that EHXPLLL asserted LOCK, which it will do around a wrong
@@ -32,7 +33,13 @@
  * That also tightens step 2's result, which only ever established the
  * oscillator to the precision of a blink counted by eye.
  *
- * THREE STATES, THREE READINGS, which is the rule oca_top_stub broke.
+ * THREE STATES, THREE READINGS, and no two of them may look alike. The
+ * rule was paid for by an earlier top level whose led_n was the AND of
+ * seven terms -- a beat, a lock flag, PHY readiness, three link terms
+ * and a sticky delay-calibration flag -- so it went high and steady
+ * both when the clocking failed and when everything worked. An
+ * indicator that shows a dead board and a healthy one the same way
+ * reports nothing, whichever of the two it is looking at.
  *
  *   D2 at 1 Hz, symmetric   PLL locked and clk_tx is 125 MHz
  *   D2 flickering, ~3 Hz    bitstream live, clk25 running, PLL NOT

@@ -5,13 +5,13 @@ No SIMULATION parameter, because oca_clkrst.sv has no SIMULATION branch:
 its header says why, and test_clkrst.py says what the testbench does
 instead. The PLL is a blackbox with no behaviour in either case.
 
-The elaboration guards run first, outside the simulator, for the reason
-run_rgmii.py checks DEL_VALUE there: a cocotb run only ever sees the
-parameters its build elaborated with, so a value the module is supposed
-to refuse has to fail to elaborate rather than come up as a design nobody
-asked for. That is the module's own argument for the guards -- nothing
-downstream of them makes these checks -- and the guards are the only
-part of the PLL arithmetic a simulation of a blackbox can reach at all.
+The elaboration guards run first, outside the simulator, because a
+cocotb run only ever sees the parameters its build elaborated with: a
+value the module is supposed to refuse has to fail to elaborate rather
+than come up as a design nobody asked for. That is the module's own
+argument for the guards -- nothing downstream of them makes these
+checks -- and the guards are the only part of the PLL arithmetic a
+simulation of a blackbox can reach at all.
 
 Only three of the six guards are reachable from here. VCO_HZ, PFD_HZ and
 CLK_TX_HZ are computed from localparams, not from parameters, so nothing

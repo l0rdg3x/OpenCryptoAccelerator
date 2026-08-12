@@ -145,11 +145,17 @@ Hardware accelerator for:
   MTU** — the single core's own four-seed mean of 49.91 MHz (2026-08-09)
   rather than the pair's, since only one core is in that build. The
   1.138 Gbps stands as the fabric's cycle budget, not a configuration
-  the board carries.
+  the board carries. The Ethernet code was deleted on 2026-08-12, so the
+  8422 no longer has a probe in the tree behind it;
+  `docs/design/2026-08-12-ethernet-measurement-provenance.md` records the
+  commit, the vendor pin and the commands it was measured with, and what
+  a re-measurement did and did not reproduce.
   **Amended 2026-08-10: the MAC fits, it has been placed beside a core,
   and the delivered figure is lower than either projection.** `oca_top`
-  is one core and one full port against the real pin map, with IO and
-  the PLL: **18719 LUTs, 42.7% of the device**. **0.581 Gbps was an Fmax
+  was one core and one full port against the real pin map, with IO and
+  the PLL: **18719 LUTs, 42.7% of the device**. (It was deleted from the
+  tree on 2026-08-12 with the rest of the route; the measurement stands,
+  the design does not exist.) **0.581 Gbps was an Fmax
   divided into a cycle count**, and the design cannot run at that clock:
   `oca_clkrst` delivers `clk_sys` at 625/13 = **48.0769 MHz**, and
   because `clk_tx` divides the same VCO the ladder is coarse — nothing
@@ -193,8 +199,10 @@ Hardware accelerator for:
   versions of this bullet assumed, for the ~1.26 Gbps the MVP bullet
   above records. See `oca/hw/syn/README.md` for the measurements and
   `docs/design/2026-08-03-poly1305-datapath.md` for the earlier
-  projection. On the MVP board the figure would in any case only be
-  observable in simulation, the host link being GbE.
+  projection. On the MVP board the figure is in any case only observable
+  in simulation: this said "the host link being GbE" until 2026-08-12,
+  and the host link is now the DAPLink USB serial at 115200 8N1 — about
+  11.5 KB/s, against the 125 MB/s a GbE port carries.
 - Declared note, **inverted 2026-08-09**: v1 end-to-end throughput is
   limited by the fabric, not by the host interface. This line read "v1
   end-to-end throughput is limited by the host interface (GbE)", which

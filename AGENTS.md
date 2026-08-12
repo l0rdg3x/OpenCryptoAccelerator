@@ -54,8 +54,23 @@ B50612D PHYs are on the module and their MDI pairs go to the SO-DIMM
 edge, but the sockets and the magnetics are on a carrier no kit sold
 with the module includes -- and the die is an LFE5U with no SERDES, so
 it can never be the PCIe platform either (`SPEC.md`, PHASE 2). None of
-it is work to do. It is kept because it was measured and because the
-code is still in the tree.
+it is work to do.
+
+**The code was deleted the same day; the numbers are kept.** This
+sentence used to say the material was kept "because it was measured and
+because the code is still in the tree", and half of that premise has
+gone: `oca_rgmii.sv`, `oca_udp_seam.sv`, `oca_top.sv`, `oca_top_mac.sv`,
+`oca_top_stub.sv`, the three wrappers and two synthesis probes under
+`oca/hw/rtl/vendor/`, the four
+runner/testbench pairs, the whole `oca/hw/vendor/` tree with the
+`verilog-ethernet` submodule and its patches, and the three `oca_top*`
+synthesis targets are all removed. What stays is what was measured, and
+it stays here because a figure whose sources are gone is worth more with
+its provenance written down than deleted along with them. **Read every
+Ethernet passage in this file as a record, not as a description of the
+tree**: no path, module or runner it names still exists unless this
+document says so explicitly. `docs/STATUS.md` lists the three pieces
+that deliberately survive.
 
 **The Ethernet MAC was an external dependency, not project RTL.** The
 1G MAC, the RGMII interface and the IP/ARP/UDP stack come from
@@ -81,9 +96,9 @@ drives one register from two `always` blocks on opposite edges, and
 `synth_ecp5` reports conflicting drivers on every bit rather than
 inferring `ODDRX1F`. `iddr.v` does elaborate, into fabric flip-flops on
 both edges instead of `IDDRX1F`. **The RGMII front end — DDR
-primitives and the receive delay — is therefore ours to write, behind
-the wrapper SPEC.md's portability rule requires**, and it now exists as
-`oca/hw/rtl/oca_rgmii.sv`. (This entry said "the RX clock delay and its
+primitives and the receive delay — was therefore ours to write, behind
+the wrapper SPEC.md's portability rule requires**, and it was written as
+`oca/hw/rtl/oca_rgmii.sv`, deleted with the route. (This entry said "the RX clock delay and its
 ECLK routing" until 2026-08-08. `IDDRX1F` has no `ECLK` port — its port
 list is `D, SCLK, RST, Q0, Q1` — and `ECLK` belongs to the x2 gearing
 primitives, which this design rejects. The delay is on the five data
@@ -96,7 +111,7 @@ Two further facts recorded before they are rediscovered. The repository
 is **deprecated by its author** in favour of `taxi`, and has not moved
 since 2025-02-27; taxi is CERN-OHL-S 2.0 strongly reciprocal or
 commercial, which is not compatible with keeping this project's design
-under a permissive licence, so verilog-ethernet at MIT stays the choice.
+under a permissive licence, so verilog-ethernet at MIT stayed the choice.
 And the stack has a **64-bit variant** (`udp_complete_64` and the `_64`
 modules below it) alongside the 8-bit one, which changes where the width
 conversion belongs: at 48 MHz an 8-bit stream carries 384 Mbps, under
@@ -197,57 +212,74 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_clkrst.py             # 7/7 pass
+.venv/bin/python hw/sim/run_console.py            # 8/8 pass
+.venv/bin/python hw/sim/run_fifo.py               # 4/4 pass
+.venv/bin/python hw/sim/run_uart_rx.py            # 4/4 pass
+.venv/bin/python hw/sim/run_uart_tx.py            # 5/5 pass
+.venv/bin/python hw/sim/run_uart_console.py       # 4/4 pass
+.venv/bin/python hw/sim/run_uart_echo.py          # 3/3 pass
+.venv/bin/python hw/sim/run_slip_rx.py            # 12/12 pass, + 12 at BYTES=64
+.venv/bin/python hw/sim/run_slip_tx.py            # 7/7 pass
+.venv/bin/python hw/sim/run_uart_crypto.py        # 5/7 pass + 2 skip, then 7/7 at LED_BITS=8
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
 
-Four suites belong to the Ethernet route retired on 2026-08-12. The code
-is still in the tree, deliberately, and they still pass. Nothing new is
-built on them. They stay until the console carries the same end-to-end
-test, because `test_oca_path.py` is the only one that drives `oca_core`
-inside a system rather than on its own, and **there is no aggregate RTL
-runner in this repository at all** — `oca/CMakeLists.txt` registers one
-ctest and it is the C vectors binary, so every RTL suite in this file is
-invoked by name and these four cost nothing where they sit:
+That is every RTL runner in the repository, and the list has to be
+complete because **there is no aggregate RTL runner here at all** —
+`oca/CMakeLists.txt` registers one ctest and it is the C vectors binary,
+so every suite is invoked by name and a suite missing from this list is
+a suite nobody runs.
 
-```sh
-.venv/bin/python hw/sim/run_rgmii.py              # 10/10 pass
-.venv/bin/python hw/sim/run_eth_mac.py            # 8/8 pass, needs the vendor patches
-.venv/bin/python hw/sim/run_udp_seam.py           # 10/10 pass, twice, at two HDR_Q_DEPTH
-.venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
-```
-
-**177 RTL tests over 23 runners, plus 6 on a synthesised netlist from
-the two gate runners** — 25 in all. Thirty-nine of the 177 run a second
-time at a non-default parameter — five for `chacha20` at
+**148 tests over 21 runners, and 177 passing executions**, six of them
+on a synthesised netlist from the two gate runners. Twenty-nine tests
+run a second time at a non-default parameter — five for `chacha20` at
 `ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
-three for `oca_pktbuf` at the smallest `BYTES` it accepts, all ten of
-`oca_udp_seam` at `HDR_Q_DEPTH` = 2, all twelve of `oca_slip_rx` at
-`BYTES` = 64 and five of `oca_uart_crypto` at `LED_BITS` = 8.
+three for `oca_pktbuf` at the smallest `BYTES` it accepts, all twelve of
+`oca_slip_rx` at `BYTES` = 64 and five of `oca_uart_crypto` at
+`LED_BITS` = 8 — which is what separates the two figures: 142 tests
+outside the gate runners, plus 29 re-runs, plus their 6.
 
-This read **123** until 2026-08-12, and the gap was never arithmetic:
-that sum is exactly right over the fourteen suites it names, and six
-suites were missing from the list. The console and UART chain —
+Measured by running every one of them on 2026-08-12, after the Ethernet
+removal: **177 passing executions, no failures, and every runner exits
+0.** Two tests skip — `oca_uart_crypto`'s heartbeat pair, which needs
+`LED_BITS` small enough to simulate and so runs only on the second
+build, exactly as `oca_blink`'s does.
+
+**This read 222 executions over 25 runners, and 183 tests, until that
+removal** — 177 of those tests over the 23 runners that are not the gate
+pair, plus the 6 on a netlist, which is how the old figure was written
+and why the coincidence of that 177 with today's 177 executions is worth
+naming, so nobody reads a stale figure as a current one. Deleted with
+the route: `run_rgmii` (10 tests, 10 executions), `run_udp_seam` (10
+tests, 20 executions, running twice at two `HDR_Q_DEPTH` values),
+`run_eth_mac` (8) and `run_oca_path` (7) — 35 tests and 45 executions.
+So 222 − 45 = 177 executions, and 183 − 35 = 148 tests over 21 runners.
+Nothing in the tree needs `vendor_patches.py build` any more; that
+script and the tree it patched are gone.
+
+**Two before-figures are both true and they differ by a precondition, so
+read the one that matches your tree.** `run_eth_mac` and `run_oca_path`
+build from the patched vendor tree at `oca/hw/vendor/build/`, which
+`oca/.gitignore` excludes: it is present only where
+`vendor_patches.py build` has already run, and absent from a fresh
+checkout or a new worktree. Where it is present all four Ethernet suites
+pass and `main` reads **222 executions over 25 runners**. Where it is
+absent those two refuse to build and exit non-zero, and the same `main`
+reads **207 executions over the 23 producing runners** — the figure this
+file carried until 2026-08-12, and the figure anyone re-running the
+suites in a fresh clone will get. Neither is wrong; only one of them is
+the whole tree.
+
+This count read **123** until 2026-08-12, and that gap was never
+arithmetic: the sum was exactly right over the fourteen suites it named,
+and six suites were missing from the list. The console and UART chain —
 `run_console` 8, `run_fifo` 4, `run_uart_console` 4, `run_uart_echo` 3,
 `run_uart_rx` 4, `run_uart_tx` 5, 28 tests — was written on 2026-08-11
 and appeared in no document at all, while being the only host channel
 the board has. The serial bridge and the crypto console add 26 more:
-`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7.
-
-Measured by running every one of them on 2026-08-12: **207 passing
-executions, no failures**, across the 23 runners that can run outside a
-tree with the vendor patches built. Two tests skip — the heartbeat pair,
-which needs `LED_BITS` small enough to simulate and so runs only on the
-second build, exactly as `oca_blink`'s does. `run_eth_mac.py` and
-`run_oca_path.py` are the other two runners, 15 tests, and they exit
-non-zero rather than build from an unpatched tree; the count above
-includes them because the tests exist, and this paragraph says so
-because a number that hides which of its terms were not run is the kind
-of figure this file keeps having to correct.
-
-`run_eth_mac.py` and `run_oca_path.py` read the patched vendor tree, so
-`hw/vendor/vendor_patches.py build` has to have run; both say so and
-exit non-zero rather than testing the wrong sources.
+`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7. The list above
+now carries all of them, which is the actual fix.
 
 **A parameter with one tested value is a parameter that does not work.**
 Both of these switch the datapath rather than sizing it, and both went
@@ -749,13 +781,17 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   measured out-of-context on this toolchain rather than estimated:
   `udp_complete_64` 7147, `eth_mac_1g_rgmii_fifo` at 64 bits 1214, and
   ~61 for the RGMII front end. The MAC figure is that module as
-  measured; the build now uses `eth_mac_1g_fifo`, which is the same
+  measured; the build used `eth_mac_1g_fifo`, which is the same
   wrapper without the `rgmii_phy_if` the ~61 accounts for, so the total
   does not move. **Two modules are missing from that figure**:
   `eth_axis_rx` and `eth_axis_tx`, which `udp_complete_64` does not
-  instantiate and which `oca_top` reads and needs
+  instantiate and which `oca_top` read and needed
   (`docs/design/2026-08-05-ethernet-integration.md`), so 8422 is a floor
-  for a port and not its cost. What that leaves:
+  for a port and not its cost. The probes that produced these numbers
+  were deleted on 2026-08-12 with the rest of the route;
+  `docs/design/2026-08-12-ethernet-measurement-provenance.md` carries the
+  commit, the vendor pin, the two yosys commands and the result of
+  re-running them before the deletion. What that leaves:
 
   | configuration | LUTs | of device |
   |---|---|---|
@@ -783,7 +819,7 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   route closed for want of a socket.
 
   **And the ceiling is not the clock the board runs.** `oca_top`
-  instantiates `oca_clkrst`, which delivers `clk_sys` at 625/13 =
+  instantiated `oca_clkrst`, which delivers `clk_sys` at 625/13 =
   **48.0769 MHz**. Fmax only says whether that clock closes, and **as of
   2026-08-11 it does not**: the best of 32 seeds reaches 47.40 on the
   seed that comes closest overall, and `clk_sys` clears its target on 20
@@ -813,13 +849,18 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   The device does carry four PLLs and this design uses one, so a second
   one for `clk_sys` is still a door nobody has opened.
 
-  **Read verilog-ethernet with `read_verilog`, never `read_slang`.**
-  Measured on the same modules: `axis_async_fifo` is 169 LUTs and 3
+  **Third-party Verilog goes through `read_verilog`, never
+  `read_slang`, and this is a frontend lesson rather than an Ethernet
+  one.** It was measured on `verilog-ethernet`, which is no longer in the
+  tree, and it applies to the next vendored Verilog just as it applied to
+  that one. On the same two modules: `axis_async_fifo` is 169 LUTs and 3
   DP16KD through `read_verilog` and 6454 LUTs with no block RAM at all
   through `read_slang`; `eth_mac_1g_fifo` is 1185 against 12620. Slang
-  does not infer these memories and spills them into logic, so a mixed
-  design read entirely through slang would measure an order of magnitude
-  too large and be abandoned for the wrong reason.
+  does not infer those memories and spills them into logic, so a mixed
+  design read entirely through slang measures an order of magnitude too
+  large and gets abandoned for the wrong reason. Our own cores need
+  `read_slang` for the SystemVerilog they use (see the hard rule above),
+  so a design mixing the two reads each side with its own frontend.
 
   This corrects the figure this entry carried until 2026-08-05, which
   read "one gigabit port is saturated at MTU with 12% of margin". That
@@ -923,8 +964,12 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   to end; and something is clocking P3 at roughly the rate expected,
   since the blink was neither absent nor obviously fast or slow. **No
   period was ever timed**, at step 2 or at step 3, so the oscillator's
-  frequency is bounded by eye and by nothing else. `oca_top_stub` cannot do this job and its LED comment claimed it
-  could; both are corrected.
+  frequency is bounded by eye and by nothing else. `oca_top_stub` could
+  not do this job and its LED comment claimed it could — an indicator
+  gated on seven terms reads the same when the PLL never locked as when
+  everything worked. Both were corrected before that file was deleted
+  with the route, and the lesson is why `oca_blink` and `oca_pll` each
+  drive D2 from one counter and nothing else.
 
   **Step 3 of the ladder is half done on the board**, and the half that
   is missing is the half that makes it a measurement. `oca_pll.sv` with its
@@ -1022,27 +1067,63 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   held, and then the route it belongs to was retired on 2026-08-12 for a
   reason no placement could have fixed.
 
-  What is in the tree from that route: `verilog-ethernet` as a submodule
-  at `oca/hw/vendor/verilog-ethernet` (77320a94); `oca_rgmii.sv`, the RGMII
-  front end around the ECP5 DDR primitives, with the receive delay
-  movable at run time rather than fixed in the bitstream (10 tests);
-  `oca_clkrst.sv`, one PLL and three clock domains with a reset
-  synchroniser each (7 tests); `ecp5_prims.sv`; `colorlight_i9.lpf`;
-  the parameter-fixing wrappers under `oca/hw/rtl/vendor/` that the
-  8422-LUT port measurement was taken on; and `oca_udp_seam.sv`, the
-  join between the UDP stack and `oca_core` (10 tests, run at two queue
-  depths).
+  What that route left in the tree, and what it no longer does. Deleted
+  on 2026-08-12: `verilog-ethernet`, which sat as a submodule at
+  `oca/hw/vendor/verilog-ethernet` (77320a94), together with
+  `vendor_patches.py` and `patches/`; `oca_rgmii.sv`, the RGMII front end
+  around the ECP5 DDR primitives, with the receive delay movable at run
+  time rather than fixed in the bitstream (10 tests); `oca_udp_seam.sv`,
+  the join between the UDP stack and `oca_core` (10 tests, run at two
+  queue depths); `oca_top.sv`, `oca_top_mac.sv` and `oca_top_stub.sv`
+  with their `run_synth.py` entries; and, under `oca/hw/rtl/vendor/`,
+  the three parameter-fixing wrappers (`oca_eth_axis_64.v`,
+  `oca_eth_mac_1g_fifo_64.v`, `oca_udp_complete_64.v`) together with the
+  two synthesis probes (`oca_eth_mac_1g_fifo_64_probe.sv`,
+  `oca_udp_complete_64_probe.sv`). Both probes were re-run before being
+  deleted and their cell counts are recorded in
+  `docs/design/2026-08-12-ethernet-measurement-provenance.md` — which
+  also corrects the belief that they were what the 8422-LUT figure was
+  measured on. They are not: 8422 is a `TRELLIS_COMB` count from a
+  nextpnr out-of-context run, the probes report yosys cells before
+  packing, and no script in this repository reproduces the former.
+  `ecp5_prims.sv` lost `DELAYF`, `DELAYG`, `IDDRX1F` and `ODDRX1F`
+  and keeps `EHXPLLL`, which `oca_clkrst` needs.
+
+  **Two things stayed, and both are deliberate.** `oca_clkrst.sv` keeps
+  its B50612D PHY reset sequencer, and `test_clkrst.py` keeps the tests
+  that hold it to the datasheet's Table 86 minimums and their order,
+  because `oca_clkrst` sits inside `oca_pll` — a design measured on
+  silicon at bring-up step 3 — and reopening it would risk a validated
+  design for no functional gain. **The price of freezing it is that its
+  comments now point at code that does not exist**: `docs/STATUS.md`
+  lists the dangling references line by line, and they are a recorded
+  limitation, not an oversight. And `colorlight_i9.lpf` is kept
+  verbatim, its fifteen RGMII and PHY pins included — twelve `rgmii_*`
+  plus `phy_mdc`, `phy_mdio` and `phy_rst_n`, which is the file's
+  seventeen `LOCATE`s less `clk25` and `led_n`, a distinction the file
+  itself does not draw: 270 of its 327 lines are
+  ECP5 analysis that surviving code cites, `run_synth.py` in three places
+  and the bring-up skill's bank argument among them, while **no
+  surviving design uses it as a constraint file** — every pinned design
+  carries its own small `.lpf`. `docs/STATUS.md` states both, and the
+  third residue: the submodule's object store under `.git/modules` was
+  not purged. Upstream is deprecated rather than archived — public, and
+  still serving the pin as the head of master, but unmoved since
+  2025-02-27 and superseded by `taxi`, the pin being its own "Add
+  deprecation notice" commit — so 6.3 MB is what this project pays for
+  not depending on a third-party repository it does not control staying
+  up with the sources these figures were measured on.
 
   **The 8-to-64-bit width conversion is not in our clock domain**: at
   ~48 MHz an 8-bit stream carries 384 Mbps, under the port it was meant
   to feed, so it happens on the 125 MHz side inside `eth_mac_1g_fifo` at
   `AXIS_DATA_WIDTH = 64`, which does the conversion and the clock domain
-  crossing in one instance. Upstream's testbench does not exercise that
-  configuration, so it has one of ours (`run_eth_mac.py`, 8 tests). The
-  whole path from a synthetic frame back out to one has `run_oca_path.py`
-  (7 tests), below.
+  crossing in one instance. Upstream's testbench did not exercise that
+  configuration, so it had one of ours (`run_eth_mac.py`, 8 tests). The
+  whole path from a synthetic frame back out to one had `run_oca_path.py`
+  (7 tests), below. Both were deleted with the route.
 
-  **A pinned place & route now runs**, on `oca_top_stub`: 17 TRELLIS_IO
+  **A pinned place & route ran**, on `oca_top_stub`: 17 TRELLIS_IO
   (every pad the `.lpf` names, and the flow passes no
   `--lpf-allow-unconstrained`, so 17 is the proof), 1 EHXPLLL, 11
   IOLOGIC, and four clocks all constrained for real — `clk_sys` 260.69
@@ -1055,10 +1136,11 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   the clocking and the pads are known to place before the real top is
   written.
 
-  **`oca_top` places and routes, and as of 2026-08-11 it does NOT close
-  timing.** The whole chain is in one design — pads, `oca_rgmii`, the
+  **`oca_top` placed and routed, and as of 2026-08-11 it did NOT close
+  timing.** The whole chain was in one design — pads, `oca_rgmii`, the
   MAC, the Ethernet header parse and build, ARP/IP/UDP, `oca_udp_seam`
-  and `oca_core` — and `run_synth.py oca_top` exits 1 and packs nothing.
+  and `oca_core` — and `run_synth.py oca_top` exited 1 and packed
+  nothing. That target no longer exists: `run_synth.py` rejects the name.
 
   | | measured, seed 10 |
   |---|---|
@@ -1099,8 +1181,9 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   the bulk between 105 and 117 — so the best is a tail event and not a
   cluster near the target. `clk_tx` clears on 18 of 32 and `clk_sys` on
   20, but no seed carries all three. The seed lottery is spent as a
-  lever. `oca_top`'s DESIGNS entry records 10 because it is the best
-  measured, not because it works.
+  lever. `oca_top`'s DESIGNS entry recorded 10 because it was the best
+  measured, not because it worked; that entry was deleted with the
+  design.
 
   **This was the top open item until 2026-08-12, and it is not an item
   any more**: the route closed for want of an RJ45 socket, which no
@@ -1126,8 +1209,8 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   **The failing path is entirely inside the MAC's receive FIFO** —
   `rx_fifo`, its async FIFO and the width adapter beside it — 64%
   routing and 30% logic, which says congestion rather than depth, and
-  the same module alone says it louder: rebuilt on this toolchain,
-  `oca_top_mac` reaches **146.35 MHz** on `rgmii_rx_clk`, 17% clear of
+  the same module alone said it louder: rebuilt on this toolchain,
+  `oca_top_mac` reached **146.35 MHz** on `rgmii_rx_clk`, 17% clear of
   the target, against 124.22 for the same path in the whole design. Those
   22 MHz are what the rest of the design costs it. (This entry said
   132.98 MHz until 2026-08-11, measured on an earlier state of that
@@ -1136,10 +1219,12 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   reaching, that there is too much logic on this device.
 
   **Two vendor defects had to be patched to get here, and both were
-  blocking.** They live in `hw/vendor/patches/`, applied to an extracted
-  copy of the pin by `hw/vendor/vendor_patches.py`; the submodule is
-  never written and `run_synth.py` and the runners refuse to build
-  without them.
+  blocking.** They lived in `hw/vendor/patches/`, applied to an extracted
+  copy of the pin by `hw/vendor/vendor_patches.py` — the submodule was
+  never written, and `run_synth.py` and the runners refused to build
+  without them. All of that was deleted on 2026-08-12; the two defects
+  are described below because they are properties of the upstream
+  sources, which anyone reopening this route would meet again.
 
   1. **`tkeep` was zero on every receive beat.** `axis_adapter`'s upsize
      branch ignored `S_KEEP_ENABLE` where its bypass branch honours it,
@@ -1152,10 +1237,10 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
      `crc_state` one cycle later took the receive path from 102.59 to
      115.77 MHz and took the CRC out of the critical path entirely.
 
-  `oca/hw/sim/run_eth_mac.py` is the MAC's testbench, written before the
-  patches and against the unpatched module: 8 tests, and it is what makes
-  the `tkeep` patch provable — reverted, it goes 7/8. The FCS patch is
-  observably inert by construction, so what the suite proves about it is
+  `oca/hw/sim/run_eth_mac.py` was the MAC's testbench, written before the
+  patches and against the unpatched module: 8 tests, and it is what made
+  the `tkeep` patch provable — reverted, it went 7/8. The FCS patch is
+  observably inert by construction, so what the suite proved about it is
   that it changed nothing.
 
   **The flow packs a bitstream**, and only where one can mean something:
@@ -1169,16 +1254,18 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   from one placement beside the numbers of another. A run that fails
   before or during place & route takes nothing, because nextpnr writes
   no report unless it succeeds and the old pairing still holds.
-  **And right now it packs nothing for `oca_top`**, because that design
-  misses three constraints. The gate is doing its job rather than
-  failing: the only `oca_top.bit` this project ever had was 527142
-  bytes with a header reading `Part: LFE5U-45F-6CABGA381`, built from
-  the netlist before the ICMP fix, and it no longer exists. What packs
-  today is `oca_top_stub`, 163854 bytes, which carries no crypto and no
-  MAC.
+  **It packed nothing for `oca_top`**, because that design missed three
+  constraints. The gate was doing its job rather than failing: the only
+  `oca_top.bit` this project ever had was 527142 bytes with a header
+  reading `Part: LFE5U-45F-6CABGA381`, built from the netlist before the
+  ICMP fix, and it no longer exists. The design that demonstrated the
+  passing side was `oca_top_stub`, 163854 bytes, carrying no crypto and
+  no MAC. Both were deleted on 2026-08-12; the design that packs a
+  bitstream with crypto in it is `oca_uart_crypto`, 423213 bytes, and it
+  reaches the host over the serial line instead.
 
-  **The whole path is tested, and testing it found a defect that would
-  have killed the board.** `run_oca_path.py` (7 tests) generates a
+  **The whole path was tested, and testing it found a defect that would
+  have killed the board.** `run_oca_path.py` (7 tests) generated a
   harness holding `oca_eth_mac_1g_fifo_64`, both halves of
   `oca_eth_axis_64`, `oca_udp_complete_64`, `oca_udp_seam` and
   `oca_core`, wired as `oca_top` wires them, and drives `gmii_rxd` /
@@ -1232,8 +1319,10 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   document, which is now marked closed: the RGMII delay value above all,
   the other item on the list -- the IO bank voltages -- having been
   closed on 2026-08-11 by the bank 6 measurement above. The delay trap
-  is written down there, in `oca_rgmii.sv` and in the bring-up skill, and
-  it is kept as history rather than as a sweep to run: the receive delay
+  is written down there, which is now the only place it survives:
+  `oca_rgmii.sv` was deleted with the route and the bring-up skill's
+  steps 4 and 5 point at that document. It is kept as history rather
+  than as a sweep to run: the receive delay
   sits on the data lines by LiteEth precedent and not by geometry, and a
   one-unit-interval misalignment cannot be repaired by any tap value,
   with `link_up` low while the PHY's own link LED is lit as the tell.

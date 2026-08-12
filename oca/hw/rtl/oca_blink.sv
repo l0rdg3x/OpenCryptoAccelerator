@@ -2,19 +2,23 @@
 /*
  * Bring-up step 2: the smallest design that says something.
  *
- * A counter on the 25 MHz oscillator and the LED. No PLL, no RGMII, no
- * vendor logic -- when this does not blink, nothing after it is
- * diagnosable, so it must not contain anything that could be the reason.
+ * A counter on the 25 MHz oscillator and the LED. No PLL, no reset
+ * logic, no vendor modules -- when this does not blink, nothing after it
+ * is diagnosable, so it must not contain anything that could be the
+ * reason.
  *
- * It is not oca_top_stub with the Ethernet removed. The stub cannot do
- * this job: its led_n is the AND of seven terms -- beat[24], pll_locked,
- * phy_ready, link_up, link_full_duplex, link_speed != 3 and
- * dly_cflag_seen -- so it needs a working PLL, a working PHY and a link
- * partner before it can toggle at all. And the last term is one this
- * design cannot make true or prove false: see the comment on that
- * always_comb, which is where the argument is written out. The stub
- * drives led_n high and steady when the clocking failed and can drive it
- * high and steady when everything worked, which is the one thing a
+ * WHICH IS WHY IT IS A FRESH COUNTER and not an existing top level with
+ * its datapath taken out. The top level this project ran before drove
+ * led_n from the AND of seven terms -- a beat, pll_locked, phy_ready,
+ * link_up, link_full_duplex, link_speed != 3 and a sticky
+ * delay-calibration flag -- so it needed a working PLL, a working PHY
+ * and a link partner before it could toggle at all. And that last term
+ * was not knowable: the delay primitive's calibration output is carried
+ * as a bare blackbox by yosys, has no simulation model in prjtrellis and
+ * is only placed by nextpnr, so whether it rests high is characterised
+ * nowhere -- unknown, in a design that needed it true. So that top level
+ * drove led_n high and steady when the clocking failed and could drive
+ * it high and steady when everything worked, which is the one thing a
  * bring-up indicator may not do.
  *
  * WHY THE DUTY CYCLE IS NOT 50%. The step is meant to prove three things,
