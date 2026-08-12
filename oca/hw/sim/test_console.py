@@ -74,6 +74,29 @@ async def strobe(dut, name, times=1):
         await RisingEdge(dut.clk)
 
 
+async def beat(dut, out):
+    """Release exactly one response byte, then close the transmit side.
+
+    Stepping the response by hand is the only way to put an event
+    BETWEEN two of its bytes, which is where a torn read lives. On the
+    board a beat costs a UART frame, so the gap this opens in two clock
+    cycles is 86.8 us there.
+    """
+    dut.tx_ready.value = 1
+    await RisingEdge(dut.clk)
+    if dut.tx_push.value == 1 and dut.tx_ready.value == 1:
+        out.append(int(dut.tx_data.value))
+    dut.tx_ready.value = 0
+    await RisingEdge(dut.clk)
+
+
+def status_fields(line):
+    """The four counters out of a status line, as integers."""
+    assert line.endswith("\n"), f"status line unterminated: {line!r}"
+    return {name: int(value, 16)
+            for name, value in (f.split("=") for f in line[:-1].split(" "))}
+
+
 @cocotb.test()
 async def test_ping_and_help_and_unknown(dut):
     await setup(dut)
@@ -186,6 +209,81 @@ async def test_events_during_a_z_response_are_not_wiped(dut):
     assert line == "R=0003 E=0002 O=0000 C=0001\n", (
         f"events raised during the z response read back as {line!r}; they "
         f"were counted and then wiped")
+
+
+@cocotb.test()
+async def test_z_does_not_zero_bytes_already_queued_behind_it(dut):
+    """R >= C has to survive a z with input still waiting.
+
+    R is taken at the receiver and C at the command, which is the whole
+    point of them being two registers -- and it is also why a clear that
+    zeroes both is wrong. Bytes counted into R before the z are still in
+    the queue when it runs, and they bump C afterwards: zeroing R
+    outright puts C above R and makes R - C - O, the queue depth this
+    module publishes, read as -1.
+
+    Five bytes arrive at the receiver and only then run as commands,
+    which is a queue holding what the operator typed ahead. The existing
+    z tests deliver one byte and run one command, so the queue is empty
+    at the clear and there is nothing left to expose.
+    """
+    await setup(dut)
+    out = []
+    collect(dut, out)
+
+    await strobe(dut, "rx_delivered", 5)
+    for char in "sssz":
+        out.clear()
+        await command(dut, char)
+
+    out.clear()
+    await command(dut, "s")
+    line = bytes(out).decode()
+    field = status_fields(line)
+    assert field["R"] >= field["C"], (
+        f"after a z with two bytes still queued behind it the console "
+        f"reports {line!r}: C is above R, and R - C - O is "
+        f"{field['R'] - field['C'] - field['O']}")
+    assert line == "R=0001 E=0000 O=0000 C=0001\n", (
+        f"the s after the z reports {line!r}; the clear should have left R "
+        f"holding the one byte that was still queued behind the z, and that "
+        f"byte is the s itself")
+
+
+@cocotb.test()
+async def test_the_status_line_is_one_instant_and_not_sixteen(dut):
+    """Four fields, sixteen digits, one instant.
+
+    Reading the counters while the line goes out makes every digit its
+    own sample, and the samples are a UART frame apart on the board. A
+    counter that crosses a nibble boundary between two of them prints a
+    number it never held: 0x000F before the field and 0x0010 after it
+    come out as 0000, which is neither.
+    """
+    await setup(dut)
+    out = []
+
+    await strobe(dut, "rx_delivered", 15)
+
+    dut.tx_ready.value = 0
+    dut.rx_data.value = ord("s")
+    dut.rx_valid.value = 1
+    await RisingEdge(dut.clk)
+    while dut.rx_pop.value != 1:
+        await RisingEdge(dut.clk)
+    dut.rx_valid.value = 0
+
+    for _ in range(5):              # "R", "=", and the top three digits of R
+        await beat(dut, out)
+    await strobe(dut, "rx_delivered")     # 0x000F -> 0x0010, mid-field
+    for _ in range(23):                   # the last digit of R, and the rest
+        await beat(dut, out)
+
+    line = bytes(out).decode()
+    assert line == "R=000F E=0000 O=0000 C=0001\n", (
+        f"the status line reads {line!r}; R held 0x000F when the command was "
+        f"accepted and 0x0010 by the time the line finished, and a field that "
+        f"is neither is a value the counter never had")
 
 
 @cocotb.test()

@@ -355,8 +355,11 @@ NETLIST_FF_FLOOR = {
     # pass it. What catches that is test_fifo's order-across-a-wrap.
     #
     # 22 for the transmitter, 5 for the top's power-on counter and LED.
+    # oca_console.sv was 81 until the status line became a snapshot: the
+    # four counters are now sampled into four registers of their own on
+    # the accept, which is exactly +64.
     "oca_uart_console": {"oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
-                         "oca_fifo.sv": 23, "oca_console.sv": 81,
+                         "oca_fifo.sv": 23, "oca_console.sv": 145,
                          "oca_uart_console.sv": 5},
     # The tx counter has to reach 62_499_999, which takes 26 bits. At 25
     # bits that compare is unreachable and therefore constant false, so
