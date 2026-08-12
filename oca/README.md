@@ -178,7 +178,10 @@ values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
 pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
 7/7, rgmii 10/10, eth_mac 8/8, udp_seam 10/10 at both `HDR_Q_DEPTH`
-values, oca_path 7/7 — 123 plus the three at the smallest `BYTES` — and
+values, oca_path 7/7, console 8/8, fifo 4/4, uart_console 4/4,
+uart_echo 3/3, uart_rx 4/4, uart_tx 5/5, slip_rx 12/12 at both `BYTES`
+values, slip_tx 7/7, uart_crypto 7/7 across its two `LED_BITS` builds —
+**177**, plus thirty-nine re-runs at a second parameter — and
 post-synthesis keystore 4/4 and oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module

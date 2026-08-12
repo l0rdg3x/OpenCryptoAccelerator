@@ -217,11 +217,33 @@ invoked by name and these four cost nothing where they sit:
 .venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
 ```
 
-123 RTL tests, twenty-two of them run a second time at a non-default
-parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
-`poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
-smallest `BYTES` it accepts and all ten of `oca_udp_seam` at
-`HDR_Q_DEPTH` = 2 — plus 6 on a synthesised netlist.
+**177 RTL tests across 25 runners**, thirty-nine of them run a second
+time at a non-default parameter — five for `chacha20` at
+`ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
+three for `oca_pktbuf` at the smallest `BYTES` it accepts, all ten of
+`oca_udp_seam` at `HDR_Q_DEPTH` = 2, all twelve of `oca_slip_rx` at
+`BYTES` = 64 and five of `oca_uart_crypto` at `LED_BITS` = 8 — plus 6 on
+a synthesised netlist.
+
+This read **123** until 2026-08-12, and the gap was never arithmetic:
+that sum is exactly right over the fourteen suites it names, and six
+suites were missing from the list. The console and UART chain —
+`run_console` 8, `run_fifo` 4, `run_uart_console` 4, `run_uart_echo` 3,
+`run_uart_rx` 4, `run_uart_tx` 5, 28 tests — was written on 2026-08-11
+and appeared in no document at all, while being the only host channel
+the board has. The serial bridge and the crypto console add 26 more:
+`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7.
+
+Measured by running every one of them on 2026-08-12: **207 passing
+executions, no failures**, across the 23 runners that can run outside a
+tree with the vendor patches built. Two tests skip — the heartbeat pair,
+which needs `LED_BITS` small enough to simulate and so runs only on the
+second build, exactly as `oca_blink`'s does. `run_eth_mac.py` and
+`run_oca_path.py` are the other two runners, 15 tests, and they exit
+non-zero rather than build from an unpatched tree; the count above
+includes them because the tests exist, and this paragraph says so
+because a number that hides which of its terms were not run is the kind
+of figure this file keeps having to correct.
 
 `run_eth_mac.py` and `run_oca_path.py` read the patched vendor tree, so
 `hw/vendor/vendor_patches.py build` has to have run; both say so and
@@ -429,6 +451,12 @@ core and never updated as the design grew by 3000 LUTs.
 - Git: work on branches; never commit directly on the default branch.
 
 ## Current status
+
+**For where the project stands, read `docs/STATUS.md` first.** It is one
+page and it is the answer to "what is done, what is next". What follows
+here is the long form: every measurement, what it does NOT establish, and
+how each was arrived at. It is a record, not a summary, and it is far too
+long to serve as one — which is why the tracker exists as of 2026-08-12.
 
 - Phase 1: done, 126/126 checks pass, zero warnings — 113 of them
   driven by official vectors, plus one tamper case and twelve
