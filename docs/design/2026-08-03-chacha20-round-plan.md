@@ -1,5 +1,18 @@
 # ChaCha20 round-per-cycle rework — implementation plan
 
+> **Status: executed on 2026-08-03, in `4879682`** ("rtl: compute one
+> ChaCha20 round per cycle"), with the elaboration guard in `ffc6ce4`
+> and the single-datapath area pass in `3e4619e` afterwards. The result
+> is in `oca/hw/syn/README.md`: standalone Fmax 28.66 -> **53.11 MHz on
+> `4879682`**, which `3e4619e` then rebuilt to **52.09 seed 1 / 52.76
+> over four seeds** at 3125 LUTs instead of 4368 — the area pass traded
+> the 1.9% for 1243 LUTs. Cite the second pair for the code as it
+> stands. `hw/sim/run_chacha20.py` covers it, 5/5 plus 5 more at
+> `ROUNDS_PER_CYCLE = 2`. **The `- [ ]` boxes below are the plan as it
+> was written, not work outstanding.** None is re-ticked here: a box
+> ticked without walking its step one by one would claim more than this
+> line does, and the commits and the suite are the evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development to implement this plan
 > task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -17,7 +30,10 @@ today's behaviour). 20 cycles per block instead of 10.
 **Tech stack:** SystemVerilog, cocotb 2.x + Verilator, synthesis via
 `oca/hw/syn/run_synth.py`.
 
-**Why one round and not less:** Poly1305 now tops out at 52.68 MHz. A
+**Why one round and not less:** Poly1305 now tops out at 52.68 MHz —
+55.41 MHz on the netlist as it stands today, `poly1305.sv` having gained
+its reset-time secret clearing in `8dd9cab` after this plan was written;
+the reasoning is unchanged. A
 half-round-per-cycle ChaCha20 would reach far beyond that and the limit
 would simply move back to Poly1305 — wasted work. One round per cycle is
 the point where the two cores balance.

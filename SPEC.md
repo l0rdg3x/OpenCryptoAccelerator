@@ -164,12 +164,19 @@ Hardware accelerator for:
   around the receive path; across 32 placer seeds `rgmii_rx_clk` clears
   125 MHz on none, the best being 124.22. The 0.560 Gbps above is
   therefore what this design delivers if a closing placement is found,
-  and finding one is the project's first open item. The two-port and two-core
+  and **nobody is looking for one**: this read "finding one is the
+  project's first open item" until 2026-08-12, when the route closed for
+  want of an RJ45 socket and the search stopped being an item at all
+  (`AGENTS.md`). The two-port and two-core
   rows above remain sums that nothing has built: every term in them was
   measured `--out-of-context`, with no IO and no pin constraints, and
   the port was measured apart from the cores rather than placed beside
-  them — which is exactly the addition that came in 2928 LUTs high on
-  the one row that has since been built.
+  them — which is exactly the addition that came in 2011 LUTs high on
+  the one row that has since been built. (That figure was 2928 against
+  the netlist before `54a2df8`, which restored 917 LUTs the earlier
+  build had deleted — 881 of them ARP logic brought back by the
+  `clear_arp_cache` connection, the other 36 the cost of the two raw-IP
+  ready pins.)
   Nothing has run on a board. The host
   datapath is no longer the limit — it costs the
   engine's 40 cycles per 64-byte block and nothing on top, see
@@ -249,9 +256,13 @@ carrier sold with it has. There is no socket to put a cable in.
 And this part cannot become the PCIe platform of step 7 in any case.
 The die is an LFE5U, IDCODE 0x41112043 read on silicon, and the ECP5
 family puts the SERDES only in the UM and UM5G variants: prjtrellis
-gives LFE5U-45F twenty-four DCU tiles all named VCIB_DCU*, against
-LFE5UM-45F's forty-two named CIB_DCU*, the eighteen difference being
-the transceiver this die does not have. No SERDES, no PCIe.
+gives LFE5U-45F twenty-four DCU tiles, every one of them a VCIB_DCU*
+fabric interface with nothing behind it, against LFE5UM-45F's
+forty-two — the same twenty-four grid locations, named CIB_DCU* there,
+plus eighteen DCU0...DCU8 tiles in two runs of nine, which are the
+transceiver this die does not have. No SERDES, no PCIe. (The count and
+the conclusion are unchanged; this named all forty-two CIB_DCU* until
+2026-08-12, and only twenty-four of them are.)
 
 So this board is a vehicle for proving the core on silicon, not a
 prototype of the product, and the transport it uses only has to be

@@ -8,13 +8,19 @@ engine cores `oca/hw/rtl/chacha20.sv`, `oca/hw/rtl/poly1305.sv` and
 `oca/hw/rtl/chacha20_poly1305.sv`, and the host protocol layer
 `oca_keystore.sv`, `oca_pktbuf.sv`, `oca_proto.sv` and `oca_core.sv`
 that wraps them. It is not a statement about a finished product: there
-is no Ethernet MAC, no driver and no board yet, and the parts that do
-not exist cannot be assessed here. Every claim below was checked against
-the RTL; where a property is a caller obligation rather than something
-the hardware enforces, it says so.
+is no kernel driver — `oca/hw/host/` is a test tool, not the Linux
+crypto-API integration `SPEC.md` asks for — and the parts that do not
+exist cannot be assessed
+here. (This read "there is no Ethernet MAC, no driver and no board yet"
+until 2026-08-12. The board arrived on 2026-08-11; the Ethernet route
+was retired on 2026-08-12 for want of an RJ45 socket on it, and the
+vendored MAC still in the tree is no longer the transport — `AGENTS.md`,
+`SPEC.md` PHASE 2.) Every claim below was checked against the RTL; where
+a property is a caller obligation rather than something the hardware
+enforces, it says so.
 
 Section 6 covers what the host protocol exposes, and is the section to
-read before putting a board on a network.
+read before attaching a board to a host.
 
 ## 1. Threat model
 
@@ -43,6 +49,9 @@ read before putting a board on a network.
 - **An adversary with physical access to the board**, in any form:
   power and electromagnetic measurement, clock or voltage glitching,
   laser fault injection, probing, chip decapsulation. See section 2.
+  Since 2026-08-12 physical access also carries the host protocol
+  itself: the transport is a USB port on the board, so plugging into it
+  is being the host. See section 6.
 - **An untrusted or compromised host.** The engine has no notion of
   ownership, session or privilege. Whoever can drive the interface can
   encrypt, decrypt and authenticate with whatever key they present, and
@@ -77,10 +86,13 @@ and this document states it as such.
 
 The practical consequence: **do not deploy OCA where an attacker can
 measure the power consumption or the EM emissions of the FPGA.** The v1
-MVP is an external board on a bench or in a rack, reached over an
-Ethernet cable and carrying an attached JTAG debugger (`BOM-MVP.md`),
-so nothing about its form factor mitigates this: for v1 the physical
-access exclusion of section 1 is accepted, not addressed. "A
+MVP is an external board on a bench or in a rack, reached over the
+carrier's USB link — which carries the host serial interface and the
+CMSIS-DAP JTAG debugger on the same cable (`BOM-MVP.md`) — so nothing
+about its form factor mitigates this: for v1 the physical access
+exclusion of section 1 is accepted, not addressed. (This sentence said
+"reached over an Ethernet cable" until 2026-08-12; there is no socket
+for one.) "A
 host-attached accelerator inside a machine the operator controls" —
 which this paragraph asserted until 2026-08-09 — describes the Phase 3
 PCIe card, not the board being built.
@@ -139,7 +151,7 @@ modules:
   `test_tag_outcome_timing_residual_is_bounded`: exactly the difference
   for a successor cheap enough to see it, zero for one whose own message
   hides it. That signal is the pass/fail bit, which status `06` puts on
-  the wire in the clear on the same segment, ahead of the response it
+  the wire in the clear on the same link, ahead of the response it
   shifts: it reveals nothing an observer does not already have, and it
   is a residual of the overlap, not of the comparison.
 
@@ -319,36 +331,62 @@ around a limitation it has not been told about.
 
 ## 6. The host protocol: what it exposes
 
-`oca_core` turns a UDP payload into an AEAD operation
-(`docs/design/2026-08-03-host-protocol.md`). Three things it does
-**not** protect, recorded here because they are properties of the
-protocol rather than of the engine:
+`oca_core` turns a request frame into an AEAD operation
+(`docs/design/2026-08-03-host-protocol.md`).
+
+**The transport under that frame changed on 2026-08-12, and the attack
+surface changed with it.** Until then it was UDP over Ethernet, and this
+section was written against "anyone who can send a packet to the board".
+The board has no RJ45 socket (`SPEC.md`, PHASE 2), so the transport is
+the carrier's DAPLink USB CDC serial — J17/H18, 115200 8N1,
+`/dev/ttyACM0` — with SLIP framing (RFC 1055) supplying the request
+boundary UDP used to supply for free. **That link is point to point by
+construction**: no address, no routing, no second peer. Reaching it
+means opening that character device on the attached host, plugging into
+the board's USB port, or putting a wire on J17/H18 themselves — they are
+two pins of the `pmodj` header, so the USB port is the convenient way in
+and not the only one. **Every exposure below survives the change**; what
+the change narrows is the set of people in a position to use one.
+
+Three things the protocol does **not** protect, recorded here because
+they are properties of the protocol rather than of the engine:
 
 1. **The key crosses the wire in the clear.** The load-key command
    carries 32 raw key bytes. It happens once per key rather than once
    per packet, but there is no key wrapping, no key agreement and no
-   transport encryption: anyone who can observe that network segment
-   reads the key, and from then on holds everything it protects.
+   transport encryption: anyone who can read that link reads the key,
+   and from then on holds everything it protects. On the serial
+   transport that is any process on the attached host with permission on
+   the `/dev/ttyACM*` node, plus anyone who can tap the USB cable or
+   reprogram the DAPLink sitting in the middle of it. That is a narrower
+   set than the network segment this entry named until 2026-08-12, and
+   it is not an empty one: the device node's ownership and group are the
+   whole of the access control, and the board applies none of its own.
 
-2. **There is no authentication of the requester.** Anyone who can send
-   a UDP packet to the board can seal and open with whatever slots are
-   loaded, and can overwrite any slot with a key of their own. The
-   accelerator trusts whoever talks to it, exactly as a PCIe
-   accelerator trusts its host — except that an Ethernet cable is far
-   easier to reach than a PCIe slot. **The intended deployment is a
-   direct host-to-board link, not a shared network.** There is no
-   session, no ownership and no privilege: the isolation between users
-   noted in section 1 is absent here too. No command reads a key back —
-   the four opcodes are load-key, seal, open and stats — but a slot
-   loaded by one client is *usable* by any other, which for an attacker
-   is as good as holding the key.
+2. **There is no authentication of the requester.** Anyone who can open
+   the serial device can seal and open with whatever slots are loaded,
+   and can overwrite any slot with a key of their own. The accelerator
+   trusts whoever talks to it, exactly as a PCIe accelerator trusts its
+   host — and the USB serial link is nearer that case than the Ethernet
+   cable this entry named until 2026-08-12, because reaching it takes
+   host access or physical presence rather than a route. **A direct
+   host-to-board link is no longer the intended deployment but the only
+   one the hardware can offer**, which removes the shared-network case
+   rather than warning against it. There is no session, no ownership and
+   no privilege: the isolation between users noted in section 1 is
+   absent here too. No command reads a key back — the four opcodes are
+   load-key, seal, open and stats — but a slot loaded by one client is
+   *usable* by any other, which for an attacker is as good as holding
+   the key.
 
 3. **The nonce comes from the host.** `oca_proto` passes the 12 nonce
    bytes of the request to the engine as given. Reuse of a (key, nonce)
    pair remains a host error the hardware cannot detect, with the
-   consequences set out in section 4 item 2 — and the protocol widens
-   the blast radius, because the host that must get it right is now
-   anyone on the wire rather than a local driver.
+   consequences set out in section 4 item 2. This entry added "and the
+   protocol widens the blast radius, because the host that must get it
+   right is now anyone on the wire rather than a local driver" until
+   2026-08-12; the serial transport takes that widening back, and the
+   host that must get it right is a local driver again.
 
 What the protocol layer does add, against the engine alone:
 
@@ -380,6 +418,14 @@ What the protocol layer does add, against the engine alone:
   cycle reset ends, and `oca_proto`'s receive stage — which reaches its
   accepting state one cycle after reset — consumes beats the master
   never saw taken. With only `tready` gated, 24 of 29 core tests fail.
+
+  **The SLIP decoder's frame buffer is walked for the same reason**, one
+  stage further upstream. `oca_slip_rx.sv` assembles a whole frame in
+  block RAM before delivering it, so after a load-key command that
+  buffer can still hold the 32 raw key bytes — until a later frame
+  overwrites those words or a reset walks them; its `S_CLEAR` state
+  zeroes the array out of reset exactly as `oca_pktbuf` does. Removing
+  that property means removing that state.
 - **The tag is compared on the FPGA in constant time, and a failure
   emits no plaintext.** See section 4 item 1.
 - **Failures are reported rather than dropped silently.** Every request
@@ -388,9 +434,12 @@ What the protocol layer does add, against the engine alone:
   the stats command.
 
 Neither the load-key exposure nor the missing authentication is fixable
-inside this protocol; both need a transport that does not exist yet.
-Until it does, treat the link between host and board as part of the
-trust boundary.
+inside this protocol, and the transport that replaced Ethernet does not
+fix either — it bounds who can reach them. This paragraph said "both
+need a transport that does not exist yet" until 2026-08-12: a transport
+now exists, and it is not one that authenticates or encrypts anything.
+Treat the attached host, the USB cable and the board's USB port as part
+of the trust boundary.
 
 ## 7. Reporting a vulnerability
 

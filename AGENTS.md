@@ -44,6 +44,7 @@ tools/                      local tool builds — NOT committed
   trellis/                  prjtrellis install (ECP5 database + ecppack)
   nextpnr/                  nextpnr-ecp5 install (45k chipdb only)
   eigen/                    Eigen 3.4.0 headers (nextpnr analytic placer)
+  openFPGALoader/           openFPGALoader v1.1.1 (every bring-up step ends in it)
   src/                      upstream sources for the above (shallow clones)
 ```
 
@@ -204,8 +205,10 @@ Four suites belong to the Ethernet route retired on 2026-08-12. The code
 is still in the tree, deliberately, and they still pass. Nothing new is
 built on them. They stay until the console carries the same end-to-end
 test, because `test_oca_path.py` is the only one that drives `oca_core`
-inside a system rather than on its own, and no aggregate runner invokes
-any of them, so they cost nothing where they sit:
+inside a system rather than on its own, and **there is no aggregate RTL
+runner in this repository at all** — `oca/CMakeLists.txt` registers one
+ctest and it is the C vectors binary, so every RTL suite in this file is
+invoked by name and these four cost nothing where they sit:
 
 ```sh
 .venv/bin/python hw/sim/run_rgmii.py              # 10/10 pass
@@ -214,11 +217,33 @@ any of them, so they cost nothing where they sit:
 .venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
 ```
 
-123 RTL tests, twenty-two of them run a second time at a non-default
-parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
-`poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
-smallest `BYTES` it accepts and all ten of `oca_udp_seam` at
-`HDR_Q_DEPTH` = 2 — plus 6 on a synthesised netlist.
+**177 RTL tests over 23 runners, plus 6 on a synthesised netlist from
+the two gate runners** — 25 in all. Thirty-nine of the 177 run a second
+time at a non-default parameter — five for `chacha20` at
+`ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
+three for `oca_pktbuf` at the smallest `BYTES` it accepts, all ten of
+`oca_udp_seam` at `HDR_Q_DEPTH` = 2, all twelve of `oca_slip_rx` at
+`BYTES` = 64 and five of `oca_uart_crypto` at `LED_BITS` = 8.
+
+This read **123** until 2026-08-12, and the gap was never arithmetic:
+that sum is exactly right over the fourteen suites it names, and six
+suites were missing from the list. The console and UART chain —
+`run_console` 8, `run_fifo` 4, `run_uart_console` 4, `run_uart_echo` 3,
+`run_uart_rx` 4, `run_uart_tx` 5, 28 tests — was written on 2026-08-11
+and appeared in no document at all, while being the only host channel
+the board has. The serial bridge and the crypto console add 26 more:
+`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7.
+
+Measured by running every one of them on 2026-08-12: **207 passing
+executions, no failures**, across the 23 runners that can run outside a
+tree with the vendor patches built. Two tests skip — the heartbeat pair,
+which needs `LED_BITS` small enough to simulate and so runs only on the
+second build, exactly as `oca_blink`'s does. `run_eth_mac.py` and
+`run_oca_path.py` are the other two runners, 15 tests, and they exit
+non-zero rather than build from an unpatched tree; the count above
+includes them because the tests exist, and this paragraph says so
+because a number that hides which of its terms were not run is the kind
+of figure this file keeps having to correct.
 
 `run_eth_mac.py` and `run_oca_path.py` read the patched vendor tree, so
 `hw/vendor/vendor_patches.py build` has to have run; both say so and
@@ -427,6 +452,12 @@ core and never updated as the design grew by 3000 LUTs.
 
 ## Current status
 
+**For where the project stands, read `docs/STATUS.md` first.** It is one
+page and it is the answer to "what is done, what is next". What follows
+here is the long form: every measurement, what it does NOT establish, and
+how each was arrived at. It is a record, not a summary, and it is far too
+long to serve as one — which is why the tracker exists as of 2026-08-12.
+
 - Phase 1: done, 126/126 checks pass, zero warnings — 113 of them
   driven by official vectors, plus one tamper case and twelve
   argument-validation cases, which have no vector to come from.
@@ -450,7 +481,9 @@ core and never updated as the design grew by 3000 LUTs.
   mod-2^130-5 reduction folded into the accumulation, parameter
   `ROWS_PER_CYCLE`). Result: the AEAD engine drops from **65 to 20**
   multipliers (90% -> 28%) and standalone Poly1305 Fmax more than
-  doubles (22.94 -> **52.68 MHz**). **AEAD Fmax was unchanged**
+  doubles (22.94 -> **52.68 MHz** as measured that day on `1205c68`;
+  **55.41 MHz** rebuilt 2026-08-12 on the netlist `8dd9cab` left behind,
+  see `oca/hw/syn/README.md`). **AEAD Fmax was unchanged**
   (26.77 -> 26.10 MHz, inside place & route noise) and throughput fell
   ~40% to ~0.28 Gbps — a 64-byte block costs 47 cycles instead of 29,
   measured in simulation — because a Poly1305 block now takes 9 cycles
@@ -461,7 +494,10 @@ core and never updated as the design grew by 3000 LUTs.
   standalone Fmax 28.66 -> **53.11 MHz** (+85%), level with Poly1305's
   52.68 MHz, and **AEAD Fmax 26.10 -> 37.87 MHz** (+41% over the
   baseline), for +799 LUTs standalone / +487 in the engine and one
-  flip-flop. A 64-byte block now costs **57 cycles** (measured), so
+  flip-flop. (Both Fmax figures are of that day and neither is current:
+  `3e4619e` later took this core to one datapath at 52.09 seed 1 / 52.76
+  mean, and Poly1305 rebuilt today gives 55.41. Nothing has rebuilt the
+  two together, so **no ordering between them is claimed**.) A 64-byte block now costs **57 cycles** (measured), so
   throughput is **~0.34 Gbps**: above the ~0.28 Gbps of the previous
   state, still **28% below the ~0.47 Gbps baseline** — Fmax gained 41%
   while cycles per block grew 97% across the two reworks.
@@ -1149,8 +1185,26 @@ core and never updated as the design grew by 3000 LUTs.
   reads `gmii_txd`. A synthetic frame goes in and a frame comes out:
   ARP answered, a stats request, a seal and its open compared byte for
   byte against `aead_model`, a corrupted tag proved to put **no
-  plaintext on the wire** — asserted on the 60 bytes that leave the
-  board — and two peers in flight each answered at their own address.
+  plaintext on the wire** — asserted on the whole reply frame, padding
+  included, beside an assertion that the body is empty — and two peers
+  in flight each answered at their own address.
+
+  `docs/design/2026-08-05-ethernet-integration.md` called that leak
+  assertion defect 1, "could not fail", **and that entry is withdrawn**
+  as of 2026-08-12, in the document itself. Its argument holds only once
+  the body is known empty: that is when the reply is 60 bytes and the
+  only place left to hide is ten bytes of padding, which 48 bytes of
+  plaintext cannot fit in — and an empty body is what the assertion
+  beside it establishes, so the reasoning was circular. `rsp["frame"]`
+  has no fixed length: `oca_udp_seam.sv:421` drives `tx_length = 16'd0`
+  because the checksum generator recomputes it from the payload that
+  arrives, and the same assertion runs over a 114-byte seal reply six
+  lines earlier in the same test. Break the tag comparison — the
+  mutation the test's own docstring names — and the body carries the
+  plaintext, the frame grows past 60, and that assertion is the first to
+  fail. What is true is that the two assertions overlap while the body
+  is empty. Neither is inert, and defect 1 was the one of the four
+  backed by arithmetic rather than by a mutation that was run.
 
   Not at the pads, and the reason is structural rather than a cost:
   `EHXPLLL` in `ecp5_prims.sv` is a blackbox with an empty body, so

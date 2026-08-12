@@ -5,7 +5,9 @@ first and treat it as part of these instructions (layout, environment
 rules, build/test commands, hard rules, status).
 
 The specification driving all work is `SPEC.md`; the MVP bill of
-materials is `BOM-MVP.md`.
+materials is `BOM-MVP.md`. **Where the project stands is
+`docs/STATUS.md`** — one page, done / not established / next, updated at
+every merge and every design gate.
 
 Critical points in short:
 

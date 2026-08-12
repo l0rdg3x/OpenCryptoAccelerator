@@ -57,6 +57,12 @@ def decode(dut, out):
     return cocotb.start_soon(_run())
 
 
+def status_fields(line):
+    """The four counters out of a status line, as integers."""
+    return {name: int(value, 16)
+            for name, value in (f.split("=") for f in line.split(" "))}
+
+
 @cocotb.test()
 async def test_ping_through_the_wire(dut):
     await start(dut)
@@ -104,3 +110,57 @@ async def test_status_counts_the_bytes_that_arrived(dut):
     line = bytes(out).decode()
     assert line == "R=0004 E=0000 O=0000 C=0004\n", (
         f"after three p and one s the status reads {line!r}")
+
+
+@cocotb.test()
+async def test_a_z_typed_into_a_burst_keeps_the_counters_consistent(dut):
+    """`s s s z s` with no gaps, which is what a script sends.
+
+    The tests above leave a DIV*60 gap after every byte -- forty times
+    longer than the console needs to answer -- so the input FIFO is
+    always empty when a command is accepted and nothing is ever waiting
+    behind a z. At speed it is: three status lines are 84 bytes into a
+    32-byte output FIFO, so the console stalls with the z and the s
+    behind it already counted into R and still queued.
+
+    What the burst proves is R >= C across the clear, which neither of
+    the spaced-out tests can see. It does NOT prove the status line is a
+    snapshot, and it misses that by one byte. R climbs from 2 to 5 while
+    the second line is stalled, but the six bytes of "R=0002" are the
+    six the console gets away before the output FIFO fills -- the last
+    of them lands in the last free slot -- and the very next byte, the
+    space after the field, goes out with R already at 3. Measured, by
+    putting the counters back on the live reads: this test stays green
+    either way. A torn field needs the event placed between two named
+    beats, which is test_console's
+    test_the_status_line_is_one_instant_and_not_sixteen.
+    """
+    await start(dut)
+    out = []
+    decode(dut, out)
+
+    await send_byte(dut, ord("z"))
+    await ClockCycles(dut.clk25, DIV * 60)
+    out.clear()
+
+    for char in "ssszs":
+        await send_byte(dut, ord(char))
+    await ClockCycles(dut.clk25, DIV * 1400)
+
+    lines = bytes(out).decode().split("\n")
+    assert lines[-1] == "", f"the console stopped mid-line: {bytes(out)!r}"
+    lines = lines[:-1]
+    for line in lines:
+        if line.startswith("R="):
+            field = status_fields(line)
+            assert field["R"] >= field["C"], (
+                f"{line!r}: C is above R, and R - C - O is "
+                f"{field['R'] - field['C'] - field['O']}")
+    assert lines == ["R=0001 E=0000 O=0000 C=0001",
+                     "R=0002 E=0000 O=0000 C=0002",
+                     "R=0005 E=0000 O=0000 C=0003",
+                     "ok",
+                     "R=0001 E=0000 O=0000 C=0001"], (
+        f"the burst answered {lines!r}; the third line is taken while all "
+        f"five bytes have arrived and only three have run, and the last one "
+        f"reports the s that was still queued behind the z")

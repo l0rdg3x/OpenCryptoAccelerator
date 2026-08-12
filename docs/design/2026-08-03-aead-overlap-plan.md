@@ -1,5 +1,14 @@
 # AEAD ChaCha20/Poly1305 overlap — implementation plan
 
+> **Status: executed on 2026-08-03, in `b86f1b2`** ("rtl: overlap
+> ChaCha20 and Poly1305 phases in the AEAD engine"). The result is in
+> `oca/hw/syn/README.md` — the overlapped engine at 10040 LUTs and
+> 52.58 MHz — and `hw/sim/run_chacha20_poly1305.py` covers it, 7/7.
+> **The `- [ ]` boxes below are the plan as it was written, not work
+> outstanding.** None is re-ticked here: a box ticked without walking
+> its step one by one would claim more than this line does, and the
+> commit and the suite are the evidence, not the boxes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development to implement this plan
 > task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -366,9 +375,20 @@ whether the engine is now faster than where this series of reworks
 started.
 
 Update `oca/README.md` and `AGENTS.md`. The next step to record is
-replicating engines: with 20 multipliers each the device holds three,
-and that is what turns per-engine throughput into the aggregate the MVP
-target is written against.
+replicating engines: with 20 multipliers each the device has room for
+three, and that is what turns per-engine throughput into the aggregate
+the MVP target is written against.
+
+> **Refuted on 2026-08-04, by the occupancy study this step asked for.**
+> Three `oca_core` fit on every budget anyone was watching — 76.4% of
+> the LUTs, 83.3% of the multipliers, both under 100% — and **do not
+> route**: one seed fails placement, six more were still routing after
+> 55 minutes each, and roughly 50000 arcs stay unrouted whether the
+> constraint is 100, 45, 40 or 35 MHz. It is congestion, not timing, so
+> a slower clock buys nothing. The device holds **two**
+> (`oca/hw/syn/README.md`, "The occupancy study"; `AGENTS.md`). Counting
+> multipliers was exactly the kind of projection that study was run to
+> replace.
 
 - [ ] **Step 5: Commit**
 

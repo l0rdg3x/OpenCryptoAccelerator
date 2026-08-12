@@ -178,7 +178,10 @@ values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
 pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
 7/7, rgmii 10/10, eth_mac 8/8, udp_seam 10/10 at both `HDR_Q_DEPTH`
-values, oca_path 7/7 — 123 plus the three at the smallest `BYTES` — and
+values, oca_path 7/7, console 8/8, fifo 4/4, uart_console 4/4,
+uart_echo 3/3, uart_rx 4/4, uart_tx 5/5, slip_rx 12/12 at both `BYTES`
+values, slip_tx 7/7, uart_crypto 7/7 across its two `LED_BITS` builds —
+**177**, plus thirty-nine re-runs at a second parameter — and
 post-synthesis keystore 4/4 and oca_proto 2/2;
 the protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
@@ -187,7 +190,9 @@ and three on the host datapath described below: the 64-bit widening,
 then the overlap inside a command, then the overlap across packets. The
 Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
 multipliers (90% -> 28% of an LFE5U-45F) and
-more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz). The
+more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz as
+measured on the day; 55.41 MHz rebuilt on today's netlist, which has had
+its secret registers cleared on reset since — `hw/syn/README.md`). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
 26.10 -> 37.87 MHz. Rebuilding the wrapper's byte mask per byte instead

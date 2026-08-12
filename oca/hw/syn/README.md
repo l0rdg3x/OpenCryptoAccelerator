@@ -220,6 +220,27 @@ folded into the accumulation, default `ROWS_PER_CYCLE = 1`);
 | chacha20_poly1305 (baseline) | 11144 | 4777 | 65 | 26.77 MHz |
 | chacha20_poly1305 (limb) | 9579 | 5723 | **20** | 26.10 MHz |
 
+**All four rows belong to 2026-08-03 and to `1205c68`, and every netlist
+under them has moved since.** They are kept as they were measured,
+because the A/B is the point of the table and both halves of it were
+built from the same sources on the same afternoon: the limb row was
+measured between `1205c68` at 14:34 and `0c6c5c0`, this write-up, at
+14:45. Then `8dd9cab` cleared the engines' secret registers on reset the
+next day, touching **all three engine modules** — `poly1305.sv` (+19),
+`chacha20_poly1305.sv` (+28) and `chacha20.sv` (+6) — and nothing here
+was re-measured at the time.
+
+Only `poly1305` has been rebuilt since: 2026-08-12, seed 1,
+`--out-of-context`, same device and constraint — **3075 TRELLIS_COMB,
+1799 TRELLIS_FF, 20 MULT18X18D, 55.41 MHz**. Against the row above, the
+multiplier count is identical, the LUTs moved +1.0%, the flip-flops
+-1.7% and the clock +5.2%. Both builds are seed 1, so that 5.2% is the
+netlist and not seed noise, and `poly1305` has never had a seed sweep of
+its own to say how much of it a second seed would have covered. **The
+two `chacha20_poly1305` rows are stale in the same way and have not been
+rebuilt**, so nothing here compares a figure of one date against a
+figure of the other.
+
 What the rework achieved, and what it did not:
 
 - **Multipliers: target met.** 65 -> 20 MULT18X18D, 90.3% -> 27.8% of
@@ -229,8 +250,9 @@ What the rework achieved, and what it did not:
   now hold three engines instead of one, though at 9579 LUTs each that
   is 65% of the fabric and has not been placed.
 - **Poly1305 Fmax: target met.** 22.94 -> 52.68 MHz, +130%: far outside
-  the noise band. Its critical path is 18.98 ns (8.24 ns logic, 10.74 ns
-  routing), from the `r5_d` register through the `mul_b` row selection
+  the noise band. (55.41 MHz on the netlist as it stands today, per the
+  note above the table.) Its critical path is 18.98 ns (8.24 ns logic,
+  10.74 ns routing), from the `r5_d` register through the `mul_b` row selection
   into one multiplier's partial-product carry chain, ending at the
   `prod` register. The path is the multiply itself; the reduction is no
   longer on it.
@@ -293,7 +315,11 @@ untouched.
 | chacha20_poly1305 (limb + 1 round/cycle) | 10066 | 5724 | **20** | **37.87 MHz** |
 
 - **ChaCha20 Fmax: target met.** 28.66 -> 53.11 MHz, +85%, far outside
-  the noise band — and within 1% of the reworked Poly1305's 52.68 MHz.
+  the noise band — and within 1% of the reworked Poly1305's 52.68 MHz,
+  both as they stood that day. (Neither figure is current: `3e4619e`
+  took this core to one datapath at 52.09 / 52.76 mean, and Poly1305
+  rebuilt today gives 55.41. No ordering between the two is claimed
+  across those dates — nobody has rebuilt them together.)
   The two cores are now balanced, which is the point the plan aimed at.
   Its critical path is 18.83 ns (8.26 ns logic, 10.56 ns routing), from
   the state register `st` back into `st`, through 45 CCU2C carry stages
@@ -917,8 +943,16 @@ Every earlier section projected three engines by multiplying one
 engine's area by three. This one instantiates them and runs place &
 route. The multi-engine top levels are throwaway wrappers that
 instantiate N units and are **not** in `run_synth.py`'s `DESIGNS`; the
-single-core row is the committed `oca_core` build, whose report is
-reproducible with the documented command.
+single-core row was the committed `oca_core` build on the day, and it is
+**not what the documented command gives today**. That row is the 8-bit
+datapath core; `oca_core` was widened to 64 bits the same day and has
+changed several times since, and `run_synth.py oca_core` now measures
+12308 LUTs, 12033 FF and a four-seed mean of 49.91 MHz against this
+row's 11149 and 50.59. The four rows still compare with each other —
+all four were built from the same sources on 2026-08-04 — and it is the
+comparison between them, not the absolute area of any one, that this
+study is for. (This paragraph called the row reproducible until
+2026-08-12.)
 
 | configuration | TRELLIS_COMB | of 43848 | MULT18X18D | of 72 | routed Fmax (mean of 4 seeds) |
 |---|---|---|---|---|---|
@@ -1717,6 +1751,13 @@ study reached from the other direction: **there is too much logic on
 this device for the receive path to route freely**. One `oca_core` is
 28% of it. Nothing about the MAC, the FIFO depth or the placer settings
 is going to return 22 MHz.
+
+**And nobody is looking for the placement that would close it.** The
+Ethernet route was retired on 2026-08-12 — the board has no RJ45 socket
+— so this section is the record of a problem that was closed rather than
+solved, and no seed, patch or placer setting was ever going to supply a
+connector. `SPEC.md` PHASE 2 and `AGENTS.md` carry the closure; the
+measurements here stand as measurements.
 
 Note for anyone repeating this: `--placer-heap-beta` and
 `--placer-heap-critexp` are documented by `--help` and silently

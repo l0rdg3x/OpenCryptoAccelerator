@@ -17,19 +17,44 @@ transport knowledge is in `oca_udp_seam`. So the crypto, the keystore,
 the packet buffer and the protocol are unaffected by this, and what is
 retired is the seam, the vendored stack and the RGMII front end.
 
-FOUR DEFECTS FOUND IN THE WHOLE-PATH TESTBENCH ON 2026-08-12, each proved
-by a mutation that was run, and deliberately NOT fixed: the file is being
-retired, and polishing it would be work on code that is going away. They
-are recorded because the replacement end-to-end test over the console
-must not repeat them, and every one of them is a shape, not an accident:
+DEFECTS FOUND IN THE WHOLE-PATH TESTBENCH ON 2026-08-12, deliberately NOT
+fixed: the file is being retired, and polishing it would be work on code
+that is going away. They are recorded because the replacement end-to-end
+test over the console must not repeat them, and every one of them is a
+shape, not an accident. Defects 2, 3 and 4 were each proved by a mutation
+that was run. Defect 1 was not, and it is withdrawn below; the sentence
+here claimed all four were, until 2026-08-12.
 
-1. THE LEAK ASSERTION COULD NOT FAIL. `assert msg not in rsp["frame"]`
-   over a 60-byte reply whose padding is ten bytes, against a 48-byte
-   plaintext. No placement fits: any match would have to start at offset
-   12 or less and would cover frame[14], which the decoder has already
-   pinned to 0x45, a byte the plaintext does not contain. The headline
-   security check added nothing that the body-is-empty assertion beside
-   it did not already say.
+1. WITHDRAWN, AND IT WAS WRONG. This entry read "THE LEAK ASSERTION
+   COULD NOT FAIL", arguing that `assert msg not in rsp["frame"]` was
+   inert because a 48-byte plaintext has no placement in a 60-byte reply:
+   any match would start at offset 12 or less and cover frame[14], which
+   the decoder pins to 0x45. It is the only one of the four backed by a
+   counting argument rather than a mutation, and the count rests on a
+   frame length the test does not have.
+
+   `rsp["frame"]` is not 60 bytes by construction. `oca_udp_seam.sv:421`
+   drives `tx_length = 16'd0` because `udp_checksum_gen_64` recomputes it
+   from the payload that actually arrives -- "nothing pretends to know
+   the response length yet" -- and the same assertion six lines above
+   runs over a seal reply of about 114 bytes. Sixty is what this
+   particular reply measures GIVEN the body is empty, which is the very
+   thing the assertion beside it establishes. The argument was circular.
+
+   Break the tag comparison in `oca_proto.sv`, which is what the test's
+   own docstring says to do, and the open returns 48 bytes of plaintext:
+   the frame grows past 60, the plaintext is in it, and this assertion
+   fails FIRST -- before the body-is-empty one at line 924 is reached.
+   What is true, and all that is true, is that the two assertions overlap
+   while the body is empty. Neither is inert.
+
+   The lesson survives its own retraction, which is why the entry is
+   rewritten rather than deleted: a defect claimed from arithmetic and
+   not from a mutation is a claim about a test, made the way this project
+   keeps being wrong about its own code. The replacement suite makes the
+   leak assertion falsifiable by construction instead -- a four-byte
+   needle against an eight-byte refusal, with a positive control -- and
+   proves it by mutation, in `hw/sim/test_uart_crypto.py`.
 
 2. THE TWO-PEER TEST DID NOT TEST CONCURRENCY. It asserted
    `1 <= watermark <= 2` on the seam's header queue, and both bounds are
