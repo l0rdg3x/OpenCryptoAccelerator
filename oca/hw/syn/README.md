@@ -30,22 +30,27 @@ the post-synthesis netlist and the nextpnr JSON report.
   far more signals than the package has pins, so no IO buffers are
   inserted and the design is placed as a locked macro. Those numbers
   characterise the core itself. A design that carries an `.lpf`
-  (`oca_top_stub`, `oca_top_mac`, `oca_top`) is built against the real
-  pin map instead, with IO, the PLL and its own clock constraints.
+  (`oca_blink`, `oca_pll`, `oca_vccio`, `oca_uart_probe`,
+  `oca_uart_echo`, `oca_uart_console`, `oca_uart_crypto`) is built
+  against the real pin map instead, with IO, the PLL where it has one,
+  and its own clock constraints. That list read `oca_top_stub`,
+  `oca_top_mac`, `oca_top` until 2026-08-12, when the Ethernet route's
+  three tops were deleted; the pinned designs left are the bring-up
+  ladder and the serial console.
 - `--timing-allow-fail` stops nextpnr itself from failing, so that a
   missed target is reported rather than swallowed. It is not a licence
   to miss one: `check_timing()` re-reads the report afterwards and
   returns non-zero for any missed constraint nextpnr says it really
-  applied, and `main()` then skips packing. That set is wider than the
-  `.lpf` — `colorlight_i9.lpf` carries two `FREQUENCY` lines, `clk25`
-  and `rgmii_rx_clk`, and the other two constraints are the ones nextpnr
-  derives from the PLL, so all four are enforced. What is deliberately
-  *not* enforced is `--freq`, which is nextpnr's fallback for an
-  unconstrained net rather than a target this design set for itself.
+  applied, and `main()` then skips packing. That set can be wider than
+  the `.lpf`: the constraints nextpnr derives from a PLL are enforced
+  too, which is how the four clocks of the deleted `oca_top` were all
+  checked from an `.lpf` naming only two. What is deliberately *not*
+  enforced is `--freq`, which is nextpnr's fallback for an unconstrained
+  net rather than a target the design set for itself.
 - The placer seed comes from the design (`Design.seed`), and `--seed`
-  overrides it. `oca_top` records 10, the best of the 32 in the sweep at
-  the end of this file and not one that closes; everything else falls
-  back to 1, so runs stay comparable.
+  overrides it. Every surviving design falls back to 1, so runs stay
+  comparable. `oca_top` recorded 10, the best of the 32 in the sweep at
+  the end of this file and not one that closed.
 - Two checks bracket synthesis, because nothing downstream would catch
   what they catch: `check_cmp2lut()` probes the toolchain before it is
   trusted, and `check_netlist()` asserts the netlist still contains the
@@ -67,10 +72,14 @@ the post-synthesis netlist and the nextpnr JSON report.
   `b9f68ea`'s commit message says three; it is two, and the report it
   was measured on is the one described here.
 
-  **On the design in the tree today neither half reproduces**: it misses
-  its constraints on every seed, so `run_synth.py oca_top` always takes
-  the failing branch and there is no `oca_top.bit` at all. What still
-  demonstrates the passing side is `oca_top_stub`, 163854 bytes.
+  **Neither half reproduces, and since 2026-08-12 neither design
+  exists.** By the end `oca_top` missed its constraints on every seed, so
+  `run_synth.py oca_top` always took the failing branch and there was no
+  `oca_top.bit` at all; the passing side was demonstrated by
+  `oca_top_stub`, 163854 bytes. Both tops were deleted with the Ethernet
+  route. Re-proving either half now means picking a pinned design that
+  survives — `oca_blink` is the cheapest — and constraining it past what
+  it can reach.
 
   **Not packing was not enough, and that was found by reading rather
   than at the bench.** `pack()` is simply not reached when the check
@@ -96,7 +105,9 @@ the post-synthesis netlist and the nextpnr JSON report.
   partway through, since a truncated bitstream is one a programmer will
   load.
 
-  Proved on all three:
+  Proved on all three, on designs that have since been deleted — the
+  behaviour is `run_synth.py`'s and is unchanged, but re-running this
+  table needs a surviving pinned design:
 
   | mutation | design | verdict |
   |---|---|---|
@@ -105,8 +116,8 @@ the post-synthesis netlist and the nextpnr JSON report.
   | `.lpf` `rgmii_rx_clk` set to 400 MHz | `oca_top_stub` | exit 1, 283.53 against 400 FAILED, `.bit` gone |
   | neither | `oca_top_stub` | exit 0, `.bit` present, 163854 bytes |
 
-  `oca_top_stub` stands in wherever place & route is reached, because its
-  takes seconds; the first row never reaches nextpnr, so it was run on
+  `oca_top_stub` stood in wherever place & route is reached, because it
+  took seconds; the first row never reaches nextpnr, so it was run on
   `oca_top` itself. Restore the `.lpf` by name afterwards, never with
   `git checkout -- .`.
 
@@ -782,7 +793,9 @@ first entry in this series that is not the engine: `oca_core` wraps
 `docs/design/2026-08-03-host-protocol.md` — two 2048-byte packet
 buffers (`oca_pktbuf`), eight key slots (`oca_keystore`) and the
 protocol FSM (`oca_proto`) — and exposes a pair of 8-bit AXI-Stream
-ports. It is the module the Ethernet integration will instantiate. The
+ports. It is the module the Ethernet integration went on to instantiate,
+and, since that route was deleted on 2026-08-12, the module the serial
+bridge instantiates instead. The
 engine's own numbers are repeated alongside so the protocol layer's
 cost is visible separately.
 
@@ -913,9 +926,12 @@ assemble a block the engine consumes in 40 — see
 Verilator, every area and Fmax figure from yosys and nextpnr on an
 `--out-of-context` build with no IO buffers, no pin constraints and no
 Ethernet MAC — and the MAC, the RGMII wrapper and the PLL are not in
-these numbers and have to share the fabric and the clock with them. This
+these numbers and would have had to share the fabric and the clock with
+them. This
 is a simulation-derived estimate of a design that has never been
-programmed into a device.
+programmed into a device. (The MAC and the RGMII wrapper were deleted on
+2026-08-12 and no build will ever place them beside this core; what
+carries it on silicon is `oca_uart_crypto`, one clock domain and no PLL.)
 
 **One stale figure was left in the RTL by this pass and has since been
 corrected.** The header comment of `oca_pktbuf.sv` carried the plan's
@@ -1073,10 +1089,12 @@ Three qualifications, none of them in the project's favour:
   next section, which supersedes the two sentences above.**
 - **Still no silicon.** Out-of-context builds: no IO buffers, no pin
   constraints, no Ethernet MAC, no PLL. The MAC and the RGMII wrapper
-  have yet to be placed alongside two engines *and* routed, and the
-  three-core result is the reason not to assume that will be
+  had yet to be placed alongside two engines *and* routed, and the
+  three-core result was the reason not to assume that would be
   comfortable: this die runs out of routing before it runs out of
-  cells.
+  cells. It never happened at two cores, and it never will: one core
+  and one port was the largest configuration ever built, and both
+  modules were deleted on 2026-08-12.
 
 Cost of the study, for whoever repeats it: the six three-core routing
 attempts alone are over five hours of wall clock (6 x 55 min), most of
@@ -1097,9 +1115,11 @@ streams the response through a clock-enabled three-stage pipeline, and
 `chacha20.sv`, `poly1305.sv` and `chacha20_poly1305.sv` are untouched —
 the engine in these numbers is bit for bit the one characterised above.
 
-The width conversion to the 8 bits `verilog-ethernet` hands over stays
+The width conversion to the 8 bits `verilog-ethernet` handed over stayed
 *outside* `oca_core`, at the MAC boundary; the wire format is unchanged
-and `hw/sim/proto_model.py` was not modified.
+and `hw/sim/proto_model.py` was not modified. That boundary is why the
+Ethernet route could be deleted on 2026-08-12 without touching a line of
+`oca_core`, and why these figures still describe the core in the tree.
 
 | design | TRELLIS_COMB | TRELLIS_FF | MULT18X18D | DP16KD | Fmax (seed 1) |
 |--------|--------------|------------|------------|--------|------|
@@ -1340,8 +1360,10 @@ is a separate question, and it has to be measured rather than assumed.
 **Still no silicon.** Every cycle count here is Verilator; every area and
 Fmax figure is yosys and nextpnr on an `--out-of-context` build with no
 IO buffers, no pin constraints, no Ethernet MAC and no PLL — and the MAC,
-the RGMII wrapper and the PLL still have to share this fabric and this
-clock. Nothing in this section has been programmed into a device.
+the RGMII wrapper and the PLL would still have had to share this fabric
+and this clock. Nothing in this section has been programmed into a
+device, and since 2026-08-12 nothing will: the MAC and the RGMII wrapper
+are gone with the route.
 
 Suites behind these numbers, all re-run while writing this section:
 `oca_core` 10/10, `oca_pktbuf` 5/5, `oca_keystore` 4/4, `chacha20` 5/5,
@@ -1452,8 +1474,10 @@ stock netlist. This die was already described above as running out of
 routing before it runs out of cells, and **router effort, not cell
 count, is what this change spends against that margin**: the design is
 +161 LUTs on the last published netlist, and it takes several times
-longer to route. Budget for the time before the MAC, the RGMII wrapper
-and the PLL arrive.
+longer to route. That was written as a budget for the time before the
+MAC, the RGMII wrapper and the PLL arrived; they arrived, never closed
+timing, and were deleted on 2026-08-12. The routing cost of the key
+store is unaffected and still has to be paid on every build.
 
 DP16KD stays at 4 and MULT18X18D at 20: the key store is flip-flops and
 a decode, so neither the block RAMs nor the DSPs move.
@@ -1547,9 +1571,19 @@ The cycle side is measured and does not depend on any of that: a
 64-byte block costs **40 cycles** end to end through `oca_core`, exactly
 linear (231, 391, 551, 711 cycles for 4, 8, 12, 16 blocks).
 
-### The whole board, pinned: oca_top places, and does not close
+### The whole board, pinned: oca_top placed, and did not close
 
-The first design in this project that is a board rather than a core:
+**Everything in this section is a record of a design that is no longer
+in the tree.** `oca_top`, `oca_top_mac` and `oca_top_stub`, their
+`run_synth.py` entries and their netlist census tables were deleted on
+2026-08-12 with the Ethernet route; `run_synth.py` does not know those
+names. The measurements stay because they were taken, and because the
+conclusion they reach — too much logic on this device for the receive
+path to route freely — is about the device and outlives the design.
+`colorlight_i9.lpf` is kept verbatim beside them, cited by `run_synth.py`
+and by the bring-up skill, but **no surviving design builds against it**.
+
+The first design in this project that was a board rather than a core:
 clocking, RGMII front end, MAC, Ethernet header parse and build,
 ARP/IP/UDP, the seam and `oca_core`, against `colorlight_i9.lpf` with
 real IO. LFE5U-45F CABGA381 speed 6, seed 10.
@@ -1608,15 +1642,17 @@ design** — overused arcs fall to 6970 by iteration 22, then climb to
 26003 by 58 — which answers a question the Ethernet design document had
 left open since the occupancy study.
 
-A patch to `axis_gmii_rx` moved the comparison off the path (see
-`hw/vendor/patches/`), and the receive path went to **115.77 MHz** with
-the critical path now in the receive FIFO's commit loop. Still short.
+A patch to `axis_gmii_rx` moved the comparison off the path (it lived in
+`hw/vendor/patches/`, deleted with the rest), and the receive path went
+to **115.77 MHz** with the critical path now in the receive FIFO's
+commit loop. Still short.
 
 #### The seed sweep, and the honest reading of it
 
 Thirteen seeds on the patched netlist, place and route only. **This
 table is the netlist before `54a2df8` and is kept for the comparison
-below; it is not the design that is in the tree.**
+below; it was already not the design that shipped, and since 2026-08-12
+neither is in the tree at all.**
 
 | seed | rgmii_rx_clk | clk_tx | clk_sys |
 |---|---|---|---|
@@ -1716,8 +1752,9 @@ at seed 10, short by 0.63%; second best 117.32; the bulk between 105 and
 just under the line, so more seeds are not a plan. `clk_tx` clears on 18
 and `clk_sys` on 20, and no seed carries all three.
 
-Seed 10 is recorded in the DESIGNS entry as the best measured, not as
-one that works, and `run_synth.py oca_top` exits 1 and packs nothing.
+Seed 10 was recorded in the DESIGNS entry as the best measured, not as
+one that works, and `run_synth.py oca_top` exited 1 and packed nothing.
+That entry went with the design on 2026-08-12.
 
 #### Where the failing path is, and what has been ruled out
 
@@ -1728,10 +1765,10 @@ segments in the width adapter beside it, one of them the second-largest
 routing delay on the path. It is **64% routing** and 30% logic, which
 says congestion rather than depth.
 
-The same module on its own says so too. Rebuilt on this toolchain,
-`oca_top_mac` — clocking, RGMII and the MAC, no crypto — reaches
+The same module on its own said so too. Rebuilt on this toolchain,
+`oca_top_mac` — clocking, RGMII and the MAC, no crypto — reached
 **146.35 MHz** on `rgmii_rx_clk`, 17% clear of the target. The same
-path in the whole design reaches 124.22. Those 22 MHz are what the rest
+path in the whole design reached 124.22. Those 22 MHz are what the rest
 of the design costs it by competing for the fabric around it.
 
 Ruled out, each measured rather than assumed:
@@ -1756,8 +1793,11 @@ is going to return 22 MHz.
 Ethernet route was retired on 2026-08-12 — the board has no RJ45 socket
 — so this section is the record of a problem that was closed rather than
 solved, and no seed, patch or placer setting was ever going to supply a
-connector. `SPEC.md` PHASE 2 and `AGENTS.md` carry the closure; the
-measurements here stand as measurements.
+connector. The RTL, the vendored stack and all three `oca_top*` targets
+were deleted the same day, so nothing here can be re-run as written.
+`SPEC.md` PHASE 2, `AGENTS.md` and `docs/STATUS.md` carry the closure
+and what deliberately survived it; the measurements here stand as
+measurements.
 
 Note for anyone repeating this: `--placer-heap-beta` and
 `--placer-heap-critexp` are documented by `--help` and silently

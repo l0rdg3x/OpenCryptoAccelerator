@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: CERN-OHL-P-2.0
 /*
- * OCA host-protocol core: one UDP payload in, one UDP payload out.
+ * OCA host-protocol core: one request payload in, one response payload
+ * out.
  *
  * Wiring, and one gate. The two packet buffers, the key store, the
  * protocol FSM and the AEAD engine each keep their own responsibility,
- * so that the boundary the Ethernet integration attaches to is a plain
- * AXI-Stream pair (docs/design/2026-08-03-host-protocol.md).
+ * so that the boundary the transport attaches to is a plain AXI-Stream
+ * pair (docs/design/2026-08-03-host-protocol.md).
  *
  * That pair is 64 bits wide with a byte-enable, and the width conversion
- * to the 8 bits verilog-ethernet hands over belongs outside this module
+ * to the 8 bits the transport carries belongs outside this module
  * (amendment of 2026-08-04 in the same document): inside it, 8 bits
  * could not feed one engine.
  *

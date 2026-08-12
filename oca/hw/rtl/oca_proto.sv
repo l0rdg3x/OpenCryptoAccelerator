@@ -15,9 +15,9 @@
  * The stream is 64 bits wide with a byte-enable, because at 8 bits the
  * buffer needed 66 cycles to assemble a block the engine consumes in 40
  * and so could not feed even one engine (amendment of 2026-08-04 in
- * docs/design/2026-08-03-host-protocol.md). The 8-bit AXI-Stream that
- * verilog-ethernet hands over is unchanged; the width conversion belongs
- * at that boundary, not inside here.
+ * docs/design/2026-08-03-host-protocol.md). The 8-bit AXI-Stream the
+ * transport carries is unchanged; the width conversion belongs at that
+ * boundary, not inside here.
  *
  * FOUR STAGES, FOUR STATE REGISTERS, ONE OWNER PER PORT
  *

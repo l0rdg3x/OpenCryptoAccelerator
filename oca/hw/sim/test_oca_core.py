@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 """End-to-end tests for oca_core: packets in, packets out.
 
-Requests are injected on the 64-bit stream an axis_adapter will drive
-from verilog-ethernet's 8-bit output, so this runs with no Ethernet in
-the simulation. Every expected value comes from aead_model through
-proto_model: the wire format is unchanged by the width, only the number
-of beats it takes to carry it.
+Requests are injected straight onto oca_core's 64-bit stream, the one
+oca_slip_rx drives in the assembled design, so this runs with no
+transport in the simulation. Every expected value comes from aead_model
+through proto_model: the wire format is unchanged by the width, only
+the number of beats it takes to carry it.
 """
 
 import random
@@ -186,7 +186,7 @@ async def send_word(dut, data: int, keep: int, last: bool):
     high in the read-only phase of a cycle; the transfer is the edge that
     ends that cycle. Sampling the handshake before the edge rather than
     after it is what keeps this a source the RTL cannot distinguish from
-    the adapter in front of verilog-ethernet.
+    the decoder that feeds it in the assembled design.
     """
     dut.s_axis_tdata.value = data
     dut.s_axis_tkeep.value = keep

@@ -1,3 +1,0 @@
-[submodule "oca/hw/vendor/verilog-ethernet"]
-	path = oca/hw/vendor/verilog-ethernet
-	url = https://github.com/alexforencich/verilog-ethernet.git

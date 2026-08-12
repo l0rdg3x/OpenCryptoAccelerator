@@ -14,8 +14,12 @@ exist cannot be assessed
 here. (This read "there is no Ethernet MAC, no driver and no board yet"
 until 2026-08-12. The board arrived on 2026-08-11; the Ethernet route
 was retired on 2026-08-12 for want of an RJ45 socket on it, and the
-vendored MAC still in the tree is no longer the transport — `AGENTS.md`,
-`SPEC.md` PHASE 2.) Every claim below was checked against the RTL; where
+vendored MAC was deleted from the tree the same day — `AGENTS.md`,
+`SPEC.md` PHASE 2, `docs/STATUS.md`. **No third-party RTL is in this
+tree any more**, which removes a review surface this document never
+covered: `verilog-ethernet` was MIT-licensed code nobody here audited,
+and its two known defects were found by our own testbenches rather than
+by reading it.) Every claim below was checked against the RTL; where
 a property is a caller obligation rather than something the hardware
 enforces, it says so.
 

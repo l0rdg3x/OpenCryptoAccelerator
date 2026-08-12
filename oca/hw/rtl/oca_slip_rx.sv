@@ -70,16 +70,18 @@
  *   cnt_long   more than BYTES bytes. oca_pktbuf would drop the excess
  *              and answer about the prefix.
  *   cnt_short  fewer than MIN_BYTES. oca_proto sends such a request to
- *              P_DROP and answers NOTHING AT ALL (:779-785); on UDP
- *              oca_udp_seam made that unreachable with MIN_REQ_BYTES
- *              (oca_udp_seam.sv:52-62), and on a byte stream nothing
- *              else stands between it and a host waiting for ever.
+ *              P_DROP and answers NOTHING AT ALL (:779-785); the
+ *              retired UDP front end made that path unreachable with a
+ *              minimum-length guard of its own, and on a byte stream
+ *              nothing else stands between it and a host waiting for
+ *              ever.
  *
  * MIN_BYTES is oca_proto's HDR_LEN written down a second time and
- * nothing across the module boundary enforces that they agree -- the
- * same honest residual oca_udp_seam records. What the guard buys is that
- * the request oca_proto cannot answer never reaches it, not that it
- * tracks a change in oca_proto.
+ * nothing across the module boundary enforces that they agree -- an
+ * honest residual, inherited from the guard this replaced rather than
+ * introduced here. What the guard buys is that the request oca_proto
+ * cannot answer never reaches it, not that it tracks a change in
+ * oca_proto.
  *
  * AN EMPTY FRAME IS NOT AN ERROR. Two ENDs in a row are ordinary SLIP:
  * the RFC has senders emit a leading END to flush line noise, so

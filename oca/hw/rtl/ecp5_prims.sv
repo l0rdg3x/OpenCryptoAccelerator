@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: CERN-OHL-P-2.0
 /*
- * Blackbox declarations for the ECP5 hard primitives this design
- * instantiates: the four IO cells of the RGMII front end, and the PLL.
+ * Blackbox declaration for the ECP5 hard primitive this design
+ * instantiates: the PLL.
  *
- * They exist in yosys already, in ecp5/cells_bb.v, complete with their
+ * It exists in yosys already, in ecp5/cells_bb.v, complete with its
  * parameters — but that file has to be read by read_verilog, and a module
  * that reaches read_slang through read_verilog arrives already elaborated
  * with its parameters resolved. Overriding one from SystemVerilog then
- * fails with "parameter 'DEL_VALUE' does not exist in 'DELAYF'". Declaring
- * them here instead puts the parameters in front of slang, which is the
+ * fails with "parameter 'CLKOS_DIV' does not exist in 'EHXPLLL'". Declaring
+ * it here instead puts the parameters in front of slang, which is the
  * frontend that elaborates our RTL, and yosys carries the blackbox straight
  * through to the netlist for nextpnr to place.
  *
@@ -25,63 +25,23 @@
  * A blackbox has no body, so every port is unread and every output
  * undriven and every parameter unused. Those four warnings are the
  * declaration doing its job, and they are waived here rather than
- * globally so that a real one elsewhere still stops the build. Without
- * this the ECP5 branch of oca_rgmii.sv has no lint gate at all: the
- * command AGENTS.md documents passes only because --top-module oca_core
- * never reaches these two files.
+ * globally so that a real one elsewhere still stops the build.
+ *
+ * All four earn their place on the path that actually elaborates this
+ * file: hw/sim/run_clkrst.py lints it against oca_clkrst.sv at
+ * --top-module oca_clkrst, and stripping the waivers turns that into 59
+ * warnings and a non-zero exit. The command AGENTS.md documents pins
+ * --top-module oca_core, which never reaches the blackbox, so only
+ * DECLFILENAME fires there.
  */
 /* verilator lint_off DECLFILENAME */
 /* verilator lint_off UNUSEDSIGNAL */
 /* verilator lint_off UNUSEDPARAM */
 /* verilator lint_off UNDRIVEN */
 
-(* blackbox *)
-module DELAYF #(
-    parameter DEL_MODE  = "USER_DEFINED",
-    parameter DEL_VALUE = 0
-) (
-    input  A,
-    input  LOADN,
-    input  MOVE,
-    input  DIRECTION,
-    output Z,
-    output CFLAG
-);
-endmodule
-
-(* blackbox *)
-module DELAYG #(
-    parameter DEL_MODE  = "USER_DEFINED",
-    parameter DEL_VALUE = 0
-) (
-    input  A,
-    output Z
-);
-endmodule
-
-(* blackbox *)
-module IDDRX1F (
-    input  D,
-    input  SCLK,
-    input  RST,
-    output Q0,
-    output Q1
-);
-endmodule
-
-(* blackbox *)
-module ODDRX1F (
-    input  D0,
-    input  D1,
-    input  SCLK,
-    input  RST,
-    output Q
-);
-endmodule
-
 /*
- * The PLL. Same reason as the four above — its 36 parameters have to be
- * in front of slang for oca_clkrst.sv to override any of them — plus one
+ * The PLL. Its 36 parameters have to be in front of slang for
+ * oca_clkrst.sv to override any of them, and it carries a second reason
  * of its own: nextpnr reads four of the analogue settings from cell
  * ATTRIBUTES rather than parameters (ecp5/bitstream.cc:1278-1300), and
  * defaults every one of them to zero. ICP_CURRENT=0 is a charge pump

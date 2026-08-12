@@ -33,30 +33,11 @@ RTL = ROOT / "oca" / "hw" / "rtl"
 SYN_DIR = Path(__file__).resolve().parent
 BUILD = SYN_DIR / "build"
 
-sys.path.insert(0, str(ROOT / "oca" / "hw" / "vendor"))
-import vendor_patches  # noqa: E402
-
-# Where the pinned submodule sits in a DESIGNS path, and where the file
-# yosys actually opens sits instead.
-_PINNED_PREFIX = "oca/hw/vendor/verilog-ethernet/"
-
 
 def source_path(rel: str) -> Path:
-    """Absolute path for a DESIGNS entry, redirected to the patched tree.
-
-    The lists name files under the pinned submodule because that is where
-    they come from. Nothing reads them there: the submodule is read-only
-    and unpatched, and building from it gives a receive path with tkeep
-    tied to zero and an FCS comparison on the 125 MHz critical path.
-    """
-    if rel.startswith(_PINNED_PREFIX):
-        return vendor_patches.PATCHED / rel[len(_PINNED_PREFIX):]
+    """Absolute path for a DESIGNS entry."""
     return ROOT / rel
 
-
-def uses_vendor(top: str) -> bool:
-    d = DESIGNS[top]
-    return any(p.startswith(_PINNED_PREFIX) for p in d.verilog + d.incdirs)
 
 YOSYS = ROOT / "tools" / "yosys" / "bin" / "yosys"
 NEXTPNR = ROOT / "tools" / "nextpnr" / "bin" / "nextpnr-ecp5"
@@ -66,8 +47,9 @@ ECPPACK = ROOT / "tools" / "trellis" / "bin" / "ecppack"
 #
 # sv       SystemVerilog of ours, read by read_slang, relative to hw/rtl/.
 # verilog  Verilog read by yosys's own frontend before it, relative to the
-#          repository root: the vendored Ethernet stack and the wrappers
-#          that fix its parameters.
+#          repository root. No design carries any since the Ethernet
+#          transport was retired; the field stays because the two-frontend
+#          order below is what makes mixing them possible at all.
 # incdirs  include paths for that Verilog, relative to the repository root.
 # lpf      pin constraints, relative to hw/syn/. A design with one is
 #          built with real IO; a design without one is built
@@ -182,130 +164,7 @@ DESIGNS = {
         sv=["oca_vccio.sv"],
         lpf="colorlight_i9_vccio.lpf",
     ),
-    # The first pinned build this project has. It carries no crypto: it
-    # exists to place the clocking and the RGMII pads against the real
-    # .lpf and report which clocks nextpnr constrained, which is the one
-    # thing that cannot be learned from an out-of-context run and the one
-    # thing every later number depends on.
-    "oca_top_stub": Design(
-        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
-            "oca_top_stub.sv"],
-        lpf="colorlight_i9.lpf",
-    ),
-    # Clocking, RGMII and the MAC, with the crypto removed. It answers
-    # whether oca_top's missed 125 MHz receive constraint is the MAC's
-    # own depth or the rest of the design stretching its routing.
-    "oca_top_mac": Design(
-        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
-            "oca_top_mac.sv"],
-        verilog=[
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_fifo.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_adapter.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo_adapter.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/lfsr.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_rx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_tx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g_fifo.v",
-            "oca/hw/rtl/vendor/oca_eth_mac_1g_fifo_64.v",
-        ],
-        incdirs=[
-            "oca/hw/vendor/verilog-ethernet/rtl",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
-        ],
-        lpf="colorlight_i9.lpf",
-    ),
-    # The board. Vendor Verilog is read first, by yosys's own frontend,
-    # because a module that reaches read_slang through read_verilog
-    # arrives already elaborated -- which is why the three oca_* wrappers
-    # exist and why our SystemVerilog can instantiate them with no
-    # parameters at all.
-    #
-    # The file list is the union of the two probe lists plus eth_axis_rx
-    # and eth_axis_tx, which nothing in this project needed until there
-    # was a top level to join the MAC to the stack. lfsr.v is the only
-    # file both probes name; yosys must not read it twice.
-    "oca_top": Design(
-        sv=["ecp5_prims.sv", "oca_clkrst.sv", "oca_rgmii.sv",
-            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
-            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
-            "oca_core.sv", "oca_udp_seam.sv", "oca_top.sv"],
-        verilog=[
-            # AXI-Stream library
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/arbiter.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/priority_encoder.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_fifo.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_adapter.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo.v",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl/axis_async_fifo_adapter.v",
-            # MAC
-            "oca/hw/vendor/verilog-ethernet/rtl/lfsr.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_rx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/axis_gmii_tx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_mac_1g_fifo.v",
-            # Ethernet header parse and build
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_axis_rx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_axis_tx.v",
-            # ARP, IP, UDP
-            "oca/hw/vendor/verilog-ethernet/rtl/arp_cache.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/arp_eth_rx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/arp_eth_tx.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/arp.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/eth_arb_mux.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/ip_eth_rx_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/ip_eth_tx_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/ip_arb_mux.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/ip_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/ip_complete_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/udp_checksum_gen_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/udp_ip_rx_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/udp_ip_tx_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/udp_64.v",
-            "oca/hw/vendor/verilog-ethernet/rtl/udp_complete_64.v",
-            # ours, fixing their parameters
-            "oca/hw/rtl/vendor/oca_eth_mac_1g_fifo_64.v",
-            "oca/hw/rtl/vendor/oca_eth_axis_64.v",
-            "oca/hw/rtl/vendor/oca_udp_complete_64.v",
-        ],
-        incdirs=[
-            "oca/hw/vendor/verilog-ethernet/rtl",
-            "oca/hw/vendor/verilog-ethernet/lib/axis/rtl",
-        ],
-        lpf="colorlight_i9.lpf",
-        # Seed 10 is the best of 32, NOT a seed that works. This design
-        # does not close timing: rgmii_rx_clk clears 125 MHz on none of
-        # the 32 seeds measured, and 10 is the closest at 124.22, short
-        # by 0.63%. The next best is 117.32 and the bulk sits between
-        # 105 and 117, so the best is a tail and not a near miss.
-        #
-        # It closed on seed 6 until 54a2df8, at 129.87 / 130.07 / 49.41.
-        # Connecting the raw-IP ready pins there -- which the board needs,
-        # since without them one non-UDP frame stops reception for good --
-        # cost +36 LUTs -- while a third pin in the same commit,
-        # clear_arp_cache, brought back +881 LUTs and +400 flip-flops of
-        # ARP logic that had been optimised away, around the receive
-        # path, which never had margin.
-        #
-        # Recorded so that the published numbers reproduce by naming the
-        # target. See hw/syn/README.md for the sweep and AGENTS.md for
-        # what has been ruled out.
-        seed=10,
-        # Synthesis alone measured 3941 s on this design. 7200 leaves the
-        # bound doing its job -- a stage that has stopped progressing
-        # still dies -- without killing a build that is simply large.
-        timeout=7200,
-    ),
 }
-
-# oca_rgmii is deliberately not a target of its own. It cannot be built
-# out-of-context: nextpnr absorbs a DELAYF or DELAYG into a pin's IOLOGIC
-# and refuses one that does not reach a top-level port —
-# "DELAYG 'gen_ecp5.u_tx_clk_delay' must be connected directly to top
-# level input or output" — and out-of-context inserts no IO at all. It is
-# built as part of a pinned top, which is the only place its numbers mean
-# anything anyway, since the delay elements cost no fabric.
 
 # Minimum live flip-flops a netlist must contain, keyed by the RTL file
 # the cells are attributed to. Simulation cannot see synthesis, so these
@@ -465,50 +324,6 @@ NETLIST_FF_FLOOR = {
                         "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 31},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
-    # The board build. Same two floors as oca_core, since it contains
-    # one, plus the seam: 276 live at this RTL, floored at 270. The seam
-    # is worth its own floor because its header queue is the one place
-    # in this design where losing storage does not break anything
-    # visible -- it just starts addressing replies to the wrong peer.
-    #
-    # And the vendor stack, every module of it that carries state. This
-    # is not belt and braces: until 2026-08-11 the census keyed on a .sv
-    # filename, so no vendor module could ever produce a bucket, and
-    # arp_cache.v sat at ZERO live flip-flops in every netlist this
-    # project ever built -- it first reached 130 on 2026-08-11, when
-    # clear_arp_cache stopped being undriven. The design that closed
-    # timing, packed a bitstream and was published had no ARP cache in
-    # it at all: the same shape as the cmp2lut trap, and invisible for
-    # the same reason, nothing counted it.
-    #
-    # Floored 5% under measured, because the failure worth catching is a
-    # module vanishing rather than a register moving. This covers the
-    # 4281 flip-flops that carry a vendor .v in their src; the remaining
-    # 525 of the old unattributed lump carry no design source at all and
-    # are still guarded only by NETLIST_FF_TOTAL. Re-measure when the
-    # pin, the patches or a parameter changes; the census printed below
-    # is where the numbers come from.
-    "oca_top": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
-                "oca_udp_seam.sv": 270,
-                "arp.v": 335,                   # 353 measured
-                "arp_cache.v": 123,             # 130
-                "arp_eth_rx.v": 266,            # 280
-                "arp_eth_tx.v": 272,            # 287
-                "axis_adapter.v": 166,          # 175
-                "axis_async_fifo.v": 355,       # 374
-                "axis_fifo.v": 89,              # 94
-                "axis_gmii_rx.v": 99,           # 105
-                "axis_gmii_tx.v": 67,           # 71
-                "eth_arb_mux.v": 194,           # 205
-                "eth_axis_rx.v": 229,           # 242
-                "eth_axis_tx.v": 249,           # 263
-                "ip_64.v": 52,                  # 55
-                "ip_arb_mux.v": 238,            # 251
-                "ip_eth_rx_64.v": 389,          # 410
-                "ip_eth_tx_64.v": 431,          # 454
-                "udp_checksum_gen_64.v": 137,   # 145
-                "udp_ip_rx_64.v": 295,          # 311
-                "udp_ip_tx_64.v": 384},         # 405
 }
 
 # The AEAD engine's own storage — ChaCha20's block state, Poly1305's
@@ -533,16 +348,7 @@ NETLIST_FF_FLOOR = {
 # storage is free — this only ever fails downwards.
 #
 # oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
-#
-# oca_top measures 17249, of which 12043 are attributed to our RTL and
-# 5206 to the vendor stack, which read_verilog gives no src attribute
-# this census can key on. (16849 / 4806 until 2026-08-11 and 16840 /
-# 4797 before the vendor patches: the last step is the +400 the raw-IP
-# tie-off in 54a2df8 keeps alive, all of it vendor and none of it ours.)
-# The total is floored rather than those two
-# separately for the same reason as above, and because the vendor's
-# share is the part most likely to move if a parameter changes.
-NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700,
+NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # 12518 measured, floored ~1% under for the same
                     # reason as oca_core: chacha20.sv, poly1305.sv and
                     # chacha20_poly1305.sv carry 5683 of those registers
@@ -559,39 +365,26 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700,
                     # re-measured, which on a module this size is cheap.
                     "oca_slip_rx": 302, "oca_slip_tx": 75}
 
-# The cells no flip-flop census can see, and nothing else checks either.
+# The cell no flip-flop census can see, and nothing else checks either.
 #
 # live_ff_census skips any cell whose type lacks "FF" or lacks a Q port,
-# so IDDRX1F, ODDRX1F, DELAYF, DELAYG and EHXPLLL are all invisible to
-# it -- the DDR cells expose Q0/Q1, and the PLL is not storage at all.
-# That is the whole physical interface: 22 bits of receive capture and
-# transmit launch, their delay lines, and the one PLL every clock in the
-# design comes from. A mapper that dropped any of them leaves a netlist
-# that passes every check above, places, routes, meets timing and packs
-# a bitstream. On the board it is a link that never comes up, and the
-# cmp2lut trap is the precedent for treating that as a real risk rather
-# than a theoretical one.
+# so EHXPLLL is invisible to it -- the PLL is not storage at all. It is
+# where every clock in the design comes from. A mapper that dropped it
+# leaves a netlist that passes every check above, places, routes, meets
+# timing and packs a bitstream, and the cmp2lut trap is the precedent for
+# treating that as a real risk rather than a theoretical one.
 #
 # Exact counts, not floors, and deliberately: these follow from the pin
 # map rather than from logic, so a change in either direction is
 # something a person should look at. Adding a second port means editing
 # this table, the way adding a design means editing DESIGNS.
 #
-# Measured on the netlists in hw/syn/build/: identical across all three
-# pinned designs, because all three carry one oca_rgmii and one
-# oca_clkrst.
+# Measured on the netlist in hw/syn/build/.
 NETLIST_PRIM_COUNT = {
-    # Bring-up step 3 carries the PLL and nothing else physical: no DDR
-    # register and no delay, because it touches no RGMII pad. The entry
+    # Bring-up step 3 carries the PLL and nothing else physical. The entry
     # exists mainly to reach check_pll, which is called from here and
     # cannot run for a top this table does not list.
     "oca_pll": {"EHXPLLL": 1},
-    "oca_top": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
-                "DELAYF": 5, "DELAYG": 6},
-    "oca_top_mac": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
-                    "DELAYF": 5, "DELAYG": 6},
-    "oca_top_stub": {"EHXPLLL": 1, "IDDRX1F": 5, "ODDRX1F": 6,
-                     "DELAYF": 5, "DELAYG": 6},
 }
 
 # The PLL exists is not the same claim as the PLL is the one the design
@@ -600,7 +393,7 @@ NETLIST_PRIM_COUNT = {
 # nextpnr derives the clk_sys and clk_tx constraints from these very
 # parameters as they reach the netlist (ecp5/pack.cc), so a wrong
 # divider moves the constraint and the measurement together and
-# check_timing still reports ok. colorlight_i9.lpf:195 says as much: the
+# check_timing still reports ok. colorlight_i9.lpf:212 says as much: the
 # check on the PLL "is to read those two log lines" -- by hand, every
 # time, or never. This is that reading, done by the flow.
 #
@@ -618,12 +411,6 @@ NETLIST_PLL_PARAMS = {
     # an untested second output nothing in this design consumes.
     "oca_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                 "CLKOS_DIV": 13},
-    "oca_top": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
-                "CLKOS_DIV": 13},
-    "oca_top_mac": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
-                    "CLKOS_DIV": 13},
-    "oca_top_stub": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
-                     "CLKOS_DIV": 13},
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
@@ -635,13 +422,10 @@ DEFAULT_SPEED = 6
 # is the point: a build that has produced nothing after this long has not
 # produced anything by carrying on either.
 #
-# It is NOT generous enough for the whole Ethernet top, which this
-# comment claimed until 2026-08-10. oca_top's synthesis measured 3941 s
-# ("End of script ... time: 3941.43s" in its yosys log), so
-# `run_synth.py oca_top` at this bound is killed at 30 minutes with
-# nothing measured -- the documented way to reproduce that design's
-# figures could not finish. A design that needs longer now records it,
-# the way oca_top records its seed, so naming the target is enough.
+# It is not generous enough for every design here: oca_uart_crypto
+# records a bound of its own. A design that needs longer states it in
+# DESIGNS, the way it states its seed, so naming the target is enough to
+# reproduce its figures.
 DEFAULT_TIMEOUT = 1800
 
 
@@ -937,14 +721,14 @@ def synth(top, json_out, log, timeout):
     rejects the SystemVerilog used by the cores (functions with return,
     concatenation assignments).
 
-    A design that also carries Verilog — the vendored Ethernet stack and
-    the wrappers that fix its parameters — reads that first. The order is
+    A design that also carries Verilog reads that first. The order is
     not cosmetic: read_slang can see modules already in the design and
     checks its instantiations against them, but a module that arrives
     through read_verilog arrives already elaborated, so a parameter
     override from the SystemVerilog side fails with "parameter 'X' does
-    not exist". That is why the vendor modules are instantiated from
-    Verilog wrappers and never from our own RTL directly.
+    not exist". Any Verilog added here has to be instantiated from
+    Verilog wrappers that fix its parameters, never from our own RTL
+    directly.
     """
     d = DESIGNS[top]
     cmds = []
@@ -1234,16 +1018,6 @@ def main():
 
     check_cmp2lut()
 
-    # Which vendor tree this netlist was elaborated from, recorded beside
-    # it. Without this --pnr-only would happily place and route a netlist
-    # built from the pinned tree while printing that the patches are in,
-    # and there was a live case of exactly that in build/.
-    provenance = BUILD / f"{args.top}.vendor.json"
-
-    if uses_vendor(args.top):
-        vendor_patches.require()
-        print(vendor_patches.describe(vendor_patches.PATCHED))
-
     if args.pnr_only:
         # Synthesis is deterministic, so re-running it to try a placer
         # setting spends the same 40 minutes to produce the same netlist.
@@ -1253,29 +1027,12 @@ def main():
         if not netlist.exists():
             sys.exit(f"--pnr-only needs {netlist}, which does not exist; "
                      f"run once without it first")
-        if uses_vendor(args.top):
-            want = vendor_patches.stamp_now(vendor_patches.PATCHED)
-            try:
-                have = json.loads(provenance.read_text())
-            except (OSError, ValueError):
-                sys.exit(f"{netlist} has no record of the vendor tree it was "
-                         f"elaborated from. Re-run without --pnr-only.")
-            if have != want:
-                sys.exit(f"{netlist} was elaborated from a different vendor "
-                         f"tree than the one present now. Placing it would "
-                         f"report Fmax for a design that is not this one. "
-                         f"Re-run without --pnr-only.")
         print(f"reusing {netlist} (--pnr-only)")
     else:
         rc = synth(args.top, netlist, BUILD / f"{args.top}.yosys.log",
                    args.timeout)
         if rc != 0:
             return rc
-        if uses_vendor(args.top):
-            provenance.write_text(json.dumps(
-                vendor_patches.stamp_now(vendor_patches.PATCHED), indent=2))
-        elif provenance.exists():
-            provenance.unlink()
     rc = check_netlist(args.top, netlist)
     if rc != 0:
         return rc

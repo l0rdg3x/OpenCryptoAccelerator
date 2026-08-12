@@ -290,11 +290,11 @@ async def test_back_to_back_frames(dut):
 async def test_a_frame_shorter_than_a_header_is_refused(dut):
     """oca_proto.sv:779-785 answers such a request with nothing at all.
 
-    On UDP that path was unreachable, because oca_udp_seam sank a short
-    datagram before its header was ever enqueued (oca_udp_seam.sv:52-62).
-    On a byte stream nothing else stands between the host and a request
-    that is never answered, so the guard has to be here, and the host
-    has to be able to see it happened.
+    The retired UDP front end made that path unreachable, sinking a
+    short datagram before its header was ever enqueued. On a byte
+    stream nothing else stands between the host and a request that is
+    never answered, so the guard has to be here, and the host has to be
+    able to see it happened.
     """
     src, sink = await setup(dut)
     src.send(encode(payload(MIN_BYTES - 1)))
