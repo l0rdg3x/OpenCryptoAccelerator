@@ -71,6 +71,7 @@ module oca_uart_probe (
 
     logic [24:0] tick_count;
     logic        send;
+    logic        busy_j17, busy_e5;
 
     always_ff @(posedge clk25) begin
         if (tick_count == SEND_TICK - 1) begin
@@ -113,7 +114,7 @@ module oca_uart_probe (
     ) u_tx_j17 (
         .clk  (clk25),
         .send (send),
-        .busy (),
+        .busy (busy_j17),
         .tx   (uart_j17)
     );
 
@@ -124,9 +125,15 @@ module oca_uart_probe (
     ) u_tx_e5 (
         .clk  (clk25),
         .send (send),
-        .busy (),
+        .busy (busy_e5),
         .tx   (uart_e5)
     );
+
+    // Both transmitters run from the same free-running `send`, so
+    // neither busy flag gates anything; named rather than left empty so
+    // that -Wall stays clean without a waiver.
+    logic        unused_ok;
+    always_comb unused_ok = busy_j17 | busy_e5;
 
 endmodule
 

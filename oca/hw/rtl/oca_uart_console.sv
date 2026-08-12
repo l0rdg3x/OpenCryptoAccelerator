@@ -71,17 +71,31 @@ module oca_uart_console (
     logic       cmd_avail, cmd_pop, rx_fifo_overflow;
     logic       rx_fifo_empty;
 
+    // Three FIFO outputs this design deliberately does not read, named
+    // rather than left empty so that -Wall stays clean without a waiver.
+    // The input FIFO's full flag says nothing its overflow does not,
+    // and oca_console counts the overflow; the output FIFO's overflow
+    // cannot assert at all, because tx_push is gated on tx_ready and
+    // tx_ready is that FIFO's own full flag inverted; neither level is
+    // published anywhere.
+    logic       rx_fifo_full, tx_fifo_overflow;
+    logic [4:0] rx_fifo_level;
+    logic [5:0] tx_fifo_level;
+    logic       unused_ok;
+    always_comb unused_ok = rx_fifo_full | tx_fifo_overflow
+                          | (|rx_fifo_level) | (|tx_fifo_level);
+
     oca_fifo #(.WIDTH (8), .DEPTH (16)) u_rx_fifo (
         .clk      (clk25),
         .rst_n    (rst_n),
         .wr_data  (rx_byte),
         .push     (rx_valid),
-        .full     (),
+        .full     (rx_fifo_full),
         .overflow (rx_fifo_overflow),
         .rd_data  (cmd_byte),
         .pop      (cmd_pop),
         .empty    (rx_fifo_empty),
-        .level    ()
+        .level    (rx_fifo_level)
     );
 
     always_comb cmd_avail = !rx_fifo_empty;
@@ -115,11 +129,11 @@ module oca_uart_console (
         .wr_data  (tx_byte),
         .push     (tx_push),
         .full     (tx_fifo_full),
-        .overflow (),
+        .overflow (tx_fifo_overflow),
         .rd_data  (tx_fifo_data),
         .pop      (tx_fifo_pop),
         .empty    (tx_fifo_empty),
-        .level    ()
+        .level    (tx_fifo_level)
     );
 
     always_comb tx_fifo_pop = !tx_fifo_empty && !tx_busy;
