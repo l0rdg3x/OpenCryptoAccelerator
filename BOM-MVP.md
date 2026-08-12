@@ -46,7 +46,9 @@ all open source. Test vectors: RFC 8439, NIST CAVP (public).
   de-facto standard for low-cost ECP5 development.
 - AliExpress orders: 2-4 weeks shipping, possible VAT on delivery.
 - Totals: ~55-85 € for the core kit (i9 Kit 2 + PSU), ~100-160 €
-  including debug tools — the sums of the rows above, rounded outward.
+  including debug tools — the sums of the rows above (54-83 and 99-158),
+  each end rounded to the nearest five. This said "rounded outward"
+  until 2026-08-12, and both low ends are rounded inward.
   These read ~60-90 and ~110-165 until 2026-08-12, when the two Ethernet
   cables left the required list: there is no socket to put one in, and
   the host interface is the DAPLink USB serial that comes with Kit 2.

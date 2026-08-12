@@ -434,26 +434,31 @@ NETLIST_FF_FLOOR = {
     # is the reading this design reserves for a link that has lost
     # something.
     #
-    # 160 for the decoder, and it is NOT the 302 the same RTL gives as a
-    # top of its own. Measured both ways on this toolchain. 48 of the
-    # difference is exact and expected: cnt_short, cnt_long and cnt_esc
-    # are three 16-bit saturating counters whose value nothing in this
-    # design reads -- only the OR that drives `trouble` -- so yosys keeps
-    # the disjunction and deletes the counters, and no `cnt_*` net
-    # survives in the netlist. That is the price of the blind spot
-    # oca_uart_crypto.sv records: the refusal counts do not exist in the
-    # bitstream, only the fact that something was refused. The remaining
-    # ~94 are fabric registers around the frame buffer's two DP16KD --
-    # the read-during-write emulation -- which the out-of-context build
-    # carries and this one does not. Both netlists hold the same 2
-    # DP16KD; oca_slip_rx never reads a word in the same cycle it writes
-    # one that is later drained, so the two mappings are equivalent for
-    # this RTL. Argued, not proved by a gate simulation: DP16KD is a
-    # blackbox with no behaviour in cells_sim.v, so no netlist of this
-    # module can be simulated at all (AGENTS.md).
+    # 160 for the decoder, which is what the per-file census reads --
+    # and it reads 160 in the standalone build too. THE 302 IN
+    # NETLIST_FF_TOTAL ABOVE IS NOT THE SAME MEASUREMENT: that is the
+    # whole netlist of a design whose only module is this one, and the
+    # 142 between them is the census's own "(none)" bucket, cells yosys
+    # attributes to no design file. This comment read "160 here and not
+    # the 302 the same RTL gives as a top of its own" until 2026-08-12
+    # and then explained the gap as deleted counters plus block-RAM
+    # emulation registers. There is no gap to explain: comparing a
+    # per-file census against a whole-netlist total is an error of the
+    # exact kind these tables exist to catch, and it was made in the
+    # table itself.
     #
-    # 75 for the encoder, exactly what it measures as a top of its own:
-    # nothing in it is unobserved, so nothing in it collapses.
+    # What IS true, and separately measured: the three 16-bit saturating
+    # counters cnt_short, cnt_long and cnt_esc are deleted here. Nothing
+    # reads their value -- only the OR that drives `trouble` -- so yosys
+    # keeps the disjunction and drops the counters, and the crypto
+    # netlist holds zero nets matching cnt_*, against 33 in the
+    # standalone one. That is the price of the blind spot
+    # oca_uart_crypto.sv records: the refusal counts do not exist in the
+    # bitstream, only the fact that something was refused. It does not
+    # move this floor, because those cells were never in this bucket.
+    #
+    # 75 for the encoder, and here the two measurements do coincide,
+    # its standalone total being 75 as well.
     "oca_uart_crypto": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
                         "oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
                         "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,

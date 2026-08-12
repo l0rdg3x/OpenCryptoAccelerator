@@ -217,13 +217,13 @@ invoked by name and these four cost nothing where they sit:
 .venv/bin/python hw/sim/run_oca_path.py           # 7/7 pass, the whole path, needs the vendor patches
 ```
 
-**177 RTL tests across 25 runners**, thirty-nine of them run a second
+**177 RTL tests over 23 runners, plus 6 on a synthesised netlist from
+the two gate runners** — 25 in all. Thirty-nine of the 177 run a second
 time at a non-default parameter — five for `chacha20` at
 `ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
 three for `oca_pktbuf` at the smallest `BYTES` it accepts, all ten of
 `oca_udp_seam` at `HDR_Q_DEPTH` = 2, all twelve of `oca_slip_rx` at
-`BYTES` = 64 and five of `oca_uart_crypto` at `LED_BITS` = 8 — plus 6 on
-a synthesised netlist.
+`BYTES` = 64 and five of `oca_uart_crypto` at `LED_BITS` = 8.
 
 This read **123** until 2026-08-12, and the gap was never arithmetic:
 that sum is exactly right over the fourteen suites it names, and six

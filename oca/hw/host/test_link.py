@@ -17,8 +17,9 @@ for _p in (_HERE, _SIM_DIR):
 import proto_model
 import slip_model
 from fake_device import FakeBoard
-from link import (FrameRejected, OcaLink, ProtocolError, RequestIdMismatch,
-                   SerialTimeout, StatusError)
+from link import (FrameRejected, FrameTooLarge, OcaLink, OpcodeMismatch,
+                   ProtocolError, RequestIdMismatch, SerialTimeout,
+                   StatusError)
 
 
 class _LeakyAuthFail:
@@ -54,6 +55,45 @@ class _BlackHole:
 
     def write(self, data: bytes) -> None:
         pass
+
+    def read(self, timeout: float) -> bytes:
+        return b""
+
+
+class _WrongOpcodeReply:
+    """A transport that answers every request with the right req_id but
+    the wrong opcode -- what a reply queued from an earlier, unrelated
+    command looks like once its req_id happens to coincide with this
+    one's (link.py:120's old itertools.count(1) made that the common
+    case across process restarts, not a rare one)."""
+
+    def __init__(self) -> None:
+        self._out = bytearray()
+
+    def write(self, data: bytes) -> None:
+        frames = [f for f in slip_model.decode(data) if f]
+        assert len(frames) == 1
+        req = proto_model.parse_response(frames[0])  # same header layout
+        wrong_opcode = (proto_model.OP_LOAD_KEY
+                         if req["opcode"] != proto_model.OP_LOAD_KEY
+                         else proto_model.OP_STATS)
+        resp = (proto_model.MAGIC
+                + bytes([proto_model.VERSION, wrong_opcode])
+                + req["req_id"].to_bytes(2, "little")
+                + bytes([req["slot"], proto_model.ST_OK]))
+        self._out += slip_model.encode(resp)
+
+    def read(self, timeout: float) -> bytes:
+        out, self._out = bytes(self._out), bytearray()
+        return out
+
+
+class _NoWriteAllowed:
+    """A transport that fails the test if write() is ever called -- for
+    proving a request is refused locally, before touching the wire."""
+
+    def write(self, data: bytes) -> None:
+        raise AssertionError("must not write an oversized request to the wire")
 
     def read(self, timeout: float) -> bytes:
         return b""
@@ -147,6 +187,46 @@ def test_frame_rejected_on_garbled_response():
         pass
     else:
         raise AssertionError("expected FrameRejected")
+
+
+def test_opcode_mismatch_is_detected():
+    """A reply that echoes the right req_id but the wrong opcode must be
+    caught here, not read as the current request's answer -- the fix for
+    the review's stale-queued-reply finding: req_id alone is not enough
+    once the id space can repeat across process restarts."""
+    link = OcaLink(_WrongOpcodeReply(), timeout=0.2)
+    try:
+        link.stats()
+    except OpcodeMismatch:
+        pass
+    else:
+        raise AssertionError("expected OpcodeMismatch")
+
+
+def test_fresh_links_do_not_all_start_at_request_id_one():
+    """link.py used to seed every process's counter at itertools.count(1),
+    so a reply queued by an earlier process's request 1 could be mistaken
+    for a brand new process's own first request. Sampled over 200
+    independent links, landing on 1 every single time would mean the seed
+    is still fixed (probability of that occurring by chance with a
+    uniformly random seed is on the order of 1e-964)."""
+    ids = {OcaLink(FakeBoard())._next_req_id() for _ in range(200)}
+    assert ids != {1}, "every fresh link started at request id 1"
+
+
+def test_oversized_seal_request_is_rejected_locally():
+    """A seal whose frame would exceed the board's receive buffer must
+    never reach the wire: over BYTES, oca_slip_rx.sv answers nothing at
+    all (cnt_long), so sending it would only ever produce a timeout for
+    a size the CLI already knows in advance."""
+    link = OcaLink(_NoWriteAllowed(), timeout=0.05)
+    msg = b"m" * OcaLink.MAX_FRAME_BYTES  # guarantees frame > MAX_FRAME_BYTES
+    try:
+        link.seal(0, b"n" * 12, b"", msg)
+    except FrameTooLarge as exc:
+        assert str(OcaLink.MAX_FRAME_BYTES) in str(exc)
+    else:
+        raise AssertionError("expected FrameTooLarge")
 
 
 def test_serial_timeout_when_nothing_answers():

@@ -49,6 +49,11 @@ class RawSerial:
             pass  # exclusivity is a courtesy against a second opener, not a requirement
         try:
             self._configure(speed)
+            # Discards whatever the kernel already queued for this tty
+            # before this process opened it -- a reply left over from
+            # whatever held the device before us must not be mistaken
+            # for the answer to this process's own first request.
+            termios.tcflush(self._fd, termios.TCIFLUSH)
         except Exception:
             self.close()
             raise

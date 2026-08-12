@@ -13,6 +13,7 @@ judged against: oca/hw/rtl/oca_slip_rx.sv, oca_slip_tx.sv.
 from __future__ import annotations
 
 import itertools
+import random
 import struct
 import sys
 import time
@@ -29,7 +30,8 @@ from slip_stream import SlipDecodeError, SlipReader  # noqa: E402
 
 __all__ = [
     "OcaLink", "OcaLinkError", "SerialTimeout", "FrameRejected",
-    "ProtocolError", "StatusError", "RequestIdMismatch", "STATUS_NAMES",
+    "ProtocolError", "StatusError", "RequestIdMismatch", "OpcodeMismatch",
+    "FrameTooLarge", "STATUS_NAMES",
 ]
 
 STATUS_NAMES = {
@@ -102,22 +104,69 @@ class RequestIdMismatch(OcaLinkError):
             f"request id 0x{sent:04x} sent, 0x{got:04x} echoed back")
 
 
+class OpcodeMismatch(OcaLinkError):
+    """The response's opcode does not echo the request's.
+
+    Request id alone does not prove a reply belongs to this request: a
+    reply queued from an earlier, unrelated command can echo the same id
+    (every SLIP refusal is answered with silence, so a caller that gave
+    up on a timeout and moved on leaves its eventual reply sitting
+    unread), and this catches it when the two commands differ.
+    """
+
+    def __init__(self, sent: int, got: int):
+        self.sent = sent
+        self.got = got
+        super().__init__(f"opcode 0x{sent:02x} sent, 0x{got:02x} echoed back")
+
+
+class FrameTooLarge(OcaLinkError):
+    """The request frame would not fit the board's receive buffer.
+
+    Refused here rather than sent: over MAX_FRAME_BYTES, oca_slip_rx.sv
+    refuses the frame before it ever reaches oca_proto (cnt_long) and
+    answers nothing at all, so sending it would only ever surface as a
+    SerialTimeout -- a dead-link message for a size this module already
+    knows in advance.
+    """
+
+
 class OcaLink:
     """One OCA host-protocol command at a time, over a Transport.
 
-    Every round trip validates, in order: the reply decodes as SLIP
-    (else FrameRejected), it is at least a header and its magic is
-    right (else ProtocolError), its request id echoes what was sent
-    (else RequestIdMismatch), and its status is 0x00 (else StatusError)
-    -- so a caller that only checks the return value of load_key/seal/
-    open/stats for "did it work" is still exposed to every one of these
-    as an exception, never as a silently wrong answer.
+    Every round trip validates, in order: the request frame is not too
+    large to ever be answered (else FrameTooLarge, raised before the
+    transport is touched at all), the reply decodes as SLIP (else
+    FrameRejected), it is at least a header and its magic is right (else
+    ProtocolError), its opcode echoes what was sent (else
+    OpcodeMismatch), its request id echoes what was sent (else
+    RequestIdMismatch), and its status is 0x00 (else StatusError) -- so
+    a caller that only checks the return value of load_key/seal/open/
+    stats for "did it work" is still exposed to every one of these as an
+    exception, never as a silently wrong answer, and never as a reply
+    left over from a different process's request on the same tty (the
+    opcode check, together with RawSerial flushing on open and the
+    request id no longer starting at a fixed value every process, is
+    what makes that last one true across a process boundary too).
     """
+
+    # oca_pktbuf.sv / oca_slip_rx.sv BYTES default. A frame this size or
+    # larger can never complete: exactly MAX_FRAME_BYTES fills
+    # oca_pktbuf's bank (rd_full) and always answers ST_BAD_LENGTH
+    # regardless of the header's own declared lengths; over it,
+    # oca_slip_rx.sv refuses the frame (cnt_long) before oca_proto ever
+    # sees it, and nothing answers at all.
+    MAX_FRAME_BYTES = 2048
 
     def __init__(self, transport: Transport, timeout: float = 2.0):
         self.transport = transport
         self.timeout = timeout
-        self._ids = itertools.count(1)
+        # Seeded per instance, not fixed at 1: a reply queued by an
+        # earlier process's request 1 -- left unread because every SLIP
+        # refusal is answered with silence, so a timed-out caller has no
+        # way to know a reply is still coming -- must not collide with
+        # this process's own first request id.
+        self._ids = itertools.count(random.randint(0, 0xFFFF))
         # Wire bytes actually written and read -- SLIP overhead
         # included -- so a caller can report the SERIAL LINK's rate.
         # This says nothing about the accelerator: see selftest.py.
@@ -146,6 +195,11 @@ class OcaLink:
                     return frame
 
     def _roundtrip(self, req_frame: bytes, req_id: int) -> dict:
+        if len(req_frame) > self.MAX_FRAME_BYTES:
+            raise FrameTooLarge(
+                f"request frame is {len(req_frame)} bytes, over the "
+                f"board's {self.MAX_FRAME_BYTES}-byte limit -- not sent")
+
         wire = encode(req_frame)
         self.transport.write(wire)
         self.bytes_written += len(wire)
@@ -157,6 +211,9 @@ class OcaLink:
         resp = proto_model.parse_response(raw)
         if not resp["magic_ok"]:
             raise ProtocolError(f"bad magic in response: {raw[0:2].hex()}")
+        req_opcode = req_frame[3]
+        if resp["opcode"] != req_opcode:
+            raise OpcodeMismatch(req_opcode, resp["opcode"])
         if resp["req_id"] != req_id:
             raise RequestIdMismatch(req_id, resp["req_id"])
         if resp["status"] != proto_model.ST_OK:

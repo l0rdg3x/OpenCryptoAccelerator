@@ -93,7 +93,23 @@
  *                       nobody catches.
  *
  * Eight to one, so the two live readings are told apart at a glance and
- * not by counting. LED_BITS is what makes the rates simulable: at the
+ * not by counting.
+ *
+ * READ THE FAST RATE BEFORE THE HOST OPENS THE PORT, because otherwise
+ * it covers two states and that is the trap this whole scheme exists to
+ * avoid. `rx_frame_error` is one of the six sources of `trouble`, and
+ * oca_uart_rx raises it whenever a stop bit is not high -- which a line
+ * left undriven, a break, or the edge a host puts on the line when it
+ * opens /dev/ttyACM0 will all produce. One of those latches the bit for
+ * the rest of the session, and 6 Hz then means "a byte on the line was
+ * malformed at some point", which is true and is not the same claim as
+ * "the datapath lost something". The order is the disambiguation: watch
+ * D2 for a few seconds after configuration and before any host touches
+ * the port. Fast already at that point is line noise, not a fault; fast
+ * only after traffic is the reading this rate is for. Nothing here can
+ * clear it short of reconfiguring, which is deliberate.
+ *
+ * LED_BITS is what makes the rates simulable: at the
  * default 25 the slow half-period is 0.671 s and no testbench can afford
  * to watch one, so the suite elaborates the module small and the netlist
  * census in run_synth.py is what holds the default at all 25 bits.
@@ -116,11 +132,17 @@
  * end of that decision rather than a surprise waiting at the bench. The
  * three counters are read only by the OR below, so nothing observes
  * their value; measured on this toolchain, yosys keeps the disjunction
- * and deletes all forty-eight bits, and no cnt_* net survives in the
- * netlist. oca_slip_rx contributes 160 live flip-flops here against 302
- * as a top of its own, and run_synth.py's floor records both figures and
- * why they differ. Reading the counts back needs somewhere to put them,
- * which is a change to the wire format and not to this file.
+ * and deletes all forty-eight bits, and the netlist holds no cnt_* net
+ * at all against thirty-three in a build of oca_slip_rx on its own.
+ * Reading the counts back needs somewhere to put them, which is a
+ * change to the wire format and not to this file.
+ *
+ * That deletion does NOT show up in the flip-flop floors, and this
+ * paragraph said it did until 2026-08-12: the per-file census reads 160
+ * for oca_slip_rx.sv in both builds, the counters having never been in
+ * that bucket. run_synth.py's table says so at length, because the
+ * mistake there was to read a per-file census against a whole-netlist
+ * total.
  *
  * RESET. No reset pin and no PLL to lock, so rst_n is oca_uart_console's
  * power-on counter: ECP5 flip-flops come out of configuration cleared,

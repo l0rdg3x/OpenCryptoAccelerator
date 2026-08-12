@@ -9,12 +9,30 @@ fake cannot catch a protocol bug: reusing SlipReader means the two
 refusals oca_slip_rx.sv counts as cnt_esc (a bad or dangling escape) are
 silent here exactly as the RTL is silent about them -- no response at
 all, so the caller sees a timeout -- a frame under MIN_BYTES is dropped
-the same way (cnt_short, oca_proto's P_DROP), and a frame over BYTES is
-truncated to BYTES and answered about the prefix (cnt_long). Above that
-layer this is a minimal oca_proto plus oca_keystore: every status code
-the design defines, and chacha20-poly1305 by way of aead_model.py -- the
-same oracle the RTL is judged against, so this checks the wire protocol
-and the host tool's use of it, not a second cryptographic implementation.
+the same way (cnt_short, oca_proto's P_DROP), and a frame over BYTES gets
+no response at all either: oca_slip_rx.sv's cnt_long never reaches
+S_PRIME (:312-313), so oca_proto never sees it. A frame of exactly BYTES
+bytes IS delivered, and for seal/open is always answered ST_BAD_LENGTH
+regardless of what its own aad_len/msg_len claim: oca_pktbuf.sv's
+rd_full triggers on a full bank (:151), which oca_proto.sv:372 folds
+into len_bad ahead of comparing the declared lengths to what was
+received. Above that layer this is a minimal oca_proto plus
+oca_keystore: every status code the design defines, and
+chacha20-poly1305 by way of aead_model.py -- the same oracle the RTL is
+judged against, so this checks the wire protocol and the host tool's
+use of it, not a second cryptographic implementation. Slot is checked
+before length on every command that carries both (oca_proto.sv:818-824,
+:831-836), the same order oca_proto uses.
+
+ST_ENGINE_ERR (07) is the one status this cannot reach through any
+request the host protocol can express: chacha20_poly1305.sv's `err`
+only fires when a fed block's in_len exceeds 64 bytes, and oca_proto's
+own block splitter caps every block it ever presents at 64 by
+construction (oca_proto.sv:390, :406) -- reaching it would need a bug in
+oca_proto itself, which this fake does not model. force_engine_err below
+exists so the host tool's handling of the status can still be tested,
+the same way break_req_id and break_response_slip test detection of
+link-level misbehaviour no legitimate traffic can trigger either.
 
 What this deliberately does not model: oca_proto's own stats counters
 (this keeps a simplified count of its own, documented where it is
@@ -63,6 +81,10 @@ class FakeBoard:
         # real link does.
         self.break_req_id = False
         self.break_response_slip = False
+        # Forces ST_ENGINE_ERR on the next seal/open, in place of running
+        # the crypto -- see the module docstring for why no request built
+        # from this protocol can reach that status any other way.
+        self.force_engine_err = False
 
     # -- Transport interface --------------------------------------------
 
@@ -91,7 +113,7 @@ class FakeBoard:
         if len(frame) < self.MIN_BYTES:
             return  # cnt_short: P_DROP, no response at all
         if len(frame) > self.BYTES:
-            frame = frame[:self.BYTES]  # cnt_long: answer about the prefix
+            return  # cnt_long: oca_slip_rx.sv never reaches S_PRIME, no response
         self._stats["received"] += 1
         response = self._handle(frame)
         if response is None:
@@ -148,30 +170,35 @@ class FakeBoard:
         return self._slots.get(slot)
 
     def _op_load_key(self, req_id: int, slot: int, body: bytes) -> bytes:
-        if len(body) != 32:
-            return self._header_out(proto_model.OP_LOAD_KEY, req_id, slot,
-                                      proto_model.ST_BAD_LENGTH)
         if slot >= self.NUM_SLOTS:
             return self._header_out(proto_model.OP_LOAD_KEY, req_id, slot,
                                       proto_model.ST_BAD_SLOT)
+        if len(body) != 32:
+            return self._header_out(proto_model.OP_LOAD_KEY, req_id, slot,
+                                      proto_model.ST_BAD_LENGTH)
         self._slots[slot] = bytes(body)
         self._stats["completed"] += 1
         return self._header_out(proto_model.OP_LOAD_KEY, req_id, slot,
                                   proto_model.ST_OK)
 
     def _op_seal(self, req_id: int, slot: int, body: bytes) -> bytes:
+        key = self._slot_key(slot)
+        if key is None:
+            return self._header_out(proto_model.OP_SEAL, req_id, slot,
+                                      proto_model.ST_BAD_SLOT)
         if len(body) < 16:
             return self._header_out(proto_model.OP_SEAL, req_id, slot,
                                       proto_model.ST_BAD_LENGTH)
         nonce = body[0:12]
         aad_len, msg_len = struct.unpack("<HH", body[12:16])
-        if len(body) != 16 + aad_len + msg_len:
+        frame_len = proto_model.HDR_LEN + len(body)
+        if (frame_len >= self.BYTES  # oca_pktbuf.sv rd_full: a full bank
+                or len(body) != 16 + aad_len + msg_len):
             return self._header_out(proto_model.OP_SEAL, req_id, slot,
                                       proto_model.ST_BAD_LENGTH)
-        key = self._slot_key(slot)
-        if key is None:
+        if self.force_engine_err:
             return self._header_out(proto_model.OP_SEAL, req_id, slot,
-                                      proto_model.ST_BAD_SLOT)
+                                      proto_model.ST_ENGINE_ERR)
         aad = body[16:16 + aad_len]
         msg = body[16 + aad_len:16 + aad_len + msg_len]
         ct, tag = aead_encrypt(key, nonce, aad, msg)
@@ -180,18 +207,23 @@ class FakeBoard:
                                    proto_model.ST_OK) + tag + ct)
 
     def _op_open(self, req_id: int, slot: int, body: bytes) -> bytes:
+        key = self._slot_key(slot)
+        if key is None:
+            return self._header_out(proto_model.OP_OPEN, req_id, slot,
+                                      proto_model.ST_BAD_SLOT)
         if len(body) < 32:
             return self._header_out(proto_model.OP_OPEN, req_id, slot,
                                       proto_model.ST_BAD_LENGTH)
         nonce = body[0:12]
         aad_len, ct_len = struct.unpack("<HH", body[12:16])
-        if len(body) != 32 + aad_len + ct_len:
+        frame_len = proto_model.HDR_LEN + len(body)
+        if (frame_len >= self.BYTES  # oca_pktbuf.sv rd_full: a full bank
+                or len(body) != 32 + aad_len + ct_len):
             return self._header_out(proto_model.OP_OPEN, req_id, slot,
                                       proto_model.ST_BAD_LENGTH)
-        key = self._slot_key(slot)
-        if key is None:
+        if self.force_engine_err:
             return self._header_out(proto_model.OP_OPEN, req_id, slot,
-                                      proto_model.ST_BAD_SLOT)
+                                      proto_model.ST_ENGINE_ERR)
         tag = body[16:32]
         aad = body[32:32 + aad_len]
         ct = body[32 + aad_len:32 + aad_len + ct_len]

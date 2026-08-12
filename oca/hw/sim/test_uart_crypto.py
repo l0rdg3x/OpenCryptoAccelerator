@@ -12,28 +12,43 @@ test and the thing that ships.
 Every expected value comes from `aead_model` through `proto_model` and
 `slip_model`. No ciphertext, tag or status byte is written by hand.
 
-WHAT THE PREVIOUS WHOLE-PATH TESTBENCH GOT WRONG, and where each of the
-four is answered. They are recorded in the closed header of
-docs/design/2026-08-05-ethernet-integration.md, each proved there by a
-mutation, and they are shapes rather than accidents:
+WHAT THE PREVIOUS WHOLE-PATH TESTBENCH GOT WRONG, and where each is
+answered. They are recorded in the closed header of
+docs/design/2026-08-05-ethernet-integration.md; defects 2, 3 and 4 were
+each proved there by a mutation that was run, and they are shapes rather
+than accidents:
 
-1. THE LEAK ASSERTION COULD NOT FAIL: `msg not in frame` over a 60-byte
-   frame against a 48-byte plaintext, with a fixed byte at an offset no
-   match could avoid. Answered by
-   test_a_forged_tag_puts_no_plaintext_on_the_wire, in two ways at once.
-   The needle is every FOUR-byte window of the plaintext, and the frame
-   a refused open produces is EIGHT bytes, so a match is geometrically
-   possible -- the assertion can fail. And a positive control runs
-   first, over the same needles and the same kind of haystack: the
-   successful open must contain all of them. An assertion that cannot
-   fire is caught by the control beside it failing.
+1. WITHDRAWN THERE, AND THE ENTRY IS WORTH MORE THAN THE DEFECT WAS. It
+   claimed the leak assertion "could not fail" -- `msg not in frame`,
+   48 bytes of plaintext with no placement in a 60-byte frame. That
+   frame has no fixed length: the checksum generator recomputes it from
+   the payload, and under the mutation the docstring itself names the
+   open returns the plaintext, the frame grows past 60 and the assertion
+   fails first. Sixty is what the reply measures GIVEN an empty body,
+   which is what the assertion beside it establishes -- the argument was
+   circular, and it is the one entry of the four backed by arithmetic
+   rather than by a mutation.
+
+   What it teaches survives its own retraction, and it is why this file
+   is built the way it is: a claim about a test, made without running
+   it, is how a suite comes to be trusted for something it does not do.
+   test_a_forged_tag_puts_no_plaintext_on_the_wire is falsifiable by
+   construction instead of by argument. The needle is every FOUR-byte
+   window of the plaintext against the EIGHT bytes a refused open
+   produces, so a match is geometrically possible; a positive control
+   runs first over the same needles, so an assertion that cannot fire
+   shows up as the control failing; and forcing tag_match true fails
+   this test and no other, in both builds, which is the only statement
+   here that rests on a run rather than on reasoning.
 
 2. THE TWO-PEER TEST DID NOT TEST CONCURRENCY: `1 <= watermark <= 2`
    with both bounds forced by construction. There is one peer on a
-   serial line and no concurrency is claimed here. The shape -- an
-   assertion whose bounds cannot be violated -- is avoided by asserting
-   exact values everywhere: exact frames, exact counter deltas, exact
-   edge counts.
+   serial line and no concurrency is claimed here. The shape avoided is
+   the bound that cannot be violated: every frame, counter delta and
+   edge count here is asserted against an exact value, with no
+   inequality anywhere. cnt_done across a stats was `> ` until
+   2026-08-12, which is a weaker claim than the design supports -- the
+   delta is exactly one, for the same reason cnt_rx's is.
 
 3. THE LINT GATE NEVER READ THE FILE IT NAMED, because the harness was
    generated from a hand-written pin list. There is no harness and no
@@ -407,7 +422,9 @@ async def test_stats_answers_over_the_wire(dut):
     assert s2["rx"] - s1["rx"] == 1, (
         f"two stats one after the other moved cnt_rx by "
         f"{s2['rx'] - s1['rx']}, expected 1")
-    assert s2["done"] > s1["done"], "cnt_done did not move over a stats"
+    assert s2["done"] - s1["done"] == 1, (
+        f"two stats one after the other moved cnt_done by "
+        f"{s2['done'] - s1['done']}, expected 1")
 
 
 @cocotb.test()

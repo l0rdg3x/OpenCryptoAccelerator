@@ -88,7 +88,11 @@ def test_slot_out_of_range_status():
 
 def test_bad_length_status():
     board = FakeBoard()
-    frame = bytearray(proto_model.build_seal(1, 0, b"n" * 12, b"aad", b"msg"))
+    key = bytes(range(32))
+    _send(board, proto_model.build_load_key(1, 0, key))
+    proto_model.parse_response(_recv(board))  # slot 0 loaded: isolate length
+
+    frame = bytearray(proto_model.build_seal(2, 0, b"n" * 12, b"aad", b"msg"))
     frame += b"\x00"  # one byte more than the declared lengths account for
     _send(board, bytes(frame))
     resp = proto_model.parse_response(_recv(board))
@@ -148,12 +152,86 @@ def test_short_frame_is_silently_dropped():
     assert board.read(0) == b""
 
 
-def test_oversized_frame_is_truncated_and_still_answered():
+def test_oversized_frame_gets_no_response():
+    """cnt_long on real hardware: oca_slip_rx.sv:312-313 never reaches
+    S_PRIME for a frame over BYTES, so oca_proto never sees it and
+    nothing answers -- not truncated-and-answered."""
     board = FakeBoard()
     over = proto_model.build_stats(1) + b"\x00" * (board.BYTES + 100)
     _send(board, over)
+    assert board.read(0) == b""
+
+
+def test_full_buffer_seal_frame_is_bad_length():
+    """A frame that fills the buffer exactly (BYTES bytes) is always
+    ST_BAD_LENGTH, whatever its own aad_len/msg_len say: oca_pktbuf.sv:151's
+    rd_full triggers on a full bank, and oca_proto.sv:372 folds that into
+    len_bad ahead of comparing the declared lengths to what was received."""
+    board = FakeBoard()
+    key = bytes(range(32))
+    _send(board, proto_model.build_load_key(1, 0, key))
+    proto_model.parse_response(_recv(board))
+
+    fixed = proto_model.HDR_LEN + 16  # header + nonce/aad_len/msg_len
+    msg = b"m" * (board.BYTES - fixed)  # message alone fills the rest
+    frame = proto_model.build_seal(2, 0, b"n" * 12, b"", msg)
+    assert len(frame) == board.BYTES
+    _send(board, frame)
     resp = proto_model.parse_response(_recv(board))
-    assert resp["status"] == proto_model.ST_OK  # answered about the prefix
+    assert resp["status"] == proto_model.ST_BAD_LENGTH
+
+
+def test_load_key_checks_slot_before_length():
+    """oca_proto.sv:818-824 checks slot before length for load-key; a
+    request that is wrong both ways must read as ST_BAD_SLOT, not
+    ST_BAD_LENGTH."""
+    board = FakeBoard()
+    frame = bytearray(proto_model.build_load_key(1, 200, b"k" * 32))
+    frame += b"\x00"  # also the wrong length
+    _send(board, bytes(frame))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_SLOT
+
+
+def test_seal_checks_slot_before_length():
+    """oca_proto.sv:831-836 checks slot (ks_rd_valid) before len_bad for
+    seal; a request to an unloaded slot with an inconsistent length must
+    read as ST_BAD_SLOT, not ST_BAD_LENGTH."""
+    board = FakeBoard()
+    frame = bytearray(proto_model.build_seal(1, 3, b"n" * 12, b"aad", b"msg"))
+    frame += b"\x00"  # also the wrong length
+    _send(board, bytes(frame))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_SLOT
+
+
+def test_open_checks_slot_before_length():
+    """Same as above, open side."""
+    board = FakeBoard()
+    frame = bytearray(
+        proto_model.build_open(1, 3, b"n" * 12, b"aad", b"ct", b"t" * 16))
+    frame += b"\x00"  # also the wrong length
+    _send(board, bytes(frame))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_SLOT
+
+
+def test_force_engine_err_hook_produces_status_07():
+    """ST_ENGINE_ERR (07) cannot arise from any request the host protocol
+    can express -- chacha20_poly1305.sv's `err` only fires on a block
+    with in_len > 64, and oca_proto's own splitter never presents one
+    (oca_proto.sv:390, :406). force_engine_err exists purely so the host
+    tool's handling of the status can be tested, the same way
+    break_req_id and break_response_slip test detection of link-level
+    misbehaviour no legitimate traffic can trigger either."""
+    board = FakeBoard()
+    board.force_engine_err = True
+    key = bytes(range(32))
+    _send(board, proto_model.build_load_key(1, 0, key))
+    proto_model.parse_response(_recv(board))
+    _send(board, proto_model.build_seal(2, 0, b"n" * 12, b"", b"m"))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_ENGINE_ERR
 
 
 def test_break_req_id_hook_produces_mismatch():

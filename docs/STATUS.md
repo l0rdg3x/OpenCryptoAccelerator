@@ -17,14 +17,19 @@ what is being worked on, what is next.
 
 **Phase 2 — RTL.** ChaCha20, Poly1305 and the AEAD engine, verified
 against RFC 8439. The host protocol — key store, packet buffers,
-protocol FSM — behind a 64-bit AXI-Stream pair. 177 RTL tests across 25
-runners; 207 passing executions measured on 2026-08-12, no failures.
+protocol FSM — behind a 64-bit AXI-Stream pair. **177 RTL tests over 23
+runners, plus 6 on a synthesised netlist from two more.** Run on
+2026-08-12: 207 passing executions, no failures, 2 skips. Two of the 23
+did not run: `run_eth_mac` and `run_oca_path`, 15 tests between them,
+need the patched vendor tree and refuse to build without it — so they
+are counted in the 177 and were not measured today.
 
 **The open ECP5 toolchain**, built locally in `tools/`: yosys with the
 slang frontend, nextpnr-ecp5, prjtrellis, Verilator, openFPGALoader.
 
-**Bring-up on silicon**, four rungs, on the Colorlight i9 v7.2 that
-arrived 2026-08-11:
+**Bring-up on silicon**, six readings taken on the Colorlight i9 v7.2
+that arrived 2026-08-11. The ladder in `.claude/skills/bringup` numbers
+three steps; steps 4 and 5 were Ethernet and are retired.
 
 | rung | result |
 |---|---|
@@ -49,7 +54,10 @@ at 25 MHz, no PLL:
 | Fmax | 50.55 MHz against the 25.00 required — 2.02x |
 | bitstream | 423213 bytes, packed |
 
-Seed 1, `colorlight_i9_crypto.lpf`. Measured twice independently.
+Seed 1, `colorlight_i9_crypto.lpf`. The figures above are what
+`run_synth.py oca_uart_crypto` reproduces; `build/` holds one pass,
+since a rebuild overwrites the last, so re-run it rather than trusting
+this table.
 
 ## Not established
 
@@ -78,6 +86,13 @@ describes.
 1. **Load `oca_uart_crypto` onto the board and run the vectors through
    it** with `oca/hw/host/cli.py selftest`. This is the step the whole
    project exists to reach: the crypto answering on silicon.
+
+   **Watch D2 for a few seconds before the host opens the port.** The
+   fast heartbeat latches on any malformed UART frame, and the edge a
+   host puts on the line when it opens `/dev/ttyACM0` is enough to
+   produce one. Fast before any traffic is line noise; fast only after
+   traffic is the reading the rate is for. `oca_uart_crypto.sv`'s header
+   has the full table.
 2. Time the PLL with a stopwatch, and measure bank 2 while the meter is
    out.
 3. Decide what happens to the retired Ethernet RTL — `oca_rgmii`,
