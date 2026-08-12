@@ -861,7 +861,10 @@ def synth(top, json_out, log, timeout):
     return run([YOSYS, "-p", "; ".join(cmds)], log, timeout)
 
 
-def pnr(top, json_in, args, report, log):
+def pnr_command(top, json_in, args, report):
+    """The nextpnr argv for one build. Pure, so the two paths can be
+    tested without running nextpnr at all.
+    """
     d = DESIGNS[top]
     cmd = [
         NEXTPNR,
@@ -882,11 +885,6 @@ def pnr(top, json_in, args, report, log):
         "--timing-allow-fail",
         "--report", str(report),
         "--write", str(BUILD / f"{top}_pnr.json"),
-        # The text configuration ecppack turns into a bitstream. Written
-        # for every build; only a pinned one is packed, since an
-        # out-of-context placement has no IO and would produce a
-        # bitstream that drives nothing.
-        "--textcfg", str(BUILD / f"{top}.config"),
     ]
     if d.lpf:
         # A design with real pins. Every IO must be constrained: nextpnr
@@ -899,12 +897,23 @@ def pnr(top, json_in, args, report, log):
         # is the only place they mean anything: out-of-context placement
         # has no pads to be pulled towards and no congestion to resolve.
         cmd += d.pnr_args + args.pnr_arg
+        # The text configuration ecppack turns into a bitstream. Only for
+        # a pinned build: nextpnr refuses --textcfg together with
+        # --out-of-context ("bitstream generation is not available in
+        # out-of-context mode"), and it fails late, after placement and
+        # routing have already run and printed their Fmax, so the report
+        # and the routed netlist never get written either.
+        cmd += ["--textcfg", str(BUILD / f"{top}.config")]
     else:
         # No pins: the wide internal buses have far more signals than the
         # package has balls, so the core is placed as a locked macro. The
         # numbers characterise the core and not a pinned-out design.
         cmd += ["--out-of-context"]
-    return run(cmd, log, args.timeout)
+    return cmd
+
+
+def pnr(top, json_in, args, report, log):
+    return run(pnr_command(top, json_in, args, report), log, args.timeout)
 
 
 # Matches nextpnr's own log wording for a constraint that came from this
