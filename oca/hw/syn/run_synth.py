@@ -132,6 +132,24 @@ DESIGNS = {
             "oca_console.sv", "oca_uart_console.sv"],
         lpf="colorlight_i9_console.lpf",
     ),
+    # The AEAD core on the serial line: the first design here that puts
+    # crypto in a bitstream. The console's five modules with oca_console
+    # replaced by the two SLIP halves and the whole of oca_core, on the
+    # console's own four pins.
+    "oca_uart_crypto": Design(
+        sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_slip_rx.sv", "oca_slip_tx.sv",
+            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+            "oca_core.sv", "oca_uart_crypto.sv"],
+        lpf="colorlight_i9_crypto.lpf",
+        # oca_core alone is 4-10 minutes and its router time is the part
+        # that varies; this carries the same engine with pads and a
+        # 25 MHz constraint around it. 3600 leaves the bound doing its
+        # job on a stage that has stopped progressing without killing one
+        # that is merely large.
+        timeout=3600,
+    ),
     # The receive half of the console. J17 is settled; H18 is litex's
     # pairing and nothing more until a byte travels it, which is what an
     # echo makes the operator prove by supplying the expected value.
@@ -390,6 +408,56 @@ NETLIST_FF_FLOOR = {
     # meter cannot resolve into two clean readings, and the whole method
     # is reading two clean levels off one pad.
     "oca_vccio": {"oca_vccio.sv": 27},
+    # The crypto console. oca_core's two floors unchanged -- it contains
+    # one core and the same mapping defect would delete the same key
+    # store -- plus every module the serial bridge adds, because this is
+    # the first design here that packs a bitstream with crypto in it and
+    # a floor that covers the engine and not the path to it guards a
+    # board that answers nobody.
+    #
+    # 33 for the receiver, the same as the console's and one more than
+    # oca_uart_echo's: the extra flop is frame_error, which the echo
+    # leaves unconnected and which this design latches into `trouble`.
+    # 22 for the transmitter. 22 for BOTH oca_fifo instances together --
+    # two 5-bit pointer pairs and two overflow flags -- and, as in the
+    # console, the bytes are not in flip-flops at all but in the four
+    # TRELLIS_RAMW of the resource table, so this floor guards the
+    # pointer arithmetic and says nothing about the storage.
+    #
+    # 31 for the top: the 25-bit heartbeat, the 4-bit power-on counter,
+    # the sticky `trouble` latch and led_n. Derived and measured, and
+    # they agree. This is the entry that holds LED_BITS at its default:
+    # the two heartbeat tests in hw/sim/test_uart_crypto.py can only run
+    # against a small counter, so what says the board's own counter is 25
+    # bits wide is this number and nothing else. One bit short is not a
+    # failure at the bench, it is a heartbeat at twice the rate -- which
+    # is the reading this design reserves for a link that has lost
+    # something.
+    #
+    # 160 for the decoder, and it is NOT the 302 the same RTL gives as a
+    # top of its own. Measured both ways on this toolchain. 48 of the
+    # difference is exact and expected: cnt_short, cnt_long and cnt_esc
+    # are three 16-bit saturating counters whose value nothing in this
+    # design reads -- only the OR that drives `trouble` -- so yosys keeps
+    # the disjunction and deletes the counters, and no `cnt_*` net
+    # survives in the netlist. That is the price of the blind spot
+    # oca_uart_crypto.sv records: the refusal counts do not exist in the
+    # bitstream, only the fact that something was refused. The remaining
+    # ~94 are fabric registers around the frame buffer's two DP16KD --
+    # the read-during-write emulation -- which the out-of-context build
+    # carries and this one does not. Both netlists hold the same 2
+    # DP16KD; oca_slip_rx never reads a word in the same cycle it writes
+    # one that is later drained, so the two mappings are equivalent for
+    # this RTL. Argued, not proved by a gate simulation: DP16KD is a
+    # blackbox with no behaviour in cells_sim.v, so no netlist of this
+    # module can be simulated at all (AGENTS.md).
+    #
+    # 75 for the encoder, exactly what it measures as a top of its own:
+    # nothing in it is unobserved, so nothing in it collapses.
+    "oca_uart_crypto": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
+                        "oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
+                        "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
+                        "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 31},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
     # The board build. Same two floors as oca_core, since it contains
@@ -470,6 +538,14 @@ NETLIST_FF_FLOOR = {
 # separately for the same reason as above, and because the vendor's
 # share is the part most likely to move if a parameter changes.
 NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700,
+                    # 12518 measured, floored ~1% under for the same
+                    # reason as oca_core: chacha20.sv, poly1305.sv and
+                    # chacha20_poly1305.sv carry 5683 of those registers
+                    # between them and yosys's attribution moves between
+                    # the three, so a per-file floor tight enough to
+                    # catch an accumulator vanishing would fail a healthy
+                    # build.
+                    "oca_uart_crypto": 12400,
                     # Exact rather than a few percent under, because
                     # these two are new and small enough that every
                     # register in them is accounted for: the decoder's

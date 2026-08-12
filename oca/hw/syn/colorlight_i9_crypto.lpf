@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: CERN-OHL-P-2.0
+#
+# Colorlight i9 v7.2 — the AEAD core on the serial line, four pins across
+# two banks.
+#
+# The same four as colorlight_i9_console.lpf, and for the same reasons:
+# this design differs from the console in what sits between the receiver
+# and the transmitter, not in what it is wired to.
+#
+# clk25 and led_n are colorlight_i9.lpf's, unchanged, in bank 6, which
+# measured 3.28 V on 2026-08-11.
+#
+# uart_tx on J17 and uart_rx on H18 are both settled on this board.
+# oca_uart_probe put a self-naming payload on both of litex's transmit
+# pins and the host read PIN=J17, so the carrier wires the DAPLink to
+# litex's `serial`, the pair inherited from the v7.0 map; oca_uart_echo
+# then returned eight bytes byte-exact through H18, and oca_uart_console
+# answered commands on the pair together.
+#
+# BOTH ARE IN BANK 2, WHOSE VCCIO IS UNMEASURED. LVCMOS33 is litex's
+# declaration carried over. For the OUTPUT that is the harmless case: the
+# pad cannot swing above its own rail whatever the declaration says. For
+# the INPUT it is the case colorlight_i9.lpf documents at length, a
+# receiver threshold near half of 3.3 V against a swing that may only
+# reach 2.5 V -- except that the argument there is about margin at
+# 125 MHz on a DDR edge, and this is 115200 baud with a 8.7 us bit. The
+# console has since run on these two pins at this baud, so the case is
+# now bounded by a measurement and not only by an argument; the bank
+# voltage itself is still unmeasured and is still worth the oca_vccio
+# method applied to a free pin there before anything fast lands in it.
+#
+# Four constraints against four ports, which is the check: a stale LOCATE
+# is skipped in silence (ecp5/lpf.cc:144), but the port it stopped
+# covering fails the build with "IO <name> is unconstrained in LPF"
+# (ecp5/main.cc:287).
+#
+# 25 MHZ is the whole timing requirement of this design. Every module in
+# it runs on clk25 and there is no PLL: the AEAD engine reaches ~50 MHz
+# out of context (AGENTS.md), so the margin here is the reason this is
+# the first crypto design in this project that can be expected to close.
+#
+# The FREQUENCY line is also the spelling check on clk25: a net that does
+# not exist warns rather than passing quietly (common/kernel/basectx.cc:108).
+
+FREQUENCY PORT "clk25" 25 MHZ;
+
+LOCATE COMP "clk25" SITE "P3";
+IOBUF  PORT "clk25" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led_n" SITE "L2";
+IOBUF  PORT "led_n" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uart_tx" SITE "J17";
+IOBUF  PORT "uart_tx" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "uart_rx" SITE "H18";
+IOBUF  PORT "uart_rx" IO_TYPE=LVCMOS33;
