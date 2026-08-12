@@ -105,6 +105,12 @@ DESIGNS = {
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
     "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
+    # The two halves of the serial bridge, measured apart because they
+    # are what the top level adds to a core whose cost is already known,
+    # and because the decoder's store-and-forward buffer is the one
+    # figure the design decision turns on.
+    "oca_slip_rx": Design(sv=["oca_slip_rx.sv"]),
+    "oca_slip_tx": Design(sv=["oca_slip_tx.sv"]),
     # Bring-up step 2, and the first design here whose purpose is to be
     # loaded rather than measured. It said "only" until 2026-08-11, and
     # oca_vccio, oca_pll and oca_uart_probe were added to the same
@@ -463,7 +469,14 @@ NETLIST_FF_FLOOR = {
 # The total is floored rather than those two
 # separately for the same reason as above, and because the vendor's
 # share is the part most likely to move if a parameter changes.
-NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700}
+NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800, "oca_top": 16700,
+                    # Exact rather than a few percent under, because
+                    # these two are new and small enough that every
+                    # register in them is accounted for: the decoder's
+                    # 302 and the encoder's 75 as measured on 2026-08-12.
+                    # A legitimate reduction should fail this and be
+                    # re-measured, which on a module this size is cheap.
+                    "oca_slip_rx": 302, "oca_slip_tx": 75}
 
 # The cells no flip-flop census can see, and nothing else checks either.
 #
