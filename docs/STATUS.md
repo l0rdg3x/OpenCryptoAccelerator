@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Project status
 
-**Updated 2026-08-12.** Where the project is, in one page. Update this at
+**Updated 2026-08-13.** Where the project is, in one page. Update this at
 every merge and at every design gate; a tracker that drifts is worse than
 none.
 
@@ -20,25 +20,29 @@ against RFC 8439. The host protocol — key store, packet buffers,
 protocol FSM — behind a 64-bit AXI-Stream pair. **177 passing
 executions over 21 cocotb runners, six of them on a synthesised
 netlist**, measured 2026-08-12 after the Ethernet removal below: no
-failures, 2 skips, and every runner exits 0. Every suite in the tree
-runs; none needs a vendored tree to build any more. `verilator
+failures, 2 skips, and every runner exits 0. That figure is the
+simulator's alone. Outside it, and outside every count this page gave
+before 2026-08-13: **46 tests in `hw/host/`, 4 in
+`hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py`** and the
+126 known-answer checks of Phase 1 above. They are not one unit and are
+not summed here. Nothing in any of them has run on hardware. No suite
+needs a vendored tree to build any more. `verilator
 --lint-only -Wall` is clean. The two skips are `oca_uart_crypto`'s
 heartbeat pair, which needs `LED_BITS` small enough to simulate and so
 runs only on that suite's second build.
 
 This read 222 executions over 25 runners until the removal, and the
-difference is exactly the four Ethernet suites, all four of which pass
-on `main`: `run_rgmii` 10, `run_udp_seam` 20 (running twice at two
-`HDR_Q_DEPTH` values), `run_eth_mac` 8 and `run_oca_path` 7. So
-222 − 45 = 177.
+difference is exactly the four Ethernet suites, all four of which
+passed while they existed: `run_rgmii` 10, `run_udp_seam` 20 (running
+twice at two `HDR_Q_DEPTH` values), `run_eth_mac` 8 and `run_oca_path`
+7. So 222 − 45 = 177. None of the four is on `main` any more.
 
 **In a fresh clone the before-figure is 207 over 23 runners instead, and
-that is not a contradiction.** `run_eth_mac` and `run_oca_path` build
-from the patched vendor tree at `oca/hw/vendor/build/`, which is
-gitignored: it exists where `vendor_patches.py build` has run and
-nowhere else, so in a fresh checkout or a new worktree those two refuse
-to build and exit non-zero. Both figures are real; they differ by that
-precondition.
+that is not a contradiction.** The 222-execution figure includes `run_eth_mac`
+and `run_oca_path`, which built from the patched vendor tree at `oca/hw/vendor/build/`,
+gitignored and now deleted. To reproduce that figure, check out fd3059c (just before
+the Ethernet removal), where `vendor_patches.py build` and the tree still exist.
+The current tree measures 177; both figures are real and differ by that precondition.
 
 **The open ECP5 toolchain**, built locally in `tools/`: yosys with the
 slang frontend, nextpnr-ecp5, prjtrellis, Verilator, openFPGALoader.
