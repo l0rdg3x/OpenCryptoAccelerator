@@ -54,15 +54,21 @@ ECPPACK = ROOT / "tools" / "trellis" / "bin" / "ecppack"
 # lpf      pin constraints, relative to hw/syn/. A design with one is
 #          built with real IO; a design without one is built
 #          out-of-context.
+#
+# verilog, incdirs and pnr_args default to () rather than []: a
+# NamedTuple stores the literal default object, so every DESIGNS entry
+# that takes the default would otherwise alias the SAME list, and
+# `d.pnr_args.append(...)` on one design would leak onto all fourteen.
+# A tuple default turns that mutation into an AttributeError instead.
 class Design(NamedTuple):
     sv: list
-    verilog: list = []
-    incdirs: list = []
+    verilog: tuple = ()
+    incdirs: tuple = ()
     lpf: str = ""
     # Extra nextpnr arguments, for pinned designs only. Recorded per
     # design rather than passed on the command line so that a figure in
     # a document can be reproduced by naming the target and nothing else.
-    pnr_args: list = []
+    pnr_args: tuple = ()
     # The placer seed a design's published figures were measured on.
     # None means the flow's default. Recorded here because "it closes"
     # and "it closes on seed 6" are different claims and only one of
@@ -714,8 +720,10 @@ def check_netlist(top, netlist):
     return rc
 
 
-def synth(top, json_out, log, timeout):
-    """Elaborate one design, through one or both yosys frontends.
+def synth_command(top, json_out):
+    """The yosys argv for one design's elaboration. Pure, so the two-
+    frontend order below can be tested without running yosys at all —
+    the same reason pnr_command is split from pnr further down.
 
     read_slang, not read_verilog -sv: the yosys Verilog-2005 frontend
     rejects the SystemVerilog used by the cores (functions with return,
@@ -739,7 +747,11 @@ def synth(top, json_out, log, timeout):
     cmds.append(f"read_slang --top {top} " + " ".join(str(RTL / s) for s in d.sv))
     cmds.append(f"synth_ecp5 -top {top} -json {json_out}")
     cmds.append("stat")
-    return run([YOSYS, "-p", "; ".join(cmds)], log, timeout)
+    return [YOSYS, "-p", "; ".join(cmds)]
+
+
+def synth(top, json_out, log, timeout):
+    return run(synth_command(top, json_out), log, timeout)
 
 
 def pnr_command(top, json_in, args, report):
@@ -777,7 +789,10 @@ def pnr_command(top, json_in, args, report):
         # Placer and router settings this design asks for. A pinned build
         # is the only place they mean anything: out-of-context placement
         # has no pads to be pulled towards and no congestion to resolve.
-        cmd += d.pnr_args + args.pnr_arg
+        # list(): d.pnr_args is a tuple (see Design above), args.pnr_arg
+        # a list built by argparse's action="append", and + needs both
+        # sides to agree.
+        cmd += list(d.pnr_args) + args.pnr_arg
         # The text configuration ecppack turns into a bitstream. Only for
         # a pinned build: nextpnr refuses --textcfg together with
         # --out-of-context ("bitstream generation is not available in
