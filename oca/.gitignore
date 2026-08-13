@@ -8,6 +8,12 @@ build/
 /.venv
 hw/sim/sim_build*/
 hw/sim/results.xml
+# The verilog-ethernet submodule was deregistered on 2026-08-12, but the
+# checkout survives in every working tree that predates it, and it is a
+# nested git repository: `git add -A` stages it as a gitlink with no
+# .gitmodules to resolve, which a clone cannot fetch. Deleting the
+# directory is the operator's call, not git's.
+hw/vendor/verilog-ethernet/
 __pycache__/
 *.fst
 *.vcd

@@ -165,8 +165,14 @@ Python 3.14).
 cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
-All 21 runners are above; there is no aggregate runner, so a suite left
-off this list is a suite nobody runs. Four more — `run_rgmii`,
+Those 21 runners are all the cocotb suites, and `test_proto_model.py`
+above is plain Python (2 tests). Three more need no toolchain at all:
+`pytest hw/host` (46 tests), `pytest hw/syn/test_run_synth.py` (4) and
+the offline `hw/host/cli.py --fake selftest` (6 steps), measured
+2026-08-13; the C backend's 126 known-answer checks sit behind the
+`ctest` in the build section. They are different units and are not
+summed. There is no aggregate runner, so a suite left off these lists
+is a suite nobody runs. Four cocotb runners — `run_rgmii`,
 `run_eth_mac`, `run_udp_seam` and `run_oca_path` — belonged to the
 Ethernet route and were deleted with it on 2026-08-12, together with the
 `oca/hw/vendor/` tree they built against. No suite here needs
@@ -191,13 +197,15 @@ post-synthesis keystore 4/4 and oca_proto 2/2, which is **177 passing
 executions over 21 runners** with no failures and two skips, measured
 2026-08-12. This read 183 tests over 25 runners and 222 executions until
 the Ethernet suites were deleted that day: rgmii 10/10, udp_seam 10/10
-at both `HDR_Q_DEPTH` values, eth_mac 8/8 and oca_path 7/7 all pass on
-`main`, and they are the 45 executions that went. The last two build
-from the patched vendor tree at `hw/vendor/build/`, which is gitignored,
-so in a fresh checkout or a new worktree they exit non-zero instead and
-the same before-figure reads 207 executions over 23 producing runners.
-Both numbers are real; they differ by whether `vendor_patches.py build`
-had run.
+at both `HDR_Q_DEPTH` values, eth_mac 8/8 and oca_path 7/7 all passed
+while they existed, and they are the 45 executions that went. The last
+two built from the patched vendor tree at `hw/vendor/build/`, which is
+gitignored, so in a fresh checkout or a new worktree they exited
+non-zero instead and the same before-figure read 207 executions over 23
+producing runners. Both numbers are real; they differed by whether
+`vendor_patches.py build` had run. Neither reproduces here now — the
+runners and that script were deleted on 2026-08-12, so either figure
+needs `fd3059c` checked out first.
 The protocol model checks pass as plain Python;
 `verilator --lint-only -Wall` clean on all cores with `--top-module
 oca_core`. Eight reworks are done — five on the engine, described next,

@@ -793,9 +793,10 @@ first entry in this series that is not the engine: `oca_core` wraps
 `docs/design/2026-08-03-host-protocol.md` — two 2048-byte packet
 buffers (`oca_pktbuf`), eight key slots (`oca_keystore`) and the
 protocol FSM (`oca_proto`) — and exposes a pair of 8-bit AXI-Stream
-ports. It is the module the Ethernet integration went on to instantiate,
-and, since that route was deleted on 2026-08-12, the module the serial
-bridge instantiates instead. The
+ports. That is the width `oca_core` carried when this row was measured
+on 2026-08-03. The 64-bit rework of the following day has its own entry
+below, and it is that variant — not this one — that the serial bridge
+instantiates today. The
 engine's own numbers are repeated alongside so the protocol layer's
 cost is visible separately.
 

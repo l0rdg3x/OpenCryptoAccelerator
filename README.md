@@ -87,9 +87,15 @@ cd oca
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 ```
 
-That is all 21 of them, and they give **177 passing executions with no
-failures**, measured 2026-08-12. There is no aggregate runner, so a
-suite missing from this list is a suite nobody runs.
+That is all 21 cocotb runners, and they give **177 passing executions
+with no failures**, measured 2026-08-12. More runs outside the
+simulator and needs no toolchain: `pytest hw/host` (46 tests),
+`pytest hw/syn/test_run_synth.py` (4), `test_proto_model.py` above (2),
+and the 6-step `hw/host/cli.py --fake selftest` against an in-process
+fake — all measured 2026-08-13 — plus the 126 known-answer checks
+behind the `ctest` further up. Those are different units and are not
+summed anywhere. There is no aggregate runner, so a suite missing from
+these lists is a suite nobody runs.
 
 The two `*_gate.py` runners need the project-local yosys as well: they
 replay tests on ECP5 primitives, because every other suite elaborates

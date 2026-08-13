@@ -26,6 +26,9 @@ MVP development BOM: `BOM-MVP.md`.
 ```
 SPEC.md                     project specification
 BOM-MVP.md                  MVP development bill of materials
+docs/STATUS.md              where the project stands, one page
+docs/design/                design records, dated
+scripts/build-toolchain.sh  builds everything under tools/
 oca/                        the code
   include/oca/oca.h         public API
   src/                      API + OpenSSL backend
@@ -36,6 +39,7 @@ oca/                        the code
   hw/rtl/                   SystemVerilog cores (SPDX CERN-OHL-P-2.0)
   hw/sim/                   cocotb testbenches + runners (SPDX MIT)
   hw/syn/                   ECP5 synthesis flow + results (SPDX MIT)
+  hw/host/                  host-side test tooling, not the driver (SPDX MIT)
   .venv/                    python venv (cocotb) — NOT committed
 tools/                      local tool builds — NOT committed
   verilator/                Verilator 5.050 install (built from source, branch stable)
@@ -231,14 +235,29 @@ complete because **there is no aggregate RTL runner here at all** —
 so every suite is invoked by name and a suite missing from this list is
 a suite nobody runs.
 
-**148 tests over 21 runners, and 177 passing executions**, six of them
-on a synthesised netlist from the two gate runners. Twenty-nine tests
+**The 21 cocotb runners alone measure 148 tests over 177 passing executions**,
+six of them on a synthesised netlist from the two gate runners. Twenty-nine tests
 run a second time at a non-default parameter — five for `chacha20` at
 `ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
 three for `oca_pktbuf` at the smallest `BYTES` it accepts, all twelve of
 `oca_slip_rx` at `BYTES` = 64 and five of `oca_uart_crypto` at
 `LED_BITS` = 8 — which is what separates the two figures: 142 tests
 outside the gate runners, plus 29 re-runs, plus their 6.
+
+Beyond the cocotb runners, four more things here run and can fail, and
+none of them is inside the 148 or the 177: **46 tests in `hw/host/`, 4
+in `hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py`** —
+measured 2026-08-13, all sub-second, none needing Verilator, yosys or a
+board — and the C backend's **126 known-answer checks** behind the
+single ctest above. The 6-step `cli.py --fake selftest` carries an
+exit-code contract as well.
+
+**This file gives each population and no grand total**, because there
+is no unit they share: a simulator test case, a simulator execution, a
+Python test case, a KAT check and a selftest step are five different
+things, and a single headline number would have to pick one and
+mislead about the rest. That is how "148 tests" came to be read as the
+repository's total in three documents at once.
 
 Measured by running every one of them on 2026-08-12, after the Ethernet
 removal: **177 passing executions, no failures, and every runner exits
@@ -258,18 +277,19 @@ So 222 − 45 = 177 executions, and 183 − 35 = 148 tests over 21 runners.
 Nothing in the tree needs `vendor_patches.py build` any more; that
 script and the tree it patched are gone.
 
-**Two before-figures are both true and they differ by a precondition, so
-read the one that matches your tree.** `run_eth_mac` and `run_oca_path`
-build from the patched vendor tree at `oca/hw/vendor/build/`, which
-`oca/.gitignore` excludes: it is present only where
-`vendor_patches.py build` has already run, and absent from a fresh
-checkout or a new worktree. Where it is present all four Ethernet suites
-pass and `main` reads **222 executions over 25 runners**. Where it is
-absent those two refuse to build and exit non-zero, and the same `main`
-reads **207 executions over the 23 producing runners** — the figure this
-file carried until 2026-08-12, and the figure anyone re-running the
-suites in a fresh clone will get. Neither is wrong; only one of them is
-the whole tree.
+**Two before-figures are both true and they differed by a
+precondition.** `run_eth_mac` and `run_oca_path` built from the patched
+vendor tree at `oca/hw/vendor/build/`, which `oca/.gitignore` excludes:
+it was present only where `vendor_patches.py build` had already run, and
+absent from a fresh checkout or a new worktree. Where it was present all
+four Ethernet suites passed and `main` read **222 executions over 25
+runners**. Where it was absent those two refused to build and exited
+non-zero, and the same `main` read **207 executions over the 23
+producing runners** — the figure this file carried until 2026-08-12.
+Neither was wrong; only one of them was the whole tree. **Neither
+reproduces on `main` today**: the four runners, the vendor tree and
+`vendor_patches.py` were all deleted on 2026-08-12, so reaching either
+figure means checking out `fd3059c` first.
 
 This count read **123** until 2026-08-12, and that gap was never
 arithmetic: the sum was exactly right over the fourteen suites it named,
@@ -318,6 +338,15 @@ be noise:
 
 ```sh
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # prints "proto_model: OK"
+```
+
+The suites that need neither simulator nor RTL toolchain. They are
+sub-second, so there is no excuse for skipping them:
+
+```sh
+.venv/bin/python -m pytest -q hw/host                  # 46 pass, host link + fake board
+.venv/bin/python -m pytest -q hw/syn/test_run_synth.py # 4 pass, yosys and nextpnr argv shapes
+.venv/bin/python hw/host/cli.py --fake selftest        # 6/6 steps, in-process fake, no wire
 ```
 
 `run_dirty_pad.py` is separate from the official-vector suite on
@@ -857,10 +886,28 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   DP16KD through `read_verilog` and 6454 LUTs with no block RAM at all
   through `read_slang`; `eth_mac_1g_fifo` is 1185 against 12620. Slang
   does not infer those memories and spills them into logic, so a mixed
-  design read entirely through slang measures an order of magnitude too
-  large and gets abandoned for the wrong reason. Our own cores need
-  `read_slang` for the SystemVerilog they use (see the hard rule above),
-  so a design mixing the two reads each side with its own frontend.
+  design read entirely through slang measures **38x on the FIFO and
+  10.6x on the MAC** too large and gets abandoned for the wrong reason.
+  Our own cores need `read_slang` for the SystemVerilog they use (see
+  the hard rule above), so a design mixing the two reads each side with
+  its own frontend.
+
+  **Which counter produced those four figures is not recorded, so take
+  them as an order-of-magnitude warning and nothing finer.** They
+  entered at `d4ee09f` (2026-08-05) in a paragraph that quotes no
+  percentage of 43848 and no Fmax — the two tells this file uses
+  everywhere else to mark a figure as post-pack — and nothing here
+  reproduces the run: neither module was ever a `DESIGNS` entry in
+  `run_synth.py`, and `.gitmodules` does not exist before `5c886d7`
+  (2026-08-08), so `verilog-ethernet` was outside version control on
+  the day these were published. That commit's "out-of-context", which
+  is nextpnr's flag, belongs to its 8422 sentence and not to this one.
+  Nor is the ratio itself a constant to lean on: 38x on the FIFO
+  against 10.6x on the MAC, from one paragraph, is a spread wide enough
+  that the two pairs were probably not measured the same way. A fresh
+  measurement is possible — the upstream sources are reachable and the
+  pin is recorded from `5c886d7` onwards — but it would be a new pair
+  with a recorded counter, not a confirmation of these four.
 
   This corrects the figure this entry carried until 2026-08-05, which
   read "one gigabit port is saturated at MTU with 12% of margin". That
