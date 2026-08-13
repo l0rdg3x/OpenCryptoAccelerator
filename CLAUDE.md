@@ -1,8 +1,18 @@
 # CLAUDE.md — OpenCrypto Accelerator
 
-The canonical project document for agents is **`AGENTS.md`**: read it
-first and treat it as part of these instructions (layout, environment
-rules, build/test commands, hard rules, status).
+The canonical project document for agents is **`AGENTS.md`**: treat it
+as part of these instructions. It is over 1300 lines, so read it by
+section rather than whole:
+
+- **`## Hard rules` and `## Environment rules`, always, before any
+  work.** Nothing elsewhere overrides them.
+- `## How to build and test` — before running, adding or changing a
+  suite.
+- `## Repository layout` — when a path is not obvious from `ls`.
+- `## Project shape` — when the question is what OCA is for.
+- `## Current status` — the long-form record: every measurement, how it
+  was arrived at, and what it does NOT establish. Read it before
+  quoting any figure or claiming a result.
 
 The specification driving all work is `SPEC.md`; the MVP bill of
 materials is `BOM-MVP.md`. **Where the project stands is
@@ -27,5 +37,14 @@ Critical points in short:
   total and still place differently — so matching area proves nothing
   about clock. Re-measure before publishing, and find what changed
   before blaming the toolchain.
+- Two frontends, and the split is not symmetric: our own SystemVerilog
+  goes through `read_slang`, **third-party Verilog through
+  `read_verilog`, never slang**. Slang does not infer block RAM and
+  spills it into logic — 169 LUTs becomes 6454 on the same module — so
+  a vendored design read through slang measures an order of magnitude
+  too large and gets abandoned for the wrong reason.
+- Linux/WireGuard integration goes through the kernel crypto API:
+  **no kernel patches.** FreeBSD `if_wg` needs a minimal patch or is
+  out of scope for v1.
 - Product in English (code, commits, docs).
 - Git: work on branches, never commit/push without explicit go-ahead.
