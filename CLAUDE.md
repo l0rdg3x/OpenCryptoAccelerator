@@ -39,10 +39,13 @@ Critical points in short:
   before blaming the toolchain.
 - Two frontends, and the split is not symmetric: our own SystemVerilog
   goes through `read_slang`, **third-party Verilog through
-  `read_verilog`, never slang**. Slang does not infer block RAM and
-  spills it into logic — 169 LUTs becomes 6454 on the same module — so
-  a vendored design read through slang measures an order of magnitude
-  too large and gets abandoned for the wrong reason.
+  `read_verilog`, never slang**. Slang did not infer the memories of the
+  one vendored design this was measured on and spilled them into logic —
+  10x the area on one module, 38x on another, and no block RAM at all —
+  so a vendored design read through slang measures far too large and
+  gets abandoned for the wrong reason. **Which counter produced those
+  figures was never recorded**, so quote the ratio and never the
+  absolute numbers.
 - Linux/WireGuard integration goes through the kernel crypto API:
   **no kernel patches.** FreeBSD `if_wg` needs a minimal patch or is
   out of scope for v1.
