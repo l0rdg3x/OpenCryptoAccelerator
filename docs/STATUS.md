@@ -5,10 +5,11 @@
 every merge and at every design gate; a tracker that drifts is worse than
 none.
 
-This is deliberately short. `AGENTS.md` carries the measurements, their
-limits and the history of how each was arrived at, and it is the document
-to read before touching anything. This one answers only: what is done,
-what is being worked on, what is next.
+This is deliberately short. `docs/RECORD.md` carries the measurements,
+their limits and the history of how each was arrived at; `AGENTS.md`
+carries the rules, the layout and the build and test commands, and is the
+document to read before touching anything. This one answers only: what is
+done, what is being worked on, what is next.
 
 ## Done
 
@@ -144,8 +145,8 @@ runner/testbench pairs, the whole
 and `vendor_patches.py` — the three `oca_top*` synthesis targets with
 their netlist census tables, and the four DDR and delay primitives from
 `ecp5_prims.sv`, which keeps `EHXPLLL`. **The measurements are kept**,
-in `AGENTS.md` and `oca/hw/syn/README.md`; the code they were taken on
-is not.
+in `docs/RECORD.md` and `oca/hw/syn/README.md`; the code they were taken
+on is not.
 
 **Three pieces of it survive on purpose, and this is where they are
 declared.**

@@ -46,7 +46,7 @@ anywhere in this repository.** `oca_udp_complete_64_probe` was never a
 `DESIGNS` entry in `run_synth.py` — checked with
 `git log -S` over the whole history — so the figure did not come through
 the project's own synthesis flow, and no script in the tree reproduces
-it. What is recorded is the result, in `AGENTS.md` and in the
+it. What is recorded is the result, in `docs/RECORD.md` and in the
 2026-08-05 design document, and the sources it was taken from.
 
 So the honest position is: **the sources are preserved and the method is

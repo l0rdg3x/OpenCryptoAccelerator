@@ -300,8 +300,8 @@ good — came with a third connection, `clear_arp_cache`, that brought
 back 881 LUTs and 400 flip-flops of ARP logic yosys had been deleting,
 around the receive path, and
 across 32 placer seeds `rgmii_rx_clk` cleared its 125 MHz on none of
-them, the best reaching 124.22. `AGENTS.md` carries the sweep and what
-was ruled out. Every port figure above is a cycle budget for a
+them, the best reaching 124.22. `docs/RECORD.md` carries the sweep and
+what was ruled out. Every port figure above is a cycle budget for a
 configuration the board never carried; the host interface is the
 DAPLink USB serial on J17/H18 (`SPEC.md`, PHASE 2).
 
@@ -380,7 +380,7 @@ four placer seeds did not route, each stopped after 3 h 22 min still
 bouncing between 50 and 2300 unrouted arcs, so its 48.53 MHz mean is
 over two seeds and not four. **Two cores of the current RTL have since
 been placed and routed, on four seeds with every seed routing** —
-`AGENTS.md` carries what they measure, and it is deliberately not
+`docs/RECORD.md` carries what they measure, and it is deliberately not
 repeated here. **None of this has run on silicon.**
 
 **The Ethernet integration was merged, retired and then deleted**

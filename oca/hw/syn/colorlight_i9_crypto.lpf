@@ -36,8 +36,9 @@
 #
 # 25 MHZ is the whole timing requirement of this design. Every module in
 # it runs on clk25 and there is no PLL: the AEAD engine reaches ~50 MHz
-# out of context (AGENTS.md), so the margin here is the reason this is
-# the first crypto design in this project that can be expected to close.
+# out of context (docs/RECORD.md), so the margin here is the reason this
+# is the first crypto design in this project that can be expected to
+# close.
 #
 # The FREQUENCY line is also the spelling check on clk25: a net that does
 # not exist warns rather than passing quietly (common/kernel/basectx.cc:108).

@@ -1,6 +1,6 @@
 ---
 name: synth-sweep
-description: Use when a change might move area or clock, or before recording any synthesis number in a document or commit message. Synthesises an OCA target across several placer seeds, reports area and Fmax, and compares against the figures recorded in AGENTS.md.
+description: Use when a change might move area or clock, or before recording any synthesis number in a document or commit message. Synthesises an OCA target across several placer seeds, reports area and Fmax, and compares against the figures recorded in docs/RECORD.md.
 ---
 
 # Synthesis sweep
@@ -14,9 +14,9 @@ toolchain gives:
 - **`oca_dual` (a pair): 7.3%**, four seeds (50.41 / 51.18 / 47.68 /
   49.19 MHz, mean 49.61) on the netlist committed today, secret
   zeroisation included, measured 2026-08-15 on yosys `f77ddfb87`
-  (`AGENTS.md`, "Two cores measured"). On the previous pin `41a4b5a03`
-  the same sweep spread 4.8% (50.37 / 48.12 / 48.05 / 49.03, mean
-  48.89), measured 2026-08-05 in `d4ee09f`.
+  (`docs/RECORD.md`, "Two cores measured"). On the previous pin
+  `41a4b5a03` the same sweep spread 4.8% (50.37 / 48.12 / 48.05 / 49.03,
+  mean 48.89), measured 2026-08-05 in `d4ee09f`.
 - **`oca_core` (a single core): 6.2%**, four seeds (50.12 / 48.74 /
   48.61 / 51.62 MHz, mean 49.77) on the netlist committed today,
   measured 2026-08-15 on yosys `f77ddfb87` (`oca/hw/syn/README.md`,
@@ -70,12 +70,12 @@ claim a Fmax change smaller than the spread. If the sweep's own spread
 is wider than 8%, say so: the design may have become harder to place,
 which is itself the finding.
 
-Compare against the figures in `AGENTS.md`'s status section. If they
-disagree, stop and find out what changed rather than publishing the new
-number. Note that "my RTL is unchanged" is not the same as "the netlist
-is unchanged": builds that match on every per-type cell total have
-placed differently here before. Naming the toolchain is the last step,
-not the first.
+Compare against the figures in `docs/RECORD.md`, the measurement record.
+If they disagree, stop and find out what changed rather than publishing
+the new number. Note that "my RTL is unchanged" is not the same as "the
+netlist is unchanged": builds that match on every per-type cell total
+have placed differently here before. Naming the toolchain is the last
+step, not the first.
 
 **The flip-flop floors in `run_synth.py` are the point of running this
 at all on a design with a key store.** If a `netlist check` line reports

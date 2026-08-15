@@ -1,8 +1,8 @@
 # CLAUDE.md — OpenCrypto Accelerator
 
-The canonical project document for agents is **`AGENTS.md`**: treat it
-as part of these instructions. It is over 1300 lines, so read it by
-section rather than whole:
+The canonical project document for agents is **`AGENTS.md`**: it carries
+the rules and the how-to, and it is part of these instructions. Read it
+by section rather than whole:
 
 - **`## Hard rules` and `## Environment rules`, always, before any
   work.** Nothing elsewhere overrides them.
@@ -10,14 +10,16 @@ section rather than whole:
   suite.
 - `## Repository layout` — when a path is not obvious from `ls`.
 - `## Project shape` — when the question is what OCA is for.
-- `## Current status` — the long-form record: every measurement, how it
-  was arrived at, and what it does NOT establish. Read it before
-  quoting any figure or claiming a result.
+
+**The measurements live in `docs/RECORD.md`** — the long-form record:
+every measurement, how it was arrived at, and what it does NOT
+establish. Read it before quoting any figure or claiming a result, and
+write every new bench number into it.
 
 The specification driving all work is `SPEC.md`; the MVP bill of
 materials is `BOM-MVP.md`. **Where the project stands is
 `docs/STATUS.md`** — one page, done / not established / next, updated at
-every merge and every design gate.
+every merge and every design gate; `docs/RECORD.md` is its long sibling.
 
 Critical points in short:
 

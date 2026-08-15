@@ -386,9 +386,9 @@ the MVP target is written against.
 > 55 minutes each, and roughly 50000 arcs stay unrouted whether the
 > constraint is 100, 45, 40 or 35 MHz. It is congestion, not timing, so
 > a slower clock buys nothing. The device holds **two**
-> (`oca/hw/syn/README.md`, "The occupancy study"; `AGENTS.md`). Counting
-> multipliers was exactly the kind of projection that study was run to
-> replace.
+> (`oca/hw/syn/README.md`, "The occupancy study"; `docs/RECORD.md`).
+> Counting multipliers was exactly the kind of projection that study was
+> run to replace.
 
 - [ ] **Step 5: Commit**
 

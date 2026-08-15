@@ -259,10 +259,13 @@ inside `oca_pll`, which step 3 above loads onto the board.
 
 ## Recording what you find
 
-Every number found at the bench goes into `AGENTS.md`, beside the step
-that produced it, with what it does NOT establish stated next to it. A
-value discovered and not written down will be rediscovered; a value
-written down without its limits will be trusted further than it earns.
+Every number found at the bench goes into `docs/RECORD.md`, beside the
+step that produced it, with what it does NOT establish stated next to
+it. A value discovered and not written down will be rediscovered; a
+value written down without its limits will be trusted further than it
+earns.
 
 It used to say these went to section 9 of the Ethernet design document.
-That document is closed, and nothing new belongs in it.
+That document is closed, and nothing new belongs in it. Until the
+measurement record was split out, it said `AGENTS.md`; that file keeps
+the rules and the how-to and takes no bench numbers.
