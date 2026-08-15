@@ -3,10 +3,10 @@
 
 Every other suite in this directory elaborates the SystemVerilog and
 never runs yosys, so none of them can see a synthesis bug. That blind
-spot cost this project its key store: stock yosys mis-maps the index
-bounds check in `oca_keystore.sv` and deletes all 2048 key bits, while
-`run_keystore.py` stays green (see `../syn/README.md`, "The cmp2lut
-trap").
+spot cost this project its key store: a yosys older than the pinned
+revision mis-maps the index bounds check in `oca_keystore.sv` and
+deletes all 2048 key bits, while `run_keystore.py` stays green (see
+`../syn/README.md`, "The cmp2lut trap").
 
 This runner synthesises `oca_keystore` to ECP5 primitives and replays
 the same tests on the mapped netlist. On a netlist built with the

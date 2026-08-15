@@ -92,7 +92,23 @@ DESIGNS = {
     "poly1305": Design(sv=["poly1305.sv"]),
     "chacha20_poly1305": Design(sv=ENGINE),
     "oca_core": Design(sv=CORE),
-    "oca_dual": Design(sv=CORE + ["oca_dual.sv"]),
+    "oca_dual": Design(
+        sv=CORE + ["oca_dual.sv"],
+        # The densest design here at 56% of the device, and the only one
+        # the default has killed. Router1 time varies enormously with the
+        # placer seed, so the bound has to cover the slow seeds and not
+        # the median.
+        #
+        # The figures behind that are observations, not artefacts: in one
+        # four-seed sweep on 2026-08-15 router time ran from 950 s to
+        # over 3000 s, and one build died at rc=124 on the 1800 s
+        # default. run() opens each stage log with "w", so a sweep leaves
+        # only its last seed in build/ and only that seed's "Router1
+        # time" line survives; nothing in the tree records the other
+        # seeds or the killed build, and the message of the commit that
+        # raised this bound is where they are written down.
+        timeout=3600,
+    ),
     # The two halves of the serial bridge, measured apart because they
     # are what the top level adds to a core whose cost is already known,
     # and because the decoder's store-and-forward buffer is the one
@@ -500,13 +516,18 @@ def kill_group(proc, timeout, log_path):
 def check_cmp2lut():
     """Refuse to run on a yosys whose cmp2lut.v mis-maps signed comparisons.
 
-    `synth_ecp5` runs `techmap -map +/cmp2lut.v` unconditionally. Stock
-    yosys (still true upstream at 0.67+/41a4b5a03) does not sign-extend
-    the constant operand there, so a signed comparison against a
-    negative constant becomes a constant-false LUT. `$signed(a) >= -8`
-    is a tautology and must map to an all-ones LUT; if it maps to zero
-    the key store silently disappears from the netlist. Apply
-    patches/yosys-cmp2lut-signed-negative-constant.patch.
+    `synth_ecp5` runs `techmap -map +/cmp2lut.v` unconditionally. A yosys
+    older than f77ddfb87 does not sign-extend the constant operand
+    there, so a signed comparison against a negative constant becomes a
+    constant-false LUT. `$signed(a) >= -8` is a tautology and must map
+    to an all-ones LUT; if it maps to zero the key store silently
+    disappears from the netlist.
+
+    Reported as YosysHQ/yosys#6085 and fixed upstream by PR #6114,
+    merged 2026-08-14. This project carried the fix as a local patch
+    until the pin moved to f77ddfb87 on 2026-08-15. The probe stays
+    because it tests the behaviour, not the pin: it is what catches a
+    toolchain built from anything older.
     """
     probe = BUILD / "cmp2lut_probe.il"
     probe.write_text(
@@ -537,10 +558,14 @@ def check_cmp2lut():
         sys.exit(
             f"cmp2lut probe FAILED: $signed(a) >= -8 mapped to LUT 16'b{lut.group(1)}, "
             "expected all ones.\nThis yosys mis-synthesises signed comparisons against "
-            "negative constants and will delete the key store.\nApply "
-            f"{SYN_DIR / 'patches' / 'yosys-cmp2lut-signed-negative-constant.patch'} "
-            "to tools/src/yosys and copy the result over "
-            "tools/yosys/share/yosys/cmp2lut.v (it is read at run time; no rebuild needed)."
+            "negative constants and will delete the key store.\nThe fix is upstream in "
+            "yosys f77ddfb87 (PR #6114, 2026-08-14), so this toolchain predates it: "
+            "check that tools/src/yosys is at the YOSYS_REV in "
+            "scripts/build-toolchain.sh, then move tools/yosys aside and re-run that "
+            "script — it refuses to install over a yosys at another revision rather "
+            "than leave the old binary standing.\nIf both are already at the pin, "
+            "tools/yosys/share/yosys/cmp2lut.v is stale — it is read at run time, so "
+            "copying the source file over it is enough."
         )
 
 
