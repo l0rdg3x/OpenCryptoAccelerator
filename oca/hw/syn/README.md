@@ -123,8 +123,12 @@ the post-synthesis netlist and the nextpnr JSON report.
 
 ## The cmp2lut trap
 
-**Stock yosys deletes this design's key store. The patch in
-`patches/` is not optional.**
+**Yosys before `f77ddfb87` deletes this design's key store.** It was
+fixed upstream by PR #6114 on 2026-08-14 and the pin moved to it on
+2026-08-15, so the local patch this section described is gone. The
+analysis below is unchanged and still describes what that yosys does —
+which is why the behavioural probe stayed even though the patch did
+not.
 
 `synth_ecp5` runs `techmap -map +/cmp2lut.v -D LUT_WIDTH=4`
 unconditionally (`techlibs/lattice/synth_lattice.cc:438`) to map narrow
@@ -182,14 +186,42 @@ fail; against a patched one, all four pass.
 The RTL is not at fault and has not been changed. Declaring the arrays
 `[NUM_SLOTS-1:0]` instead also dodges the bug, but only by avoiding the
 index inversion by coincidence — it fixes nothing for the next array,
-and the mapper would still be wrong. The patch is upstreamable and is
-the actual fix; see `patches/README.md`.
+and the mapper would still be wrong. Fixing the mapper was the actual
+fix, and upstream took it as written: see `patches/README.md` for what
+was reported and `f77ddfb87` for where it landed.
 
 ## Results
 
 Measured 2026-08-03 on LFE5U-45F, CABGA381, speed grade 6, 100 MHz
 constraint, seed 1. Tools: yosys 0.67+ (41a4b5a03), nextpnr-ecp5
 8945407, prjtrellis 56bb170 — all built from source into `tools/`.
+
+**The yosys pin has moved since.** The toolchain here was rebuilt on
+`f77ddfb87` (0.68+) on 2026-08-14, taking abc and slang with it, and
+`scripts/build-toolchain.sh` followed on 2026-08-15 — which is why some
+rows below are dated the day before the pin. Every dated row below was
+measured on 41a4b5a03 and is left as it was recorded; where a figure
+has been re-measured on the new pin, the new reading is stated beside
+it and dated, never written over the old one.
+
+**Rows without such a reading have not been rebuilt, and the bump is
+not the only thing between them and the tree.** Five designs were
+measured on both pins and moved by at most 0.2% in area — `oca_core`
+12308 to 12330, `oca_dual` 24602 to 24621, `oca_uart_crypto` 13043 to
+13030, `poly1305` unchanged in area (the 2026-08-14 rebuild recorded
+below), and `chacha20` unchanged too — 3250 TRELLIS_COMB and 1419
+TRELLIS_FF on both pins, seed 1, its RTL untouched since `8dd9cab` on
+2026-08-04, so it is the one design here whose two readings differ in
+nothing but the toolchain. Its Fmax read 52.12 MHz on `41a4b5a03`
+(2026-08-06) and 52.30 on `f77ddfb87` (2026-08-14); one seed each, so
+that pair bounds nothing. Both readings are `build/` artefacts rather
+than rows in this file, and a rebuild overwrites them. The sixth,
+`chacha20_poly1305`, reads 8009 against the 7358 in the
+table below, but that row predates the secret zeroisation of
+`8dd9cab`, so the
+difference is RTL as well as toolchain and nothing here separates the
+two. A row is a measurement, not an estimate, and the toolchain is part
+of what it measured.
 
 ### Baselines
 
@@ -252,6 +284,17 @@ two `chacha20_poly1305` rows are stale in the same way and have not been
 rebuilt**, so nothing here compares a figure of one date against a
 figure of the other.
 
+**Rebuilt again 2026-08-14 on yosys `f77ddfb87`, seed 1: 3075
+TRELLIS_COMB, 1799 TRELLIS_FF, 20 MULT18X18D, 54.83 MHz.** The area is
+identical to the row above, cell for cell — the toolchain bump did not
+touch this design's mapping — so the +1.0% and −1.7% quoted there still
+hold as written. The clock reads 0.58 MHz lower, which against the
+2026-08-03 baseline makes it +4.1% rather than +5.2%. That last
+comparison now spans two toolchains as well as two netlists, so it no
+longer isolates the rework the way the sentence above it does; the
++5.2% is left standing as what was measured when both builds shared a
+yosys.
+
 What the rework achieved, and what it did not:
 
 - **Multipliers: target met.** 65 -> 20 MULT18X18D, 90.3% -> 27.8% of
@@ -261,8 +304,8 @@ What the rework achieved, and what it did not:
   now hold three engines instead of one, though at 9579 LUTs each that
   is 65% of the fabric and has not been placed.
 - **Poly1305 Fmax: target met.** 22.94 -> 52.68 MHz, +130%: far outside
-  the noise band. (55.41 MHz on the netlist as it stands today, per the
-  note above the table.) Its critical path is 18.98 ns (8.24 ns logic,
+  the noise band. (55.41 MHz when rebuilt 2026-08-12, 54.83 on yosys
+  `f77ddfb87`, per the notes above the table.) Its critical path is 18.98 ns (8.24 ns logic,
   10.74 ns routing), from the `r5_d` register through the `mul_b` row selection
   into one multiplier's partial-product carry chain, ending at the
   `prod` register. The path is the multiply itself; the reduction is no
@@ -329,7 +372,7 @@ untouched.
   the noise band — and within 1% of the reworked Poly1305's 52.68 MHz,
   both as they stood that day. (Neither figure is current: `3e4619e`
   took this core to one datapath at 52.09 / 52.76 mean, and Poly1305
-  rebuilt today gives 55.41. No ordering between the two is claimed
+  rebuilt gives 55.41 on 2026-08-12 and 54.83 on 2026-08-14. No ordering between the two is claimed
   across those dates — nobody has rebuilt them together.)
   The two cores are now balanced, which is the point the plan aimed at.
   Its critical path is 18.83 ns (8.26 ns logic, 10.56 ns routing), from
@@ -725,18 +768,26 @@ the only test in the repository that can fail on this.
   separation are not enough to promote it, and the honest summary of this
   pass is still that it bought area.
 
-**What the LUTs buy — and what they do not.** Three engines now take
+**What the LUTs buy — and what they do not.** Three engines took
 3 x 7358 = **22074 of 43848 LUTs, 50.3%**, where the same three took
 30123, **68.7%**, before this pass. That is 8049 LUTs and 18.4 points of
-the device given back.
+the device given back. **The engine now reads 8009** — the `f77ddfb87`
+figure under "Results" above — which puts three at 24027, **54.8%**;
+that reading also postdates the secret zeroisation of `8dd9cab`, so
+part of the +651 is RTL and not the toolchain, and nothing here
+separates the two.
 
 - **It does not buy a fourth engine.** Multipliers are unchanged at 20
   per engine, so three engines are 60 of 72 (83%) and a fourth needs
   80 — more than the device has. That was true before this pass and is
   true after it. What changed is which budget binds: on LUTs alone four
-  engines would now fit (4 x 7358 = 29432, 67.1%), so for the first time
-  in this series **the multiplier count, not the LUT count, is what caps
-  engine replication**. It caps it at three.
+  engines would fit (4 x 7358 = 29432, 67.1% at this pass; 4 x 8009 =
+  32036, **73.1%**, at the 8009 the engine now reads), so for the first
+  time in this series **the multiplier count, not the LUT count, is what
+  caps engine replication**. It caps it at three. That 73.1% is a cell
+  count and not a demonstration that four would place: it sits just under
+  the 76.4% at which this device stopped routing in the occupancy study
+  below.
 - **It does not buy throughput.** Cycles per block and multipliers per
   engine are unchanged, so per-engine throughput moves only with a clock
   this pass is not claiming. 40 cycles per 64 bytes over the four seeds
@@ -964,7 +1015,7 @@ single-core row was the committed `oca_core` build on the day, and it is
 **not what the documented command gives today**. That row is the 8-bit
 datapath core; `oca_core` was widened to 64 bits the same day and has
 changed several times since, and `run_synth.py oca_core` now measures
-12308 LUTs, 12033 FF and a four-seed mean of 49.91 MHz against this
+12330 LUTs, 12033 FF and a four-seed mean of 49.77 MHz against this
 row's 11149 and 50.59. The four rows still compare with each other —
 all four were built from the same sources on 2026-08-04 — and it is the
 comparison between them, not the absolute area of any one, that this
@@ -1339,8 +1390,9 @@ engine — not merely little.** Amended 2026-08-06: this read "24% of
 headroom" and "24% of margin rather than 26%", both of which measure the
 two engines together against one port. `oca_dual` gives each core its
 own port, so the per-port figure is 0.569 Gbps at a 1500-byte MTU on
-the committed pair's 48.89 MHz mean (0.561 at the 48.16 MHz this line
-quoted until 2026-08-09). **Amended 2026-08-10: that is a cycle budget
+the committed pair's 48.89 MHz mean, as it read on yosys `41a4b5a03`
+(0.561 at the 48.16 MHz this line quoted until 2026-08-09; 0.577 at the
+49.61 the same pair means on `f77ddfb87`). **Amended 2026-08-10: that is a cycle budget
 and not a rate.** 48.89 MHz is an out-of-context Fmax, and `oca_clkrst`
 gives `clk_sys` = 625/N with N = 13, so a pinned build of this topology
 runs at 48.0769 MHz and 0.560 Gbps per port. Every *throughput* figure
@@ -1388,8 +1440,9 @@ that is still coming down.
 Measured 2026-08-04, same device, package and speed grade as everything
 above (LFE5U-45F, CABGA381, speed 6), 100 MHz constraint,
 `--out-of-context`. **The RTL is identical in both rows** — the only
-difference is whether yosys's `cmp2lut.v` carries the patch in
-`patches/`. See "The cmp2lut trap" above for what the defect is.
+difference is whether yosys's `cmp2lut.v` carries the fix — a local
+patch when these rows were measured, upstream from `f77ddfb87` since.
+See "The cmp2lut trap" above for what the defect is.
 
 | build | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax mean | seeds |
 |---|---|---|---|---|---|---|
@@ -1491,20 +1544,24 @@ netlist checks now cover:
 
 | | TRELLIS_COMB | TRELLIS_FF | DP16KD | MULT18X18D | Fmax mean | seeds |
 |---|---|---|---|---|---|---|
-| `oca_core`, as committed | 12308 | 12033 | 4 | 20 | 49.91 MHz | 47.93, 50.91, 51.03, 49.76 |
+| `oca_core`, as committed | 12330 | 12033 | 4 | 20 | 49.77 MHz | 50.12, 48.74, 48.61, 51.62 |
+| the same, on yosys `41a4b5a03` | 12308 | 12033 | 4 | 20 | 49.91 MHz | 47.93, 50.91, 51.03, 49.76 |
 
-Four seeds, measured 2026-08-09; area is identical on all four, as
-synthesis being deterministic requires. Spread **6.5%** on
+Four seeds each; area is identical across the seeds of a sweep, as
+synthesis being deterministic requires. The first row is 2026-08-15 on
+yosys `f77ddfb87`, spread **6.2%**; the second is 2026-08-09 on
+`41a4b5a03`, spread **6.5%**, kept because the toolchain bump between
+them is the only difference and 22 LUTs is what it cost. Spread is
 `sweep.sh`'s definition, `(max-min)/min`. This table carried seed 1
 alone (47.93 MHz) until that sweep was run, which made the single core
 the one figure in this file quoted from a single draw.
 
 **Two definitions of spread live in this file.** The seed tables above
-divide by the mean; `sweep.sh` and every figure dated 2026-08-09
-divide by the minimum. On these data they differ by a few tenths of a
-point — the 64-bit row's 5.8% is 6.1% by the minimum — so never compare
-a percentage from one against a percentage from the other without
-recomputing.
+divide by the mean; `sweep.sh` and every figure dated 2026-08-09 or
+2026-08-15 divide by the minimum. On these data they differ by a few
+tenths of a point — the 64-bit row's 5.8% is 6.1% by the minimum — so
+never compare a percentage from one against a percentage from the other
+without recomputing.
 
 Live flip-flops by source file, printed by `check_netlist` on every run:
 `oca_proto.sv` 3645, `chacha20_poly1305.sv` 2479, `oca_keystore.sv`
@@ -1547,9 +1604,13 @@ here, because the same figure written down twice is how this file and
 that one came to disagree about the single-core numbers.
 
 And one seed is one sample. The 47.93 MHz this section used to carry
-alone is the lowest of the four above, drawn from a **6.5%** spread —
-wider than the pair's 4.8%, both on `(max-min)/min`, the definition
-`sweep.sh` prints. Quote the mean, and quote it with its seed count.
+alone is the lowest seed of the `41a4b5a03` row above, not of the
+committed one, whose lowest is 48.61. That row's spread is **6.5%**,
+the committed row's **6.2%**, and the pair's 7.3% on the same pin
+(`AGENTS.md` carries it) — one four-seed draw of each is not enough to
+order them as a property of the designs. All on `(max-min)/min`, the
+definition `sweep.sh` prints. Quote the mean, and quote it with its
+seed count.
 The comparison
 this paragraph used to make — against 49.76 MHz at seed 1 on a netlist
 yosys reported cell for cell identical — no longer applies: the secret

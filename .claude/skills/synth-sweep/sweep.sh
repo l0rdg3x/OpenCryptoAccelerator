@@ -73,7 +73,7 @@ print(f"  Fmax  {' / '.join(f'{x:.2f}' for x in v)}")
 print(f"  mean  {mean:.2f} MHz   spread {spread:.1f}%")
 if spread > 8.0:
     print("  NOTE: spread exceeds every seed spread recorded on the"
-          "\n        committed design (6.5% one core, 4.8% the pair) - it"
+          "\n        committed design (widest 7.3%, 2026-08-15) - it"
           "\n        may have become harder to place. That is a finding,"
           "\n        not noise.")
 PY

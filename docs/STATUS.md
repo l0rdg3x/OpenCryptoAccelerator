@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Project status
 
-**Updated 2026-08-13.** Where the project is, in one page. Update this at
+**Updated 2026-08-15.** Where the project is, in one page. Update this at
 every merge and at every design gate; a tracker that drifts is worse than
 none.
 
@@ -67,23 +67,26 @@ at 25 MHz, no PLL:
 
 | | |
 |---|---|
-| LUT | 13043 — 29.7% of the device |
+| LUT | 13030 — 29.7% of the device |
 | flip-flops | 12518 — 28.5% |
 | block RAM | 6 of 108 |
 | multipliers | 20 of 72 |
-| Fmax | 50.55 MHz against the 25.00 required — 2.02x |
-| bitstream | 423213 bytes, packed |
+| Fmax | 49.85 MHz against the 25.00 required — 1.99x |
+| bitstream | 423971 bytes, packed |
 
-Seed 1, `colorlight_i9_crypto.lpf`. The figures above are what
-`run_synth.py oca_uart_crypto` reproduces; `build/` holds one pass,
-since a rebuild overwrites the last, so re-run it rather than trusting
-this table.
+Seed 1, `colorlight_i9_crypto.lpf`, re-measured 2026-08-14 on yosys
+`f77ddfb87`, the day the toolchain was rebuilt on it. On the previous pin the same design read 13043 LUTs,
+50.55 MHz and 423213 bytes: the flip-flops, block RAM and multipliers
+did not move at all, and neither did the LUT percentage. The figures
+above are what `run_synth.py oca_uart_crypto` reproduces; `build/`
+holds one pass, since a rebuild overwrites the last, so re-run it
+rather than trusting this table.
 
 ## Not established
 
 **No bitstream containing crypto has been loaded onto the board.** What
-is proved is that it builds, closes its clock with a doubling of margin,
-and answers the protocol correctly in simulation down to UART bit
+is proved is that it builds, closes its clock at 1.99x the frequency it
+needs, and answers the protocol correctly in simulation down to UART bit
 timing — including a forged tag returning no plaintext, proved by
 mutation rather than asserted.
 

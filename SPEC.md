@@ -48,7 +48,8 @@ Hardware accelerator for:
   port.** This bullet read "high enough to saturate one GbE host port
   with margin" until 2026-08-06, which added the two engines together
   against a single port: `oca_dual` gives each core its own stream, so a
-  port sees one core and carries 0.569 Gbps at a 1500-byte MTU — itself
+  port sees one core and carries 0.569 Gbps at a 1500-byte MTU on yosys
+  `41a4b5a03`, 0.577 on `f77ddfb87` — itself
   an Fmax over a cycle count rather than a rate, see the 2026-08-10
   amendment below. The
   2026-08-05 correction further down this bullet is the one that holds.
@@ -75,7 +76,8 @@ Hardware accelerator for:
   what the fabric holds, so that is where the target sits — as a sum
   over both engines. The 49.28 MHz is the 2026-08-04 occupancy study's
   two-core clock, measured before the key store was restored; the
-  committed pair's 48.89 MHz puts the same sum at ~1.25 Gbps, which is
+  committed pair's 48.89 MHz on yosys `41a4b5a03` puts the same sum at
+  ~1.25 Gbps, and its 49.61 on `f77ddfb87` at ~1.27, which is
   why this target is left where it is rather than chased by a
   hundredth. This paragraph read "one port saturated with **26%
   margin**" until 2026-08-06; the sum only clears a port if both engines
@@ -105,10 +107,10 @@ Hardware accelerator for:
   current RTL have since been placed and routed, over four placer seeds
   and with every seed routing** — `oca_dual` builds them, and the
   paragraph below carries what they measure. One core of the current RTL
-  measures **12308 LUTs, 12033 FF, 4 DP16KD, 20 multipliers and 49.91
-  MHz mean over four seeds** (47.93 / 50.91 / 51.03 / 49.76, measured
-  2026-08-09; this read 11590 / 12043 / 48.52 MHz, which was the build
-  from before the secret zeroisation),
+  measures **12330 LUTs, 12033 FF, 4 DP16KD, 20 multipliers and 49.77
+  MHz mean over four seeds** (50.12 / 48.74 / 48.61 / 51.62, measured
+  2026-08-15 on yosys `f77ddfb87`; on the previous pin it was 12308 and
+  49.91 mean, and before the secret zeroisation 11590 / 12043 / 48.52),
   against the 11429 LUTs the two-core figure was scaled from — and that
   pair was already the tightest configuration in the study: two of its
   four placer seeds never routed, each stopped after 3 h 22 min still
@@ -120,16 +122,19 @@ Hardware accelerator for:
   2026-08-05, having previously read that the second PHY could not be
   fed at all.** The Colorlight i9 v7.2 carries two PHYs (`BOM-MVP.md`),
   so 2 Gbps of wire is present and >= 2 Gbps was the honest thing to aim
-  at. Two cores of the current RTL place and route at 48.89 MHz mean
-  over four seeds (24602 LUTs, 56.1% of the device, measured 2026-08-05
-  in `d4ee09f`; this read 48.16 MHz, the pair from before the secret
-  zeroisation), and `oca_dual` wires them as two independent
+  at. Two cores of the current RTL place and route at 49.61 MHz mean
+  over four seeds (24621 LUTs, 56.1% of the device, measured 2026-08-15
+  on yosys `f77ddfb87`; on the previous pin it was 24602 and 48.89 mean,
+  and 48.16 for the pair from before the secret zeroisation), and
+  `oca_dual` wires them as two independent
   streams — one core per port. Through the measured cycle model (1031
-  cycles for a 1500-byte MTU) that clock gives **0.569 Gbps per port,
-  56.9% of line rate, 1.138 Gbps across both**; at the 48.16 MHz this
-  paragraph used to quote it was 0.561 / 1.121, and those two figures
-  stood here unchanged after the clock was corrected. **48.89 MHz is an
-  out-of-context Fmax and no PLL divider produces it**, so these are
+  cycles for a 1500-byte MTU) the previous pin's 48.89 gives **0.569
+  Gbps per port, 56.9% of line rate, 1.138 Gbps across both**; on
+  `f77ddfb87` 49.61 gives 0.577 / 1.155, and at 48.16 it was
+  0.561 / 1.121. Each of those pairs
+  is the arithmetic of the clock beside it and nothing more. **48.89 and
+  49.61 MHz are out-of-context Fmax figures and no PLL divider produces
+  either**, so these are
   cycle budgets and not rates — the 2026-08-10 amendment below gives the
   clock a pinned build gets. Saturating
   a single port needs both cores behind it, which needs a distributor, a
@@ -142,10 +147,11 @@ Hardware accelerator for:
   would take 94.5% and two cores behind one port 75.3% — against the
   76.4% at which this device stopped routing in the study above. **The
   MVP that fits the current RTL is one core on one port, 0.581 Gbps at
-  MTU** — the single core's own four-seed mean of 49.91 MHz (2026-08-09)
+  MTU** — the single core's own four-seed mean of 49.91 MHz (2026-08-09,
+  yosys `41a4b5a03`; 49.77 and 0.579 on `f77ddfb87`)
   rather than the pair's, since only one core is in that build. The
-  1.138 Gbps stands as the fabric's cycle budget, not a configuration
-  the board carries. The Ethernet code was deleted on 2026-08-12, so the
+  1.138 Gbps — 1.155 on the current pin — stands as the fabric's cycle
+  budget, not a configuration the board carries. The Ethernet code was deleted on 2026-08-12, so the
   8422 no longer has a probe in the tree behind it;
   `docs/design/2026-08-12-ethernet-measurement-provenance.md` records the
   commit, the vendor pin and the commands it was measured with, and what
