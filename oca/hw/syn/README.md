@@ -1114,8 +1114,8 @@ cannot be fed on an LFE5U-45F**". Both readings add the two engines
 together against a single port. `oca_dual` wires each core to its own
 AXI-Stream pair, so a port sees one core, and both PHYs can be fed in
 cycle budget. Commit 23742dc retracted this for `AGENTS.md` and
-`SPEC.md` and did not reach this file; see `AGENTS.md` for the measured
-figures.
+`SPEC.md` and did not reach this file; see `docs/RECORD.md` for the
+measured figures.
 
 **Amended again 2026-08-09**, and this time it is the "both PHYs" half
 that goes: one GbE port costs 8422 LUTs measured (19.2% of the device),
@@ -1599,16 +1599,16 @@ otherwise RTL `oca_core`.
 22891 LUTs and 48.53 MHz above were measured on RTL from before the
 packet overlap and before the key store was restored. The two-core build
 of the committed RTL has since been placed and routed over four seeds;
-`AGENTS.md` carries that result, and it is deliberately not repeated
-here, because the same figure written down twice is how this file and
-that one came to disagree about the single-core numbers.
+`docs/RECORD.md` carries that result, and it is deliberately not
+repeated here, because the same figure written down twice is how this
+file and that one came to disagree about the single-core numbers.
 
 And one seed is one sample. The 47.93 MHz this section used to carry
 alone is the lowest seed of the `41a4b5a03` row above, not of the
 committed one, whose lowest is 48.61. That row's spread is **6.5%**,
 the committed row's **6.2%**, and the pair's 7.3% on the same pin
-(`AGENTS.md` carries it) — one four-seed draw of each is not enough to
-order them as a property of the designs. All on `(max-min)/min`, the
+(`docs/RECORD.md` carries it) — one four-seed draw of each is not enough
+to order them as a property of the designs. All on `(max-min)/min`, the
 definition `sweep.sh` prints. Quote the mean, and quote it with its
 seed count.
 The comparison
@@ -1857,9 +1857,9 @@ Ethernet route was retired on 2026-08-12 — the board has no RJ45 socket
 solved, and no seed, patch or placer setting was ever going to supply a
 connector. The RTL, the vendored stack and all three `oca_top*` targets
 were deleted the same day, so nothing here can be re-run as written.
-`SPEC.md` PHASE 2, `AGENTS.md` and `docs/STATUS.md` carry the closure
-and what deliberately survived it; the measurements here stand as
-measurements.
+`SPEC.md` PHASE 2, `docs/RECORD.md` and `docs/STATUS.md` carry the
+closure and what deliberately survived it; the measurements here stand
+as measurements.
 
 Note for anyone repeating this: `--placer-heap-beta` and
 `--placer-heap-critexp` are documented by `--help` and silently

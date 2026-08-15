@@ -179,7 +179,7 @@ Hardware accelerator for:
   and **nobody is looking for one**: this read "finding one is the
   project's first open item" until 2026-08-12, when the route closed for
   want of an RJ45 socket and the search stopped being an item at all
-  (`AGENTS.md`). The two-port and two-core
+  (`docs/RECORD.md`). The two-port and two-core
   rows above remain sums that nothing has built: every term in them was
   measured `--out-of-context`, with no IO and no pin constraints, and
   the port was measured apart from the cores rather than placed beside

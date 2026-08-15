@@ -14,7 +14,7 @@ exist cannot be assessed
 here. (This read "there is no Ethernet MAC, no driver and no board yet"
 until 2026-08-12. The board arrived on 2026-08-11; the Ethernet route
 was retired on 2026-08-12 for want of an RJ45 socket on it, and the
-vendored MAC was deleted from the tree the same day — `AGENTS.md`,
+vendored MAC was deleted from the tree the same day — `docs/RECORD.md`,
 `SPEC.md` PHASE 2, `docs/STATUS.md`. **No third-party RTL is tracked in
 this repository any more**, which removes a review surface this document
 never covered: `verilog-ethernet` was MIT-licensed code nobody here

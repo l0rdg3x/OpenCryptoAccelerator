@@ -39,12 +39,12 @@ reached from the RGMII pads to `oca_core` and back, a whole-path
 testbench drove a synthetic Ethernet frame through it and checked the
 frame that came out, and it never closed timing -- the receive clock
 missed 125 MHz on all 32 placer seeds tried, the best reaching 124.22, so
-no bitstream was produced. `AGENTS.md` carries those measurements. **The
-RTL, the four testbenches and the vendored `verilog-ethernet` tree were
-deleted the same day**; `docs/STATUS.md` lists what deliberately stayed
-behind and why. `oca_core`'s ports are two 64-bit AXI-Stream and it never
-knew about Ethernet, so the crypto, the keystore, the packet buffer and
-the protocol are unaffected.
+no bitstream was produced. `docs/RECORD.md` carries those measurements.
+**The RTL, the four testbenches and the vendored `verilog-ethernet` tree
+were deleted the same day**; `docs/STATUS.md` lists what deliberately
+stayed behind and why. `oca_core`'s ports are two 64-bit AXI-Stream and
+it never knew about Ethernet, so the crypto, the keystore, the packet
+buffer and the protocol are unaffected.
 
 ## Quick start
 
@@ -120,6 +120,10 @@ replaced `run_oca_path`, over the serial line instead of over a frame.
   security notes
 - [AGENTS.md](AGENTS.md) — contributor/agent guide: environment rules,
   build and test commands, hard rules
+- [docs/STATUS.md](docs/STATUS.md) — where the project stands, one page:
+  done, not established, next
+- [docs/RECORD.md](docs/RECORD.md) — the long-form record: every figure
+  taken, how it was arrived at, and what it does NOT establish
 
 ## Contributing
 

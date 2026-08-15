@@ -7,7 +7,7 @@
  * and measuring it is all this module is for. What the MVP is actually
  * wired as depends on what fits beside the cores, and with one Ethernet
  * port's area measured, two cores and two ports do not fit this device:
- * the MVP that fits is one core on one port (AGENTS.md;
+ * the MVP that fits is one core on one port (docs/RECORD.md;
  * docs/design/2026-08-05-ethernet-integration.md). Three cores do not
  * route on this device — 76.4% of the LUTs and 83.3% of the multipliers
  * fit, and nextpnr still leaves ~50000 arcs unrouted at any constraint

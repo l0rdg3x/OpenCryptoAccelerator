@@ -35,9 +35,9 @@
  * the whole response before the next one never stalls the decoder for
  * longer than oca_core takes to accept a frame into a free bank, which
  * for the longest command is the 1351 cycles of a 2048-byte seal
- * (40 cycles per 64-byte block plus 71 per packet, AGENTS.md) -- still
- * under one byte time. So in that regime ONE entry would do and every
- * depth here is margin.
+ * (40 cycles per 64-byte block plus 71 per packet, docs/RECORD.md)
+ * -- still under one byte time. So in that regime ONE entry would do
+ * and every depth here is margin.
  *
  * A host that keeps writing while a response is still coming back is a
  * different case and NO DEPTH FIXES IT. oca_proto is store and forward
