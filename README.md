@@ -82,13 +82,15 @@ cd oca
 .venv/bin/python hw/sim/run_slip_rx.py
 .venv/bin/python hw/sim/run_slip_tx.py
 .venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
+.venv/bin/python hw/sim/run_crypto_pll.py      # the board top: PLL, crypto, LED
 .venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
 .venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
 cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
 ```
 
-That is all 21 cocotb runners, and they give **177 passing executions
-with no failures**, measured 2026-08-12. More runs outside the
+That is all 22 cocotb runners, and they give **173 passing executions
+with no failures and no skips**, measured 2026-08-12 with the two crypto
+suites re-measured 2026-08-15. More runs outside the
 simulator and needs no toolchain: `pytest hw/host` (46 tests),
 `pytest hw/syn/test_run_synth.py` (4), `test_proto_model.py` above (2),
 and the 6-step `hw/host/cli.py --fake selftest` against an in-process

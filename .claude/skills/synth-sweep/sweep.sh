@@ -19,6 +19,7 @@ cd "$ROOT/oca"
 
 declare -a fmax=()
 area=""
+clk=""
 for ((s = 1; s <= SEEDS; s++)); do
     printf 'seed %d ... ' "$s" >&2
     if ! .venv/bin/python hw/syn/run_synth.py "$TARGET" --seed "$s" \
@@ -38,13 +39,28 @@ for ((s = 1; s <= SEEDS; s++)); do
     fi
     # Rounded in python: this locale uses a decimal comma and bash
     # printf refuses a dotted number outright.
-    read -r f a < <(python3 - "$REPORT" <<'PY'
+    #
+    # The clock reported is the one with the least margin over its own
+    # constraint, not the fastest. On a design with a PLL the report
+    # carries a key per clock, and the fastest of them is the pad into
+    # the PLL: oca_top_mac reads 542.59 MHz on clk25 beside 135.19 on
+    # clk_sys, so max() would have called a 48 MHz design a 542 MHz one.
+    # The name is printed with the number because on more than one clock
+    # a bare figure says nothing about which.
+    read -r f c a < <(python3 - "$REPORT" <<'PY'
 import json, sys
 r = json.load(open(sys.argv[1]))
 u = r.get("utilization", {})
-f = max((d.get("achieved", 0.0) for d in r.get("fmax", {}).values()), default=0.0)
+fm = r.get("fmax", {})
+best, name = 0.0, "-"
+ratio = None
+for k, d in fm.items():
+    ach, con = d.get("achieved", 0.0), d.get("constraint", 0.0) or 0.0
+    rt = ach / con if con else float("inf")
+    if ratio is None or rt < ratio:
+        ratio, best, name = rt, ach, k
 a = ",".join(f"{k}={u[k]['used']}" for k in sorted(u) if u[k].get("used"))
-print(f"{f:.2f}", a)
+print(f"{best:.2f}", name, a)
 PY
 )
     fmax+=("$f")
@@ -56,19 +72,28 @@ PY
         echo "  seed $s: $a" >&2
         exit 1
     fi
-    echo "$f MHz" >&2
+    echo "$f MHz on $c" >&2
+    if [[ -z $clk ]]; then clk=$c
+    elif [[ $clk != "$c" ]]; then
+        echo >&2
+        echo "BINDING CLOCK CHANGED BETWEEN SEEDS — seed 1 reported $clk," >&2
+        echo "seed $s reports $c. The sweep is no longer comparing one" >&2
+        echo "clock across seeds, so its mean and spread mean nothing." >&2
+        exit 1
+    fi
 done
 rm -f "$LOG"
 
-python3 - "$TARGET" "$area" "${fmax[@]}" <<'PY'
+python3 - "$TARGET" "$clk" "$area" "${fmax[@]}" <<'PY'
 import sys
-target, area, *vals = sys.argv[1:]
+target, clk, area, *vals = sys.argv[1:]
 v = [float(x) for x in vals]
 mean = sum(v) / len(v)
 spread = (max(v) - min(v)) / min(v) * 100 if min(v) else 0.0
 print(f"\n=== {target}: {len(v)} seeds ===")
 for k in area.split(","):
     print(f"  {k}")
+print(f"  clock {clk}")
 print(f"  Fmax  {' / '.join(f'{x:.2f}' for x in v)}")
 print(f"  mean  {mean:.2f} MHz   spread {spread:.1f}%")
 if spread > 8.0:

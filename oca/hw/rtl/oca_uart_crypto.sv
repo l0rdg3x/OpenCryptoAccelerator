@@ -9,6 +9,16 @@
  * stand-in for. The wire format is unchanged: SLIP supplies the frame
  * boundary UDP used to supply and nothing else (oca_slip_rx.sv).
  *
+ * THIS IS THE DATAPATH, NOT THE BOARD TOP. oca_crypto_pll is the top:
+ * it holds oca_clkrst, hands this module a clock and a reset, and owns
+ * the LED. The PLL is outside on purpose. EHXPLLL is a body-less
+ * blackbox, so a PLL inside here would leave hw/sim/run_uart_crypto.py
+ * -- the only suite that drives real UART bit timing through this
+ * datapath; oca_uart_console and oca_uart_echo drive it through theirs --
+ * fabricating the very clock it exists to test. What arrives instead is
+ * CLK_HZ, and every figure below that moves with the clock is derived
+ * from it rather than written down.
+ *
  * BYTES IS ONE LOCALPARAM, PASSED TO BOTH. oca_slip_rx's buffer and
  * oca_core's packet buffers have to be the same size -- a decoder that
  * accepts more than the core can hold answers about a prefix -- and the
@@ -20,9 +30,13 @@
  *
  * FIFO DEPTHS, from the arithmetic rather than from the console's 16/32.
  *
- * A byte on the line occupies ten bit times: 86.8 us, 2170 cycles of
- * clk25. The decoder empties the input queue at a byte a cycle whenever
- * it is in S_RECV, and it is not in S_RECV during three windows:
+ * A byte on the line occupies ten bit times: 86.8 us, which is 2170
+ * cycles at the 25 MHz board oscillator and 4173 at the 48.0769 MHz
+ * oca_crypto_pll supplies. Every other cycle count below belongs to the
+ * design rather than to the clock and does not move with it, so 25 MHz
+ * is the tighter of the two builds and the comparisons are made there.
+ * The decoder empties the input queue at a byte a cycle whenever it is
+ * in S_RECV, and it is not in S_RECV during three windows:
  *
  *   S_CLEAR      BYTES/8 = 256 cycles, once, out of reset.
  *   S_PRIME+DRAIN one cycle plus one beat per m_axis_tready, at most
@@ -41,7 +55,7 @@
  *
  * A host that keeps writing while a response is still coming back is a
  * different case and NO DEPTH FIXES IT. oca_proto is store and forward
- * on two transmit banks, and a response leaves at 2170 cycles a byte:
+ * on two transmit banks, and a response leaves at a byte per 86.8 us:
  * 2048 bytes take 178 ms, during which the same line delivers 2048 more
  * bytes inbound. The queue that would absorb that is the size of the
  * traffic, not a constant. So the depth is chosen for the bounded case
@@ -73,46 +87,19 @@
  * `trouble` anyway, because a signal that cannot assert costs one input
  * on an OR gate to prove and is otherwise an assumption.
  *
- * THE LED, AND WHY IT IS NOT THE CONSOLE'S. oca_uart_console toggles D2
- * per byte received, which on this design is the one reading that fails.
- * A console command is a byte a person typed; a request here is hundreds
- * of bytes at line rate, and 115200 8N1 delivers 11520 of them a second
- * -- 5760 complete blinks -- so during a frame the LED is a lamp at half
- * brightness and between frames it is static, which is what a board with
- * no bitstream also looks like. oca_blink's lesson is that a steady LED and
- * a dead board must not read the same, so D2 is a free-running heartbeat
- * with the rate carrying the one bit of state nothing else can report:
+ * TROUBLE IS ONE STICKY BIT AND IT LEAVES AS AN OUTPUT. Six things set
+ * it, and this module never clears it short of a reset:
  *
- *   static              no bitstream, no clock, or reset never released.
- *   0.75 Hz, symmetric  alive, and nothing has been refused or lost
- *                       since power-on.
- *   6 Hz, symmetric     alive, and at least one frame was refused, one
- *                       byte lost, or one UART frame malformed. Sticky:
- *                       it never goes back to the slow rate, because a
- *                       fault that flashes once and clears is a fault
- *                       nobody catches.
+ *   rx_frame_error                 a stop bit was not high.
+ *   rx_fifo_overflow               a byte off the line met a full queue.
+ *   tx_fifo_overflow               cannot assert; wired in anyway, per
+ *                                  WHAT HAPPENS WHEN THEY FILL above.
+ *   cnt_short, cnt_long, cnt_esc   oca_slip_rx refused a frame.
  *
- * Eight to one, so the two live readings are told apart at a glance and
- * not by counting.
- *
- * READ THE FAST RATE BEFORE THE HOST OPENS THE PORT, because otherwise
- * it covers two states and that is the trap this whole scheme exists to
- * avoid. `rx_frame_error` is one of the six sources of `trouble`, and
- * oca_uart_rx raises it whenever a stop bit is not high -- which a line
- * left undriven, a break, or the edge a host puts on the line when it
- * opens /dev/ttyACM0 will all produce. One of those latches the bit for
- * the rest of the session, and 6 Hz then means "a byte on the line was
- * malformed at some point", which is true and is not the same claim as
- * "the datapath lost something". The order is the disambiguation: watch
- * D2 for a few seconds after configuration and before any host touches
- * the port. Fast already at that point is line noise, not a fault; fast
- * only after traffic is the reading this rate is for. Nothing here can
- * clear it short of reconfiguring, which is deliberate.
- *
- * LED_BITS is what makes the rates simulable: at the
- * default 25 the slow half-period is 0.671 s and no testbench can afford
- * to watch one, so the suite elaborates the module small and the netlist
- * census in run_synth.py is what holds the default at all 25 bits.
+ * Sticky because a fault that flashes once and clears is a fault nobody
+ * catches. What the bit is FOR is oca_crypto_pll's heartbeat LED, and
+ * the trap in reading it -- rx_frame_error is also what a host produces
+ * merely by opening the port -- is documented there with the rates.
  *
  * WHAT THE HOST CANNOT ASK FOR, recorded as a blind spot rather than
  * fixed. Opcode 04 is the in-band diagnostic and it answers four
@@ -124,7 +111,7 @@
  * construction. A second command channel to read them was rejected --
  * it is a second parser on the only channel available for finding bugs,
  * and the wire format above SLIP is the contract SPEC.md PHASE 3 makes
- * later drivers depend on. What is done instead is the LED, and it is
+ * later drivers depend on. What is done instead is `trouble`, and it is
  * deliberately coarse: the operator learns that the link refused or lost
  * something, never which of the four reasons and never how many.
  *
@@ -144,32 +131,161 @@
  * mistake there was to read a per-file census against a whole-netlist
  * total.
  *
- * RESET. No reset pin and no PLL to lock, so rst_n is oca_uart_console's
- * power-on counter: ECP5 flip-flops come out of configuration cleared,
- * the counter starts at zero and releases reset once. Everything below
- * that clears itself does so afterwards and gates its own inputs while
- * it does -- the decoder's buffer walk, both packet buffers' walks --
- * so there is no ordering to arrange here.
+ * RESET, AND WHY THERE ARE TWO OF THEM. This module is built both ways.
+ * Standalone on the board oscillator there is no reset pin and no PLL to
+ * lock, and the only root is oca_uart_console's power-on counter: ECP5
+ * flip-flops come out of configuration cleared, the counter starts at
+ * zero and releases reset once. Under oca_crypto_pll the clock is a PLL
+ * output and rst_n carries oca_clkrst's synchronised release, which is
+ * gated on LOCK. Keeping both is what makes the two builds the same
+ * module: dropping the counter would make the standalone build depend on
+ * a pin that is not there, and ignoring rst_n would start the datapath
+ * on the first edges of a clock whose PLL has not locked.
+ *
+ * THE TWO ARE NOT ANDed, which is what the shape below is for. rst_n_core
+ * is a flip-flop: rst_n is its asynchronous clear and the counter
+ * reaching fifteen is the only thing that sets it, so what drives the
+ * asynchronous reset of everything else here is a register output and
+ * never a decode. That matters because `por_count == 4'd15` is a
+ * four-input AND, its LUT carries a static-0 hazard on the counter's
+ * 7->8, 11->12 and 13->14, and a glitch on an asynchronous reset net is
+ * a spurious RELEASE rather than a spurious reset. (Until 2026-08-15
+ * this decode WAS the reset: named rst_n, with no input to combine it
+ * with, driving those same asynchronous resets straight out of a LUT.
+ * It survived because a design whose only reset is its own power-on
+ * counter releases once and never again, so a hazard on the way to
+ * fifteen had one chance to fire and nothing downstream to confuse.
+ * Under oca_crypto_pll that stops being true: rst_n is oca_clkrst's
+ * rst_n_sys, whose stated purpose is to assert asynchronously when the
+ * PLL loses lock, so the count is walked again on every dropout.)
+ *
+ * Assertion asynchronous, release synchronous, and rst_n restarts the
+ * count instead of passing through it: a lock that drops and returns
+ * gives the datapath the same sixteen cycles it gets at power-on. The
+ * signal leaves as an output because oca_crypto_pll's heartbeat reads
+ * it -- that LED is counted on clk25 and is otherwise blind to whether
+ * `clk` ever ran at all, which is documented there.
+ *
+ * Everything below that clears itself does so afterwards and gates its
+ * own inputs while it does -- the decoder's buffer walk, both packet
+ * buffers' walks -- so there is no ordering to arrange here.
  */
 `default_nettype none
 
 module oca_uart_crypto #(
-    // Heartbeat counter width. 25 is the board: bit 24 toggles every
-    // 0.671 s. A simulation elaborates it small so that both rates fit
-    // in a run. The floor of 5 is the fast tap: at 4 it would be bit 0,
-    // which toggles every cycle and is a rate nobody can read off a pad
-    // or count in a testbench.
-    parameter int LED_BITS = 25
+    // The frequency of `clk`, in hertz, and the only thing that tells
+    // this module what a bit time is. 25_000_000 is the board oscillator
+    // on P3, which is what a standalone build of this module runs on;
+    // oca_crypto_pll passes oca_clkrst's clk_sys instead, a 625 MHz VCO
+    // over CLKOS_DIV 13 (oca_clkrst.sv).
+    parameter int CLK_HZ = 25_000_000
 ) (
-    input  var logic clk25,
-    output var logic led_n,
+    input  var logic clk,
+    // Asynchronous, active low: the clear of the power-on register
+    // below, and through it of everything in the datapath. Tie high
+    // where there is nothing to gate on. See the header.
+    input  var logic rst_n,
     output var logic uart_tx,
-    input  var logic uart_rx
+    input  var logic uart_rx,
+    // Low while the datapath is held: rst_n asserted, or the power-on
+    // counter not finished. A register in this clock domain, so it
+    // cannot rise without edges on `clk`, which is what oca_crypto_pll
+    // reads it for.
+    output var logic rst_n_core,
+    // Sticky: something was refused or lost. Six sources, per the header.
+    output var logic trouble
 );
 
-    // 25e6 / 115200 = 217.01. The 0.006% error is nothing against the
-    // ~5% a mid-bit sampler tolerates (oca_uart_rx.sv).
-    localparam int DIV = 217;
+    // 115200 8N1, which is what the DAPLink bridge and hw/host/ speak.
+    localparam int BAUD_HZ = 115_200;
+    localparam int DIV     = CLK_HZ / BAUD_HZ;
+
+    /*
+     * WHERE THE STOP BIT LANDS, for the CLK_HZ this module is given. A
+     * wrong divisor is a mute board and an off-by-one is invisible: 416,
+     * 417 and 418 all carry a byte over this link and nothing in hw/sim/
+     * separates them.
+     *
+     * The error is the receiver's, accumulated the way oca_uart_rx
+     * accumulates it (oca_uart_rx.sv:45-114) and not a comparison of
+     * baud rates. Counted from the falling edge on the pin, the stop bit
+     * -- the tenth sample -- is taken between
+     *
+     *     DIV/2 + 9*DIV + 3   and   DIV/2 + 9*DIV + 4   cycles,
+     *
+     * where 9.5 bit times would put it. The first two terms are the
+     * counter: it waits DIV/2 to reach the middle of the start bit and
+     * then samples every DIV. Both divisions truncate, and truncating
+     * DIV/2 throws away up to half a cycle that CLK_HZ/DIV against
+     * 115200 never sees at all. The three cycles after them are the path
+     * from the pad to that counter -- the second synchroniser flop, IDLE
+     * reading it, the cycle spent entering DATA -- and the fourth is the
+     * first synchroniser flop's aperture, a pin edge landing anywhere
+     * inside a clock period. Every one of them is LATE, which is why the
+     * figure is an interval one cycle wide and not a midpoint.
+     *
+     * MEASURED, NOT DERIVED, 2026-08-15 under Verilator: oca_uart_rx
+     * elaborated at DIV 10, 100, 217 and 417, a start edge driven at
+     * three phases of the clock in each, and the edge at which `valid`
+     * rises read back. In all twelve runs it is 4 + DIV/2 + 9*DIV edges
+     * after the last clock edge before the pin fell, which is the
+     * interval above with the phase folded into it. This module modelled
+     * DIV/2 + 9*DIV and nothing after it until that measurement, so the
+     * figures it published were short by those three to four cycles:
+     * -8810 ppm at DIV 417, where the sample is between 1621 early and
+     * 774 late, and -2912 at DIV 217, where it is between 10912 and
+     * 15520 LATE.
+     *
+     * The budget is half of the ~5% the receiver tolerates end to end.
+     * The other half belongs to the host's oscillator, which this design
+     * does not choose and cannot measure.
+     *
+     * WHAT THIS DOES NOT CHECK, and it is the likelier mistake: that
+     * CLK_HZ is the frequency `clk` actually carries. The interval is
+     * one cycle wide however fast the clock is, so measured in ppm of a
+     * bit time it shrinks as the clock rises, and 32_025_599 Hz is the
+     * highest CLK_HZ that lands outside the budget at all -- the top of
+     * the DIV 277 band, found by walking both ends of every divisor
+     * band, which is exhaustive because the figure is monotone inside
+     * one. Above it this guard accepts every frequency there is, so at
+     * the board's 48.0769 MHz it bounds the sampler and can fire at
+     * nothing.
+     */
+    localparam longint MAX_SAMPLE_ERR_PPM = 25_000;
+
+    // 64-bit throughout, and not for tidiness: 19 * CLK_HZ passes 2^31
+    // above 113_025_455 Hz and the scaling to ppm passes it at every
+    // frequency there is. An overflowed guard is a guard that passes.
+    localparam longint STOP_CYCLES_EARLY =
+        longint'(DIV) / 2 + 9 * longint'(DIV) + 3;
+    localparam longint STOP_CYCLES_LATE = STOP_CYCLES_EARLY + 1;
+
+    // ppm of a bit time, positive meaning late: STOP*BAUD_HZ/CLK_HZ - 9.5
+    // scaled by a million, doubled to clear the half.
+    localparam longint SAMPLE_ERR_EARLY_PPM =
+        ((2 * STOP_CYCLES_EARLY * BAUD_HZ - 19 * longint'(CLK_HZ)) * 1_000_000)
+        / (2 * longint'(CLK_HZ));
+    localparam longint SAMPLE_ERR_LATE_PPM =
+        ((2 * STOP_CYCLES_LATE * BAUD_HZ - 19 * longint'(CLK_HZ)) * 1_000_000)
+        / (2 * longint'(CLK_HZ));
+
+    // 48_076_923 / 115200 = 417.334, so DIV is 417 and the interval is
+    // -1621 to +774 ppm. 25_000_000 gives DIV 217, where all of it is
+    // late -- +10912 to +15520, five eighths of the budget, and nearly
+    // all of that the four cycles between the pad and the sample. The
+    // 0.006% oca_uart_rx.sv quotes is none of it: that figure compares
+    // baud rates, which is the comparison this one exists to replace.
+    // Each end is checked against the budget it can reach.
+    if (SAMPLE_ERR_LATE_PPM > MAX_SAMPLE_ERR_PPM
+        || SAMPLE_ERR_EARLY_PPM < -MAX_SAMPLE_ERR_PPM) begin : gen_bad_clk_hz
+        // One string literal, not a concatenation of two: verilator
+        // renders a concatenated format argument as one enormous decimal
+        // and the message is lost exactly where it is needed.
+        $fatal(1,
+            "oca_uart_crypto: CLK_HZ %0d, DIV %0d, stop bit sampled %0d to %0d ppm off 9.5 bit times (max %0d)",
+            CLK_HZ, DIV, SAMPLE_ERR_EARLY_PPM, SAMPLE_ERR_LATE_PPM,
+            MAX_SAMPLE_ERR_PPM);
+    end
 
     // One number for both, so they cannot drift apart.
     localparam int BYTES = 2048;
@@ -179,24 +295,22 @@ module oca_uart_crypto #(
     localparam int RX_DEPTH = 16;
     localparam int TX_DEPTH = 16;
 
-    localparam int SLOW = LED_BITS - 1;
-    localparam int FAST = LED_BITS - 4;
-
-    if (LED_BITS < 5) begin : gen_illegal_led_bits
-        $fatal(1, "oca_uart_crypto: LED_BITS must be at least 5 (got %0d)",
-               LED_BITS);
-    end
-
     logic [3:0] por_count;
-    logic       rst_n;
 
-    always_ff @(posedge clk25) begin
-        if (por_count != 4'd15) begin
-            por_count <= por_count + 4'd1;
+    // rst_n is the asynchronous clear and the count is the only release:
+    // no combinational term reaches the reset net. See the header for
+    // why ANDing the two would not do.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            por_count  <= 4'd0;
+            rst_n_core <= 1'b0;
+        end else begin
+            if (por_count != 4'd15) begin
+                por_count <= por_count + 4'd1;
+            end
+            rst_n_core <= (por_count == 4'd15);
         end
     end
-
-    always_comb rst_n = (por_count == 4'd15);
 
     // ------------------------------------------------------------------
     // Line in: receiver, queue, decoder
@@ -205,7 +319,7 @@ module oca_uart_crypto #(
     logic       rx_valid, rx_frame_error;
 
     oca_uart_rx #(.DIV (DIV)) u_rx (
-        .clk         (clk25),
+        .clk         (clk),
         .rx          (uart_rx),
         .data        (rx_byte),
         .valid       (rx_valid),
@@ -226,8 +340,8 @@ module oca_uart_crypto #(
     always_comb unused_ok = rx_fifo_full | (|rx_fifo_level) | (|tx_fifo_level);
 
     oca_fifo #(.WIDTH (8), .DEPTH (RX_DEPTH)) u_rx_fifo (
-        .clk      (clk25),
-        .rst_n    (rst_n),
+        .clk      (clk),
+        .rst_n    (rst_n_core),
         .wr_data  (rx_byte),
         .push     (rx_valid),
         .full     (rx_fifo_full),
@@ -244,8 +358,8 @@ module oca_uart_crypto #(
     logic [15:0] cnt_short, cnt_long, cnt_esc;
 
     oca_slip_rx #(.BYTES (BYTES), .MIN_BYTES (MIN_BYTES)) u_slip_rx (
-        .clk           (clk25),
-        .rst_n         (rst_n),
+        .clk           (clk),
+        .rst_n         (rst_n_core),
         .rx_data       (slip_rx_data),
         .rx_valid      (!rx_fifo_empty),
         .rx_pop        (slip_rx_pop),
@@ -267,8 +381,8 @@ module oca_uart_crypto #(
     logic        rsp_tvalid, rsp_tready, rsp_tlast;
 
     oca_core #(.BYTES (BYTES)) u_core (
-        .clk           (clk25),
-        .rst_n         (rst_n),
+        .clk           (clk),
+        .rst_n         (rst_n_core),
         .s_axis_tdata  (req_tdata),
         .s_axis_tkeep  (req_tkeep),
         .s_axis_tvalid (req_tvalid),
@@ -290,8 +404,8 @@ module oca_uart_crypto #(
     logic       tx_busy, tx_fifo_pop;
 
     oca_slip_tx u_slip_tx (
-        .clk           (clk25),
-        .rst_n         (rst_n),
+        .clk           (clk),
+        .rst_n         (rst_n_core),
         .s_axis_tdata  (rsp_tdata),
         .s_axis_tkeep  (rsp_tkeep),
         .s_axis_tvalid (rsp_tvalid),
@@ -303,8 +417,8 @@ module oca_uart_crypto #(
     );
 
     oca_fifo #(.WIDTH (8), .DEPTH (TX_DEPTH)) u_tx_fifo (
-        .clk      (clk25),
-        .rst_n    (rst_n),
+        .clk      (clk),
+        .rst_n    (rst_n_core),
         .wr_data  (tx_byte),
         .push     (tx_push),
         .full     (tx_fifo_full),
@@ -318,7 +432,7 @@ module oca_uart_crypto #(
     always_comb tx_fifo_pop = !tx_fifo_empty && !tx_busy;
 
     oca_uart_tx8 #(.DIV (DIV)) u_tx (
-        .clk  (clk25),
+        .clk  (clk),
         .data (tx_fifo_data),
         .send (tx_fifo_pop),
         .busy (tx_busy),
@@ -326,25 +440,14 @@ module oca_uart_crypto #(
     );
 
     // ------------------------------------------------------------------
-    // D2
+    // The sticky trouble latch
     // ------------------------------------------------------------------
-    logic                trouble;
-    logic [LED_BITS-1:0] beat;
-
-    always_ff @(posedge clk25 or negedge rst_n) begin
-        if (!rst_n) begin
+    always_ff @(posedge clk or negedge rst_n_core) begin
+        if (!rst_n_core) begin
             trouble <= 1'b0;
-            beat    <= '0;
-            led_n   <= 1'b1;
-        end else begin
-            beat <= beat + LED_BITS'(1);
-            if (rx_frame_error || rx_fifo_overflow || tx_fifo_overflow
-                || (|cnt_short) || (|cnt_long) || (|cnt_esc)) begin
-                trouble <= 1'b1;
-            end
-            // Active low, settled on the board 2026-08-11 by oca_blink's
-            // asymmetric duty cycle.
-            led_n <= ~(trouble ? beat[FAST] : beat[SLOW]);
+        end else if (rx_frame_error || rx_fifo_overflow || tx_fifo_overflow
+                     || (|cnt_short) || (|cnt_long) || (|cnt_esc)) begin
+            trouble <= 1'b1;
         end
     end
 

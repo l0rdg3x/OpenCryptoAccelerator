@@ -136,23 +136,107 @@ DESIGNS = {
             "oca_console.sv", "oca_uart_console.sv"],
         lpf="colorlight_i9_console.lpf",
     ),
-    # The AEAD core on the serial line: the first design here that puts
-    # crypto in a bitstream. The console's five modules with oca_console
-    # replaced by the two SLIP halves and the whole of oca_core, on the
-    # console's own four pins.
+    # The AEAD datapath on the serial line: the console's five modules
+    # with oca_console replaced by the two SLIP halves and the whole of
+    # oca_core. Built at its default CLK_HZ of 25 MHz.
+    #
+    # OUT OF CONTEXT SINCE THE PLL ARRIVED, and dropping the .lpf is not
+    # a preference. This module stopped being a board top when
+    # oca_crypto_pll took the clocking and the LED: its ports are now
+    # clk, rst_n, uart_tx, uart_rx, rst_n_core and trouble, while
+    # colorlight_i9_crypto.lpf constrains clk25 and led_n, which no
+    # longer exist here. nextpnr skips a LOCATE naming a cell that is
+    # not there without a word (ecp5/lpf.cc:144) and then fails on "IO
+    # clk is unconstrained in LPF" (ecp5/main.cc:287) — so keeping the
+    # line would not be a stale comment, it would be a target that
+    # cannot build. What this one measures now is the datapath alone,
+    # the way oca_core does; the pinned build is oca_crypto_pll below.
+    #
+    # It follows that this target no longer packs a bitstream and no
+    # longer has its timing checked: check_timing and pack both return
+    # early for a design with no .lpf. Both of those moved to
+    # oca_crypto_pll with the pins.
     "oca_uart_crypto": Design(
         sv=["oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
             "oca_slip_rx.sv", "oca_slip_tx.sv",
             "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
             "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
             "oca_core.sv", "oca_uart_crypto.sv"],
-        lpf="colorlight_i9_crypto.lpf",
         # oca_core alone is 4-10 minutes and its router time is the part
-        # that varies; this carries the same engine with pads and a
-        # 25 MHz constraint around it. 3600 leaves the bound doing its
-        # job on a stage that has stopped progressing without killing one
-        # that is merely large.
+        # that varies; this carries the same engine and the serial
+        # bridge on top of it. Kept at 3600 across the move out of
+        # context: the bound is here to stop a stage that has stopped
+        # progressing, not to predict this one.
         timeout=3600,
+    ),
+    # The crypto console on the PLL, and the board top of that pair:
+    # oca_clkrst and the whole of oca_uart_crypto on the console's four
+    # pins, with the datapath on clk_sys at 48.0769 MHz instead of on the
+    # 25 MHz pin. The heartbeat stays on clk25 and the reasons are
+    # oca_crypto_pll.sv's.
+    #
+    # ecp5_prims.sv and oca_clkrst.sv lead, in oca_pll's order and for
+    # oca_pll's reason: EHXPLLL is declared in the first of those so that
+    # all 36 of its parameters are in front of the frontend that
+    # elaborates the override (oca_clkrst.sv:40-50).
+    #
+    # THIS LIST AND hw/sim/run_crypto_pll.py's SOURCES ARE THE SAME LIST,
+    # which that file says in its own words: a suite that elaborates a
+    # different set of files from the one the bitstream is built from is
+    # a suite for a design nobody loads. Nothing enforces it, so the two
+    # move together by hand.
+    #
+    # colorlight_i9_crypto.lpf, shared rather than copied. This top's
+    # four ports are exactly the four that file constrains, on the same
+    # balls: the argument that earned oca_blink an .lpf of its own is
+    # about a design whose port set differs from the file's, which is not
+    # the case here, and two copies of one pin map drift apart while one
+    # file cannot. What that file must NOT gain is a FREQUENCY line for
+    # clk_sys. nextpnr derives that constraint from the PLL's own
+    # dividers (ecp5/pack.cc:2824), and where a net already carries a
+    # user constraint the derived one is discarded rather than applied
+    # (ecp5/pack.cc:2815-2822) — so an .lpf line naming clk_sys would
+    # replace the one number NETLIST_PLL_PARAMS below exists to make
+    # load-bearing with a number typed by hand.
+    "oca_crypto_pll": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv",
+            "oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_slip_rx.sv", "oca_slip_tx.sv",
+            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+            "oca_core.sv", "oca_uart_crypto.sv", "oca_crypto_pll.sv"],
+        lpf="colorlight_i9_crypto.lpf",
+        # 7200, and what separates it from oca_uart_crypto's 3600 is the
+        # constraint and not the size — the two netlists differ by 34
+        # registers. That 3600 was chosen for a build constrained at
+        # 25 MHz, a target its netlist cleared by 99%, so nothing in
+        # place or route was under any timing pressure at all; this one
+        # asks the same fabric for 48.0769 and puts that pressure on.
+        #
+        # Three figures sized this bound and NOT ONE of them is a
+        # measurement of this build. Router1 spent 1231 s on the pinned
+        # 25 MHz build of the RTL before the split — on congestion
+        # alone, which is worth stating because it means the slack
+        # margin there did NOT make that build cheap (seed 1,
+        # 2026-08-15; that log is overwritten by the next run of any
+        # target, so here is where it is written down). oca_dual's
+        # four-seed sweep put the spread between seeds at roughly 3.2x,
+        # which on 1231 s reaches 3900 before timing pressure is added.
+        # And how much that pressure adds is unknown. So this is a bound
+        # and not a prediction: what the build costs is measured by
+        # building it.
+        #
+        # It has been built since: four seeds on 2026-08-15, and all four
+        # finished -- sweep.sh stops on the first non-zero exit and a
+        # bound hit here returns 124, so four figures is four builds
+        # inside 7200. What any of them actually cost is known for one:
+        # only one log survives, run() and sweep.sh each reopening
+        # theirs, and the one in build/ is the seed-1 build taken after
+        # the sweep: Router1 time 108.11 s -- under a tenth of the
+        # 1231 s that sized this bound rather than the
+        # multiple that was feared. One seed is not the spread, and the
+        # spread is the part that varies, so the bound stays where it is.
+        timeout=7200,
     ),
     # The receive half of the console. J17 is settled; H18 is litex's
     # pairing and nothing more until a byte travels it, which is what an
@@ -305,15 +389,24 @@ NETLIST_FF_FLOOR = {
     # TRELLIS_RAMW of the resource table, so this floor guards the
     # pointer arithmetic and says nothing about the storage.
     #
-    # 31 for the top: the 25-bit heartbeat, the 4-bit power-on counter,
-    # the sticky `trouble` latch and led_n. Derived and measured, and
-    # they agree. This is the entry that holds LED_BITS at its default:
-    # the two heartbeat tests in hw/sim/test_uart_crypto.py can only run
-    # against a small counter, so what says the board's own counter is 25
-    # bits wide is this number and nothing else. One bit short is not a
-    # failure at the bench, it is a heartbeat at twice the rate -- which
-    # is the reading this design reserves for a link that has lost
-    # something.
+    # 6 for the top: the 4-bit power-on counter, the sticky `trouble`
+    # latch and the registered `rst_n_core`, which is everything this
+    # file still holds. rst_n_core is a register rather than a decode
+    # because it drives asynchronous resets, where a combinational
+    # all-ones aperture is a spurious reset release. It read 31 until
+    # the heartbeat moved to oca_crypto_pll.sv -- 25 bits of counter and
+    # led_n -- and with those went this entry's second job, holding
+    # LED_BITS at the board's 25. That duty did not lapse: it is the
+    # "oca_crypto_pll.sv" floor below, and it has to live somewhere,
+    # because hw/sim/run_crypto_pll.py elaborates the counter at 8 so
+    # that both rates fit in a run and no simulation anywhere sees the
+    # 25.
+    #
+    # 5 is derived, 31 was derived and measured together; the 26 between
+    # them is exactly what left. It has not been re-measured. Where a
+    # floor here is wrong it is wrong upwards, and that costs the
+    # synthesis and not the build: check_netlist runs before place &
+    # route and prints the census the correction comes from.
     #
     # 160 for the decoder, which is what the per-file census reads --
     # and it reads 160 in the standalone build too. THE 302 IN
@@ -343,7 +436,70 @@ NETLIST_FF_FLOOR = {
     "oca_uart_crypto": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
                         "oca_uart_rx.sv": 33, "oca_uart_tx8.sv": 22,
                         "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
-                        "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 31},
+                        "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 5},
+    # The same datapath under the PLL, and the differences from the entry
+    # above are the whole point of reading them side by side.
+    #
+    # THE TWO UART FLOORS EACH GAIN ONE BIT AND ONLY HERE. Both modules
+    # size their divisor counter as $clog2(DIV) (oca_uart_rx.sv:40,
+    # oca_uart_tx8.sv:32), and DIV is CLK_HZ/115200: 217 at the entry
+    # above, where $clog2 is 8, and 417 here, where it is 9. So the
+    # receiver goes 33 -> 34 and the transmitter 22 -> 23. Derived from
+    # the measured 33 and 22 rather than measured again, which is what
+    # makes them worth stating: a build of this top that censuses 33 and
+    # 22 has elaborated oca_uart_crypto at 25 MHz, and a UART whose
+    # divisor belongs to the wrong clock is a mute serial line that
+    # builds, packs and loads.
+    #
+    # 5 for oca_uart_crypto.sv, unchanged from the standalone build:
+    # neither the power-on counter nor `trouble` moves with CLK_HZ.
+    #
+    # 2 for oca_clkrst.sv, which is the system reset synchroniser and
+    # nothing else. That module holds thirty-odd registers and this top
+    # reads three of its outputs -- clk_sys, pll_locked, rst_n_sys -- so
+    # the transmit and receive synchronisers and the whole PHY reset
+    # timer are optimised away, exactly as they are in oca_pll, where the
+    # surviving pair is the transmit one instead and the census measured
+    # 2. It earns a floor for oca_pll's reason with the domains swapped:
+    # if rst_n_sys came out constant high the datapath would leave reset
+    # before the PLL had locked, on the first edges of a clock that is
+    # not yet at frequency.
+    #
+    # 32 for the top: 25 bits of heartbeat, led_n, and the three
+    # two-flop synchronisers that bring `trouble`, pll_locked and
+    # rst_n_core into clk25. The third one is what keeps the LED from
+    # reading "alive and clean" at a board whose CLKOS never ran, so a
+    # floor of 30 would pass the netlist this design exists to refuse.
+    # THIS IS THE FLOOR THAT HOLDS LED_BITS AT 25, inherited from
+    # oca_uart_crypto.sv's old 31. hw/sim/run_crypto_pll.py builds the
+    # counter at 8 because at 25 a half-period is 16.8 million clocks and
+    # no run can watch one, so nothing in simulation ever asserts the
+    # board's width. One bit short is not a dead LED at the bench, it is
+    # a heartbeat at twice the rate -- which is the reading this design
+    # reserves for a link that has lost something, or for a PLL that
+    # never locked.
+    #
+    # Every figure in this entry was derived before the target had ever
+    # been built. Two four-seed sweeps built it on 2026-08-15, the
+    # second after the reset and heartbeat corrections added three
+    # registers, and the census of that netlist confirms all ten:
+    # 2313, 3645, 34, 23, 22, 160, 75, 6, 2, 32.
+    # Nine sit exactly on their floor and stay there, which is what a
+    # derived figure earns here -- a legitimate reduction should fail and
+    # be re-measured. oca_proto.sv is the one with slack, 45 registers or
+    # 1.2%, for the reason its own entry above gives.
+    #
+    # THE PAIR WORTH READING TWICE IS 34 AND 23. Predicted from
+    # $clog2(417) = 9 where the standalone build has $clog2(217) = 8, and
+    # the census returns exactly that, so this entry does catch a top
+    # elaborated at 25 MHz. It does NOT catch 48.08 MHz confused with
+    # 56.82: $clog2 is 9 for both divisors, these floors read 34 and 23
+    # either way, and what separates them is check_clk_sys_const.
+    "oca_crypto_pll": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
+                       "oca_uart_rx.sv": 34, "oca_uart_tx8.sv": 23,
+                       "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
+                       "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 6,
+                       "oca_clkrst.sv": 2, "oca_crypto_pll.sv": 32},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
 }
@@ -371,14 +527,39 @@ NETLIST_FF_FLOOR = {
 #
 # oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
 NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
-                    # 12518 measured, floored ~1% under for the same
-                    # reason as oca_core: chacha20.sv, poly1305.sv and
-                    # chacha20_poly1305.sv carry 5683 of those registers
-                    # between them and yosys's attribution moves between
-                    # the three, so a per-file floor tight enough to
-                    # catch an accumulator vanishing would fail a healthy
-                    # build.
+                    # Floored ~1% under for the same reason as oca_core:
+                    # chacha20.sv, poly1305.sv and chacha20_poly1305.sv
+                    # carry 5683 of these registers between them and
+                    # yosys's attribution moves between the three, so a
+                    # per-file floor tight enough to catch an accumulator
+                    # vanishing would fail a healthy build.
+                    #
+                    # 12518 was the measurement, on the RTL before the
+                    # heartbeat left this module. The LED took 26
+                    # registers with it, so the figure to expect now is
+                    # 12492 -- DERIVED, NOT MEASURED, which is why the
+                    # floor stays where it was rather than being pulled
+                    # up behind it. Re-measure and tighten on the next
+                    # build of this target.
                     "oca_uart_crypto": 12400,
+                    # The same datapath plus 37 registers: 32 in the
+                    # new top, 2 surviving in oca_clkrst.sv, one bit each
+                    # on the two UART divisor counters and the core's
+                    # registered rst_n_core. 12526 was the prediction and
+                    # 12529 is the measurement: the reset and heartbeat
+                    # corrections of 2026-08-15 added three registers
+                    # after that prediction was written, and the census,
+                    # the yosys log and the nextpnr log all read 12529.
+                    #
+                    # The floor stays at 12400 now that it is a margin
+                    # under a measurement rather than under a prediction:
+                    # 126 registers, 1.0%, the same discipline as
+                    # oca_core's 11900 under 12033. Loose enough that the
+                    # optimiser moving a few registers does not fail a
+                    # healthy build, tight enough that the smallest thing
+                    # worth catching -- a few hundred registers, a key
+                    # store, an accumulator -- cannot hide under it.
+                    "oca_crypto_pll": 12400,
                     # Exact rather than a few percent under, because
                     # these two are new and small enough that every
                     # register in them is accounted for: the decoder's
@@ -407,6 +588,16 @@ NETLIST_PRIM_COUNT = {
     # exists mainly to reach check_pll, which is called from here and
     # cannot run for a top this table does not list.
     "oca_pll": {"EHXPLLL": 1},
+    # The board top of the crypto pair: the same one PLL, on a design
+    # where every register outside the heartbeat is clocked from it.
+    #
+    # The entry is what reaches check_pll and that is most of its value
+    # here. Without it check_prims prints a warning and returns 0, and
+    # check_prims is the only caller of check_pll — so a missing line in
+    # this table does not merely skip a cell census, it leaves the four
+    # dividers below unchecked, and with them the 48.0769 MHz that every
+    # throughput figure for this design divides into a cycle count.
+    "oca_crypto_pll": {"EHXPLLL": 1},
 }
 
 # The PLL exists is not the same claim as the PLL is the one the design
@@ -433,6 +624,61 @@ NETLIST_PLL_PARAMS = {
     # an untested second output nothing in this design consumes.
     "oca_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                 "CLKOS_DIV": 13},
+    # The same four, from the same instance: oca_crypto_pll instantiates
+    # the same oca_clkrst, whose localparams are CLKI_DIV 1, CLKFB_DIV 5,
+    # CLKOP_DIV 5, CLKOS_DIV 13 (oca_clkrst.sv:259-263, ecppll's own
+    # output transcribed in that file's header).
+    #
+    # WHY 48.0769 CAN ONLY BE CLKOS, which is what makes a checked
+    # CLKOS_DIV of 13 the thing this design turns on rather than a
+    # divider nobody reads. FEEDBK_PATH is "CLKOP", so the loop closes on
+    # CLKOP and pins it at the phase detector rate times CLKFB_DIV — an
+    # integer multiple of 25 MHz here, and oca_clkrst's own guard refuses
+    # anything but exactly 125. The VCO is that times CLKOP_DIV and the
+    # legal 400-800 MHz band leaves 500, 625 or 750. 48.0769 is not an
+    # integer multiple of 25 and cannot be CLKOP at all; it is 625/13 on
+    # the secondary output, and nothing else on that ladder is nearer.
+    #
+    # The consequence for this build in particular: nextpnr derives the
+    # clk_sys constraint from these parameters as they reach the netlist,
+    # so this is the target where a wrong CLKOS_DIV would move the
+    # constraint and the measurement together and check_timing would
+    # report a clean 48.08 against a clock that is not 48.08.
+    "oca_crypto_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                       "CLKOS_DIV": 13},
+}
+
+# The dividers being the ones this table names is still not the claim
+# that the design knows what frequency they produce.
+#
+# oca_clkrst keeps CLK_SYS_HZ as a localparam and exports no parameter to
+# read it from, so oca_crypto_pll.sv redoes that arithmetic by hand and
+# passes the result to oca_uart_crypto as CLK_HZ -- which is where the
+# UART divisor comes from, and the only thing in the design that decides
+# what a bit time is. Change the divider the supported way, editing
+# oca_clkrst.sv and NETLIST_PLL_PARAMS above together, and nothing
+# anywhere compares the new clock against that copy: EHXPLLL has no body,
+# so no simulation runs at the real frequency; the flip-flop floors see
+# the divisor only through $clog2(DIV), which does not move between
+# 48.08 MHz and 56.82 MHz; and the elaboration guard in
+# oca_uart_crypto.sv checks the copy against itself. The result builds,
+# meets timing, packs, loads, and answers nobody.
+#
+# So the copy is checked here, against the frequency the netlist's own
+# dividers give. Read out of the RTL because it is not in the netlist to
+# read: it is a localparam, synth_ecp5 flattens the hierarchy, and the
+# top module's parameter_default_values in build/oca_crypto_pll.json is
+# empty.
+#
+# A top mapped to None declares no such constant and needs none: oca_pll
+# blinks an LED off CLKOP and consumes clk_sys nowhere, so it holds no
+# frequency that can disagree. Listed rather than left out, so that a top
+# which grows a PLL and is forgotten here gets the warning below instead
+# of a silent pass -- the same hole that was closed one level up when a
+# missing NETLIST_PLL_PARAMS entry stopped meaning "checked".
+TOP_CLK_SYS_CONST = {
+    "oca_pll": None,
+    "oca_crypto_pll": ("oca_crypto_pll.sv", "CLK_SYS_HZ"),
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
@@ -444,10 +690,10 @@ DEFAULT_SPEED = 6
 # is the point: a build that has produced nothing after this long has not
 # produced anything by carrying on either.
 #
-# It is not generous enough for every design here: oca_uart_crypto
-# records a bound of its own. A design that needs longer states it in
-# DESIGNS, the way it states its seed, so naming the target is enough to
-# reproduce its figures.
+# It is not generous enough for every design here: oca_dual,
+# oca_uart_crypto and oca_crypto_pll each record a bound of their own. A
+# design that needs longer states it in DESIGNS, the way it states its
+# seed, so naming the target is enough to reproduce its figures.
 DEFAULT_TIMEOUT = 1800
 
 
@@ -602,11 +848,56 @@ def live_ff_census(top, netlist):
     return census, total
 
 
+def check_clk_sys_const(top, clk_sys):
+    """Fail unless the top's copy of clk_sys is the clock the PLL makes.
+
+    See TOP_CLK_SYS_CONST. clk_sys comes from the netlist's dividers;
+    this is the only reader of the number the RTL was elaborated with.
+    """
+    if top not in TOP_CLK_SYS_CONST:
+        print(f"WARNING: {top} has checked PLL dividers and no "
+              f"TOP_CLK_SYS_CONST entry — nothing compared the clock they "
+              f"produce against the frequency this design believes it runs "
+              f"at. Not fatal: add an entry, or None if this top derives "
+              f"nothing from clk_sys.", file=sys.stderr)
+        return 0
+    entry = TOP_CLK_SYS_CONST[top]
+    if entry is None:
+        return 0
+    src, name = entry
+    path = RTL / src
+    m = re.search(rf"^\s*localparam\s+int\s+{name}\s*=\s*([\d_]+)\s*;",
+                  path.read_text(), re.M)
+    if m is None:
+        # Not a skip. This table names the constant, so failing to find
+        # it means it was renamed, moved or made an expression, and
+        # returning "no opinion" would retire the check without a word.
+        sys.exit(f"{path}: no `localparam int {name} = <literal>;` for "
+                 f"run_synth.py to check the PLL against. If it moved, move "
+                 f"TOP_CLK_SYS_CONST with it.")
+    declared = int(m.group(1).replace("_", ""))
+    status = "ok" if declared == clk_sys else "FAILED"
+    print(f"  {name:<10} {declared} Hz in {src} "
+          f"(netlist gives {clk_sys}) — {status}")
+    if declared != clk_sys:
+        print(f"\n{src} believes clk_sys is {declared} Hz and the netlist's "
+              f"PLL makes {clk_sys} Hz. That constant is what reaches "
+              f"oca_uart_crypto as CLK_HZ, so the UART divisor belongs to a "
+              f"clock this board does not run: a bitstream that builds, "
+              f"meets timing, packs, loads and answers nobody.\nEdit "
+              f"whichever of the two is wrong — the divider in "
+              f"oca_clkrst.sv with NETLIST_PLL_PARAMS, or the copy in "
+              f"{src}.", file=sys.stderr)
+        return 1
+    return 0
+
+
 def check_pll(top, params):
     """Fail unless the mapped PLL is the one this design describes.
 
     See NETLIST_PLL_PARAMS. Also prints the clocks the netlist implies,
-    which is the reading colorlight_i9.lpf asks a human to do by hand.
+    which is the reading colorlight_i9.lpf asks a human to do by hand,
+    and hands clk_sys to check_clk_sys_const.
     """
     want = NETLIST_PLL_PARAMS.get(top)
     if not want:
@@ -642,12 +933,16 @@ def check_pll(top, params):
               "parameters, so timing would still report ok against the wrong "
               "clock.", file=sys.stderr)
         return rc
-    pfd = PLL_INPUT_HZ / got["CLKI_DIV"]
+    # Integer division throughout, mirroring oca_clkrst.sv:267-270: those
+    # localparams are `int`, so the frequency the RTL computes -- and the
+    # constant hand-copied from it -- is truncated and not rounded. The
+    # print keeps the full quotient, which is the reading a person does.
+    pfd = PLL_INPUT_HZ // got["CLKI_DIV"]
     clk_tx = pfd * got["CLKFB_DIV"]
     vco = clk_tx * got["CLKOP_DIV"]
     print(f"  -> VCO {vco / 1e6:.2f} MHz, clk_tx {clk_tx / 1e6:.4f} MHz, "
           f"clk_sys {vco / got['CLKOS_DIV'] / 1e6:.4f} MHz")
-    return 0
+    return check_clk_sys_const(top, vco // got["CLKOS_DIV"])
 
 
 def check_prims(top, netlist):
