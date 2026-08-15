@@ -25,9 +25,11 @@ guess:
 - 8422 / 43848 = 19.21%, and 43848 is the device's `TRELLIS_COMB`
   capacity as nextpnr reports it. Every other LUT percentage in this
   project divides by the same number: 13043/43848 = 29.7% for
-  `oca_uart_crypto`, 24602/43848 = 56.1% for `oca_dual`, 41446/43848 =
-  94.5% for the two-cores-two-ports row. `oca/hw/syn/README.md:957`
-  heads the column `TRELLIS_COMB | of 43848` outright.
+  `oca_uart_crypto`, 24602/43848 = 56.1% for `oca_dual` (both on yosys
+  `41a4b5a03`; on `f77ddfb87` they read 13030 and 24621 and round the
+  same), 41446/43848 = 94.5% for the two-cores-two-ports row.
+  `oca/hw/syn/README.md:957` heads the column
+  `TRELLIS_COMB | of 43848` outright.
 - `docs/design/2026-08-05-ethernet-integration.md:183-186` quotes an
   **Fmax** beside the variant figure — "Fmax falls from 81 to 72.9 MHz"
   for `UDP_CHECKSUM_GEN_ENABLE=0`. yosys `stat` produces no Fmax.

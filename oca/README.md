@@ -214,7 +214,8 @@ then the overlap inside a command, then the overlap across packets. The
 Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
 multipliers (90% -> 28% of an LFE5U-45F) and
 more than doubled the standalone Poly1305 Fmax (22.94 -> 52.68 MHz as
-measured on the day; 55.41 MHz rebuilt on today's netlist, which has had
+measured on the day; 55.41 MHz rebuilt 2026-08-12 and 54.83 on yosys
+`f77ddfb87`, on a netlist which has had
 its secret registers cleared on reset since — `hw/syn/README.md`). The
 ChaCha20 round-per-cycle rework then raised its standalone Fmax
 28.66 -> 53.11 MHz, so the two cores are now balanced, and AEAD Fmax
@@ -261,8 +262,9 @@ engines are worth depends on how
 they are wired to the ports, and `oca_dual` gives each core its own
 AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
 56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
-48.89 MHz mean through the measured cycle model, 1031 cycles for an
-MTU-sized packet. That mean is an out-of-context Fmax and no PLL divider
+48.89 MHz mean on yosys `41a4b5a03` through the measured cycle model,
+1031 cycles for an MTU-sized packet; on `f77ddfb87` that pair means
+49.61 MHz and the same model gives 0.577 / 1.155. That mean is an out-of-context Fmax and no PLL divider
 produces it, so read these as cycle budgets: at the 48.0769 MHz
 `oca_clkrst` delivers they are 0.560 per port. Both PHYs can be fed in cycle budget — whether two
 MACs fit beside the cores is settled below, and they do not — and
@@ -276,7 +278,9 @@ LUTs measured (19.2% of the device), so two cores with two ports would
 take 94.5%, and two cores behind one port 75.3% against the 76.4% at
 which this device stopped routing above. The configuration that fitted
 the RTL was **one core on one port, 0.581 Gbps at MTU** — one core
-alone means the single core's own 49.91 MHz mean, not the pair's. That
+alone means the single core's own 49.91 MHz mean on yosys `41a4b5a03`,
+not the pair's; on `f77ddfb87` that mean is 49.77 and the same model
+gives 0.579. That
 clock was measured on the core placed **alone and out of context**: no
 MAC beside it, no IO, no PLL, so it is the ceiling that configuration
 could reach rather than a measurement of it. **That netlist was
@@ -310,12 +314,14 @@ are interchangeable here. Its
 datapath is **64 bits end to end inside `oca_core`**, which is the sixth
 rework and the one that made the protocol layer stop being the limit.
 
-As committed, `oca_core` synthesises to **12308 LUTs (28.1%), 12033 FF
-(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **49.91 MHz
-mean over four seeds** (47.93 / 50.91 / 51.03 / 49.76, measured
-2026-08-09, spread 6.5%) — reproducible with `hw/syn/run_synth.py
-oca_core`, and re-measured because this read 11590 / 12043 / 48.52 MHz,
-which was the build from before the secret zeroisation. That netlist has a
+As committed, `oca_core` synthesises to **12330 LUTs (28.1%), 12033 FF
+(27.4%), 20 MULT18X18D (27.8%) and 4 DP16KD (3.7%)** at **49.77 MHz
+mean over four seeds** (50.12 / 48.74 / 48.61 / 51.62, measured
+2026-08-15 on yosys `f77ddfb87`, spread 6.2%) — reproducible with
+`hw/syn/run_synth.py oca_core`. On the previous pin the same sweep gave
+12308 and 49.91 mean, so the toolchain bump moved the area by 0.2% and
+the clock by less than a fifth of one seed's spread; before the secret
+zeroisation it read 11590 / 12043 / 48.52 MHz. That netlist has a
 working key store in it; the 11429 / 11228 / 51.71 MHz figures below,
 and every earlier area figure in this file, were measured before the
 `cmp2lut` defect was found, when `oca_keystore.sv` was being deleted
@@ -362,7 +368,8 @@ pair,
 two cores are 155 MB/s = **~1.24 Gbps** — but that is the two of them
 added together, and `oca_dual` wires them to two ports, one core each.
 One port therefore sees one core, **0.569 Gbps at a 1500-byte MTU** on
-the committed pair's clock, and is not saturated. **Read the aggregate
+the committed pair's clock as it read on yosys `41a4b5a03`, and is not
+saturated. **Read the aggregate
 as a cycle budget, not as a port cleared** — and the per-port figure the
 same way, since that clock is an Fmax the PLL cannot deliver: 625/13 =
 48.0769 MHz gives 0.560. The 48.53 MHz and the 22891 LUTs (52.2%), 40 multipliers

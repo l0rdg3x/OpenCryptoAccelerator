@@ -1,11 +1,20 @@
 # yosys patches
 
-Local patches to the project's yosys build (`tools/src/yosys`).
-`scripts/build-toolchain.sh` applies them as it fetches, and `git apply`
-from that directory does it by hand. `tools/` is not committed, so a
-toolchain built any other way has none of these — both that script and
-`run_synth.py` probe for the ones that matter and refuse to run without
-them.
+**There are none, and this directory is kept for the record below.**
+
+This project carried one local patch to `tools/src/yosys` between
+2026-08-04 and 2026-08-15. It fixed a mis-compilation that silently
+deleted the key store, it was reported upstream as YosysHQ/yosys#6085,
+and it landed upstream unchanged as PR #6114 on 2026-08-14 — the
+merged `techlibs/common/cmp2lut.v` is byte-identical to what the patch
+produced. The pin moved to `f77ddfb87` the next day and the patch file
+was deleted; `scripts/build-toolchain.sh` no longer applies anything.
+
+What did not go away is the probe. Both that script and `run_synth.py`
+still refuse a toolchain that fails the behavioural check, because the
+thing that must hold is the mapping, not the revision number.
+
+The rest of this file is what was reported and why. It is a record.
 
 ## yosys-cmp2lut-signed-negative-constant.patch
 
@@ -27,8 +36,13 @@ near misses are not this: #6063 is `alumacc` folding a signed compare
 with an unsigned subtract, #3187 is an unsigned Nexus/ccu2 compare.
 
 `techlibs/common/cmp2lut.v` is read at run time, so an already-built
-yosys is fixed by copying the patched file over
-`tools/yosys/share/yosys/cmp2lut.v` — no rebuild needed.
+yosys that fails the probe is fixed by copying a correct file over
+`tools/yosys/share/yosys/cmp2lut.v` — no rebuild needed. The patch file
+is gone, but the file it produced is not: copy
+`tools/src/yosys/techlibs/common/cmp2lut.v` from the pinned source
+(`f77ddfb87`, which carries the upstream fix). The patch itself is
+recoverable from git history: it was deleted from this directory when
+the pin moved, so `d427da5` is the last commit that carries it.
 
 Background and blast radius: `../README.md`, "The cmp2lut trap".
 

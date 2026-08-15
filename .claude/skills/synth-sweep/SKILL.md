@@ -11,21 +11,30 @@ A single seed cannot distinguish a real change from placer noise. On
 this script's own definition of spread, `(max-min)/min`, the pinned
 toolchain gives:
 
-- **`oca_dual` (a pair): 4.8%**, four seeds (50.37 / 48.12 / 48.05 /
-  49.03 MHz) on the netlist committed today, secret zeroisation
-  included, measured 2026-08-05 in `d4ee09f` (`AGENTS.md`, "Two cores
-  measured", which carries what is known about the 2026-08-09
-  re-check). This file cited 4.8% before too, and it was a different
-  measurement that rounds the same way: five seeds of a single
-  pre-zeroisation core, 47.48 to 49.76 MHz.
-- **`oca_core` (a single core): 6.5%**, four seeds (47.93 / 50.91 /
-  51.03 / 49.76 MHz, mean 49.91) on the netlist committed today,
-  measured 2026-08-09 (`oca/hw/syn/README.md`, "Where the committed
-  design stands").
+- **`oca_dual` (a pair): 7.3%**, four seeds (50.41 / 51.18 / 47.68 /
+  49.19 MHz, mean 49.61) on the netlist committed today, secret
+  zeroisation included, measured 2026-08-15 on yosys `f77ddfb87`
+  (`AGENTS.md`, "Two cores measured"). On the previous pin `41a4b5a03`
+  the same sweep spread 4.8% (50.37 / 48.12 / 48.05 / 49.03, mean
+  48.89), measured 2026-08-05 in `d4ee09f`.
+- **`oca_core` (a single core): 6.2%**, four seeds (50.12 / 48.74 /
+  48.61 / 51.62 MHz, mean 49.77) on the netlist committed today,
+  measured 2026-08-15 on yosys `f77ddfb87` (`oca/hw/syn/README.md`,
+  "Where the committed design stands"). On `41a4b5a03` the same sweep
+  spread 6.5% (47.93 / 50.91 / 51.03 / 49.76, mean 49.91), measured
+  2026-08-09.
 
-One four-seed draw of each is not enough to say a single core spreads
-wider than a pair as a property of the designs, so read those two
-numbers as what each sweep measured, not as a rule.
+The order of those two reversed with the toolchain bump. The pair used
+to be the tighter of the two and is now the wider, which is the point:
+one four-seed draw of each cannot order them as a property of the
+designs. Read every number here as what that sweep measured, not as a
+rule.
+
+The 4.8% above is `oca_dual` on the old pin, and it is not the only
+4.8% in this repository: `oca/hw/syn/README.md` records a different
+measurement that rounds the same way, five seeds of a single core
+before zeroisation, 47.48 to 49.76 MHz. Check which one a figure came
+from before quoting it.
 
 Readings in both directions inside these bands have already been
 mistaken for signal. So the unit of measurement here is a sweep, not a

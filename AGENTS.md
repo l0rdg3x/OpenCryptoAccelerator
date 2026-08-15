@@ -44,7 +44,7 @@ oca/                        the code
 tools/                      local tool builds — NOT committed
   verilator/                Verilator 5.050 install (built from source, branch stable)
   help2man/                 help2man install (needed to build Verilator)
-  yosys/                    yosys 0.67+ install (CMake build, slang frontend)
+  yosys/                    yosys 0.68+ install (CMake build, slang frontend)
   trellis/                  prjtrellis install (ECP5 database + ecppack)
   nextpnr/                  nextpnr-ecp5 install (45k chipdb only)
   eigen/                    Eigen 3.4.0 headers (nextpnr analytic placer)
@@ -137,7 +137,9 @@ asynchronous FIFO is needed between the MAC and the UDP stack.)
 - **No system-wide installs without explicit permission.** Everything
   lives under this directory (`tools/`, `oca/.venv/`).
 - The whole toolchain is built by `scripts/build-toolchain.sh`, pinned to
-  the exact revisions every number in this repository was measured on:
+  exact revisions — the ones it builds today, which since the yosys bump
+  of 2026-08-15 are no longer the ones every number in this repository
+  was measured on (`oca/hw/syn/README.md`, "Results"):
 
   ```sh
   scripts/build-toolchain.sh --check   # what is present, and probe yosys
@@ -154,20 +156,25 @@ asynchronous FIFO is needed between the MAC and the UDP stack.)
   `export(PACKAGE Eigen3)` writes at configure time and nothing removes
   — it points into `tools/src/eigen/build` and outlives it.
 
-- `tools/` is gitignored, so the script and the patch beside it are the
-  only record of how to get one. **A yosys built without
-  `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
-  silently deletes the key store from the netlist** — the script applies
-  it, and `--check` proves the result with the same behavioural probe
-  `run_synth.py` refuses to synthesise without: `$signed(a) >= -8` is a
-  tautology and must map to an all-ones LUT. `techlibs/common/cmp2lut.v`
-  is read at run time from `tools/yosys/share/yosys/`, so an
-  already-built yosys is repaired by copying the patched file there, no
-  rebuild.
+- `tools/` is gitignored, so the script is the only record of how to get
+  one. **A yosys older than `f77ddfb87` silently deletes the key store
+  from the netlist**: it mis-maps a signed comparison against a negative
+  constant, which is what this project's index bounds checks are. That
+  was carried as a local patch here until 2026-08-15 and is now upstream
+  (PR #6114). Both `--check` and `run_synth.py` still prove the result
+  with a behavioural probe rather than trusting the pin: `$signed(a) >=
+  -8` is a tautology and must map to an all-ones LUT.
+  `techlibs/common/cmp2lut.v` is read at run time from
+  `tools/yosys/share/yosys/`, so a stale copy there defeats a correct
+  build and is repaired by copying the source file over it, no rebuild.
 
 - Pins, for reference: help2man 1.49.3, Verilator `3d2421f3` (v5.050),
-  Eigen `3147391d` (3.4.0), prjtrellis `56bb1704`, yosys `41a4b5a0`
-  (0.67+), nextpnr `89454078`, openFPGALoader `85be4fa0` (v1.1.1),
+  Eigen `3147391d` (3.4.0), prjtrellis `56bb1704`, yosys `f77ddfb87`
+  (0.68+, with submodules abc `0bd9c3ea`, slang `e222e7dc` and sv-elab
+  `ce388355` at `frontends/slang/lib`, which is what implements
+  `read_slang` — all three pinned by the yosys revision and moved by a
+  rebuild with it),
+  nextpnr `89454078`, openFPGALoader `85be4fa0` (v1.1.1),
   cocotb `82d0eed5`. cocotb comes from git because its PyPI releases
   (<= 2.0.1) reject Python >= 3.14, and it is pinned to a commit rather
   than `@master`, which drifts under the pin without saying so.
@@ -443,16 +450,17 @@ core and never updated as the design grew by 3000 LUTs.
   mutation. Cost one confusing debug session on 2026-08-03.
 - **A green simulation says nothing about the netlist.** Verilator
   elaborates the SystemVerilog directly and never runs yosys, so a
-  synthesis bug is invisible to every suite we have. Stock yosys
-  (0.67+, and upstream `main` as of 2026-08-04) mis-maps signed
-  comparisons against negative constants in
+  synthesis bug is invisible to every suite we have. Yosys before
+  `f77ddfb87` mis-maps signed comparisons against negative constants in
   `techlibs/common/cmp2lut.v`, which `synth_ecp5` runs unconditionally;
   it deleted the entire key store from `oca_core` — 2048 key bits, 8
   loaded bits — while all 72 tests stayed green and the build reported
-  success. Fixed by
-  `hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`, which
-  **must be applied to any freshly built yosys**; `run_synth.py` probes
-  for the defect and refuses to run without it. The lesson generalises:
+  success. Reported as YosysHQ/yosys#6085 on 2026-08-05, carried here as
+  a local patch, and fixed upstream by PR #6114 merged 2026-08-14; the
+  pin moved to it on 2026-08-15 and the patch is gone. **The probe is
+  not**: `run_synth.py` still refuses to synthesise on a toolchain that
+  fails it, because what has to hold is the behaviour, not the revision
+  number. The lesson generalises:
   whenever correctness depends on something only synthesis decides,
   assert it against the netlist in `NETLIST_FF_FLOOR`, because no test
   in `hw/sim/` can. Cost the MVP bitstream; see `hw/syn/README.md`.
@@ -557,7 +565,8 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   baseline), for +799 LUTs standalone / +487 in the engine and one
   flip-flop. (Both Fmax figures are of that day and neither is current:
   `3e4619e` later took this core to one datapath at 52.09 seed 1 / 52.76
-  mean, and Poly1305 rebuilt today gives 55.41. Nothing has rebuilt the
+  mean, and Poly1305 rebuilt gives 55.41 on 2026-08-12 and 54.83 on
+  yosys `f77ddfb87`. Nothing has rebuilt the
   two together, so **no ordering between them is claimed**.) A 64-byte block now costs **57 cycles** (measured), so
   throughput is **~0.34 Gbps**: above the ~0.28 Gbps of the previous
   state, still **28% below the ~0.47 Gbps baseline** — Fmax gained 41%
@@ -638,8 +647,10 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   (`BOM-MVP.md`) and
   `oca_dual` wires the two engines as two independent AXI-Stream pairs,
   one per core — so this is **0.569 Gbps per port at a 1500-byte MTU,
-  1.138 Gbps aggregated across both** on the committed pair's 48.89 MHz,
-  and **neither port is saturated**. That 48.89 is an out-of-context
+  1.138 Gbps aggregated across both** on the committed pair's 48.89 MHz
+  as it read on yosys `41a4b5a03`, and **neither port is saturated**.
+  On `f77ddfb87` that pair means 49.61 MHz and the same formula gives
+  0.577 / 1.155. That 48.89 is an out-of-context
   Fmax and no PLL divider produces it; the two-core bullet below gives
   the clock a pinned build gets. Both PHYs can be fed in cycle
   budget; whether two MACs
@@ -682,15 +693,25 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   `test_partial_keep_mid_packet_fails_closed` sends a short beat before
   `tlast` and asserts status 05 with `cnt_drop` unmoved — a length
   error is not a header drop.
-- **`oca_core` as committed: 12308 LUTs (28.1%), 12033 FF (27.4%), 20
-  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, and **Fmax 47.93 / 50.91 /
-  51.03 / 49.76, mean 49.91 MHz** over four placer seeds (measured
-  2026-08-09; area identical on all four, as it must be). The figures
-  `run_synth.py oca_core` reproduces today, on a netlist whose key
-  store is present (see the `cmp2lut` bullet below). The spread is
-  **6.5%** — wider than the pair's 4.8%, which is why a single seed
-  from this design settles nothing. This entry carried only seed 1
-  (47.93) until the sweep was run.
+- **`oca_core` as committed: 12330 LUTs (28.1%), 12033 FF (27.4%), 20
+  MULT18X18D (27.8%), 4 DP16KD (3.7%)**, and **Fmax 50.12 / 48.74 /
+  48.61 / 51.62, mean 49.77 MHz** over four placer seeds (measured
+  2026-08-15 on yosys `f77ddfb87`; area identical on all four, as it
+  must be). The figures `run_synth.py oca_core` reproduces today, on a
+  netlist whose key store is present (see the `cmp2lut` bullet below).
+  The spread is **6.2%**, against the pair's 7.3% on the same pin — both
+  wide enough that a single seed from either settles nothing, and one
+  four-seed draw of each is not enough to order them as a property of
+  the designs. This entry carried only seed 1 until the first sweep was
+  run.
+
+  **The 2026-08-15 yosys bump did not move this design's mean
+  materially.** On
+  `41a4b5a03` the same sweep read 12308 LUTs and 47.93 / 50.91 / 51.03
+  / 49.76, mean 49.91 MHz, spread 6.5%. Area went up by 22 LUTs, 0.2%,
+  and the mean fell by 0.14 MHz — a twentieth of the spread, which is
+  to say nothing at all. Both readings are four-seed sweeps, so they
+  are comparable; neither is a single seed.
 
   **What secret zeroisation cost**, measured seed 1 against the same
   toolchain, one step at a time from 11590 / 12043 / 48.52 MHz:
@@ -782,9 +803,11 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   which makes every figure below a cycle budget, since the clock in
   question is an Fmax and `oca_clkrst`'s PLL delivers 625/13 =
   48.0769 MHz whatever an out-of-context build reaches. On
-  the committed pair (48.89 MHz mean, below) one core per port is
+  the committed pair (48.89 MHz mean on yosys `41a4b5a03`, below) one
+  core per port is
   **0.569 Gbps at a 1500-byte MTU — 56.9% of line rate — and 0.226 Gbps
-  on 64-byte packets**, with 1.138 Gbps aggregated across both ports.
+  on 64-byte packets**, with 1.138 Gbps aggregated across both ports;
+  on `f77ddfb87`'s 49.61 MHz the same model gives 0.577 / 0.229 / 1.155.
   Neither port is saturated. (This read 0.561 / 0.222 / 1.121 until
   2026-08-09: those are the same formula at 48.16 MHz, the
   pre-zeroisation pair, left standing when the clock above was
@@ -795,16 +818,28 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   that core can use it.
 
   **With the secret zeroisation merged — the pair as committed — four
-  seeds give 24602 LUTs (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8
-  DP16KD, Fmax 50.37 / 48.12 / 48.05 / 49.03, mean 48.89 MHz**
-  (spread 4.8%), measured 2026-08-05 in `d4ee09f`. The 2026-08-09 audit
-  reports re-running all four and getting them exactly; what survives
-  in `hw/syn/build/` is the last of them, `oca_dual.report.json` at
-  02:22 that day reading 49.029 MHz, which matches seed 4. That is
-  +1411 LUTs over the
-  pre-zeroisation pair — 705 per core, against the 718 measured on one
-  core alone — and the clock is 1.5% *better*, which is inside the seed
-  spread and means the zeroisation costs area and not time.
+  seeds give 24621 LUTs (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8
+  DP16KD, Fmax 50.41 / 51.18 / 47.68 / 49.19, mean 49.61 MHz**
+  (spread 7.3%), measured 2026-08-15 on yosys `f77ddfb87`.
+
+  On the previous pin `41a4b5a03` the same sweep read 24602 LUTs and
+  50.37 / 48.12 / 48.05 / 49.03, mean 48.89 MHz, spread 4.8%, measured
+  2026-08-05 in `d4ee09f`; the 2026-08-09 audit re-ran all four and got
+  them exactly. Area moved by 19 LUTs and the mean by +1.5%, which is
+  inside either spread. **Of the three the spread moved furthest**,
+  4.8% to 7.3%: still under the 8% at which
+  `.claude/skills/synth-sweep` says to treat placement difficulty as
+  the finding, but half again as wide, on the densest design here — and
+  four seeds on each pin measure those two draws, not a property of the
+  design.
+
+  Against the pre-zeroisation pair, both measured on `41a4b5a03`, the
+  zeroisation cost +1411 LUTs — 705 per core, against the 718 measured
+  on one core alone — and the clock was 1.5% *better*, inside the seed
+  spread, so it cost area and not time. That comparison is left on the
+  toolchain it was taken on: the pre-zeroisation netlist has never been
+  built on `f77ddfb87` and re-deriving it from the 24621 above would
+  compare two different mappers.
 
   **And one Ethernet port costs 8422 LUTs, 19.2% of the device**,
   measured out-of-context on this toolchain rather than estimated:
@@ -840,8 +875,10 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   sums of the same kind and neither has been built, so they are
   estimates of unknown tightness in the same direction. **The one
   configuration that fitted was one core on one port, 0.581 Gbps at
-  MTU** — the single core's own mean of 49.91 MHz through the same cycle
-  model, 58.1% of line rate, 0.230 Gbps on 64-byte packets. That clock is
+  MTU** — the single core's own mean of 49.91 MHz on yosys `41a4b5a03`
+  through the same cycle model, 58.1% of line rate, 0.230 Gbps on
+  64-byte packets; on `f77ddfb87`'s 49.77 the same model gives 0.579 and
+  0.230. That clock is
   the core placed **alone and out of context**: no MAC beside it, no IO,
   no PLL, so it is the ceiling that configuration could reach and not a
   measurement of it. It stopped being a target on 2026-08-12, when the
@@ -935,13 +972,16 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   false, so all 2048 key bits and 8 loaded bits were optimised away and
   a bitstream would have answered "bad slot" to every seal and open.
   Not a regression — synthesising `95c81f7` shows the same key store
-  already dead, as 2056 self-holding registers. Fixed by
-  `oca/hw/syn/patches/yosys-cmp2lut-signed-negative-constant.patch`
-  (reported upstream 2026-08-05 as YosysHQ/yosys#6085, its text kept in
-  `oca/hw/syn/patches/README.md`); `run_synth.py` now refuses an
-  unpatched toolchain and asserts the key store's storage against the
+  already dead, as 2056 self-holding registers. Fixed by a local patch
+  carried here from 2026-08-04 in `bf3930f`, reported upstream the next
+  day as YosysHQ/yosys#6085 (its text kept in
+  `oca/hw/syn/patches/README.md`), and landed upstream unchanged as
+  PR #6114 on 2026-08-14; the pin moved to `f77ddfb87` on 2026-08-15
+  and the patch went with it. `run_synth.py` still refuses a toolchain
+  that fails the probe and asserts the key store's storage against the
   netlist, and `run_keystore_gate.py` replays the key store tests on the
-  synthesised netlist — 2 of its 4 fail without the patch. The same net
+  synthesised netlist — 2 of its 4 fail on a yosys older than
+  `f77ddfb87`. The same net
   now covers `oca_proto` as well: a floor of 3600 live flip-flops
   attributed to it (3645 measured, and `check_netlist` prints the census
   per file so the number can be re-measured), and `run_proto_gate.py`
@@ -1308,8 +1348,9 @@ long to serve as one — which is why the tracker exists as of 2026-08-12.
   ICMP fix, and it no longer exists. The design that demonstrated the
   passing side was `oca_top_stub`, 163854 bytes, carrying no crypto and
   no MAC. Both were deleted on 2026-08-12; the design that packs a
-  bitstream with crypto in it is `oca_uart_crypto`, 423213 bytes, and it
-  reaches the host over the serial line instead.
+  bitstream with crypto in it is `oca_uart_crypto`, 423971 bytes on
+  yosys `f77ddfb87` and 423213 on `41a4b5a03`, and it reaches
+  the host over the serial line instead.
 
   **The whole path was tested, and testing it found a defect that would
   have killed the board.** `run_oca_path.py` (7 tests) generated a
