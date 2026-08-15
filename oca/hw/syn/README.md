@@ -31,7 +31,7 @@ the post-synthesis netlist and the nextpnr JSON report.
   inserted and the design is placed as a locked macro. Those numbers
   characterise the core itself. A design that carries an `.lpf`
   (`oca_blink`, `oca_pll`, `oca_vccio`, `oca_uart_probe`,
-  `oca_uart_echo`, `oca_uart_console`, `oca_uart_crypto`) is built
+  `oca_uart_echo`, `oca_uart_console`, `oca_crypto_pll`) is built
   against the real pin map instead, with IO, the PLL where it has one,
   and its own clock constraints. That list read `oca_top_stub`,
   `oca_top_mac`, `oca_top` until 2026-08-12, when the Ethernet route's
@@ -208,7 +208,9 @@ it and dated, never written over the old one.
 not the only thing between them and the tree.** Five designs were
 measured on both pins and moved by at most 0.2% in area — `oca_core`
 12308 to 12330, `oca_dual` 24602 to 24621, `oca_uart_crypto` 13043 to
-13030, `poly1305` unchanged in area (the 2026-08-14 rebuild recorded
+13030 (that netlist, before it lost its heartbeat counter to
+`oca_crypto_pll` on 2026-08-15), `poly1305` unchanged in area (the
+2026-08-14 rebuild recorded
 below), and `chacha20` unchanged too — 3250 TRELLIS_COMB and 1419
 TRELLIS_FF on both pins, seed 1, its RTL untouched since `8dd9cab` on
 2026-08-04, so it is the one design here whose two readings differ in
@@ -983,7 +985,10 @@ them. This
 is a simulation-derived estimate of a design that has never been
 programmed into a device. (The MAC and the RGMII wrapper were deleted on
 2026-08-12 and no build will ever place them beside this core; what
-carries it on silicon is `oca_uart_crypto`, one clock domain and no PLL.)
+carries it on silicon is `oca_crypto_pll`, one clock domain on a PLL at
+48.0769 MHz, with the heartbeat left on the 25 MHz reference so a PLL
+that never locks still has a way to say so. It was `oca_uart_crypto` at
+25 MHz and no PLL until 2026-08-15.)
 
 **One stale figure was left in the RTL by this pass and has since been
 corrected.** The header comment of `oca_pktbuf.sv` carried the plan's
@@ -1632,6 +1637,90 @@ seed stay scoped to the four seeds that measured it.
 The cycle side is measured and does not depend on any of that: a
 64-byte block costs **40 cycles** end to end through `oca_core`, exactly
 linear (231, 391, 551, 711 cycles for 4, 8, 12, 16 blocks).
+
+### The board top, pinned: oca_crypto_pll on the PLL, and it closes
+
+The design meant for the board, and no build of it has been loaded onto
+one yet. `oca_clkrst` in front of the whole of
+`oca_uart_crypto`, against `colorlight_i9_crypto.lpf`'s four pins, with
+the datapath on `clk_sys` at 48.0769 MHz and the heartbeat left on the
+25 MHz pad. Unlike everything above it this is a pinned build: real IO,
+a PLL, a timing check that can fail, and `ecppack` afterwards.
+
+Measured **2026-08-15 over four placer seeds** on yosys `f77ddfb87`,
+LFE5U-45F CABGA381 speed grade 6.
+
+| resource | used | of device |
+|---|---|---|
+| TRELLIS_COMB | 13062 | 29.8% |
+| TRELLIS_FF | 12529 | 28.6% |
+| DP16KD | 6 | 5.6% |
+| MULT18X18D | 20 | 27.8% |
+| EHXPLLL | 1 | 25.0% |
+| DCCA | 2 | — |
+| TRELLIS_IO | 4 | every pad the `.lpf` names |
+
+| clock | seed 1 | seed 2 | seed 3 | seed 4 | mean | spread |
+|---|---|---|---|---|---|---|
+| `clk_sys`, target 48.0769 | 50.38 | 51.65 | 52.60 | **49.21** | **50.96** | 6.9% |
+
+Area is identical on all four, as synthesis being deterministic
+requires. The Fmax column is `$glbnet$clk_sys` — the clock nextpnr
+reports with the **least margin over its own constraint**, which on a
+design with a PLL is not the fastest clock in the report: `clk25` is a
+pad feeding the PLL, so whatever it reaches says nothing about the
+datapath. Spread is `sweep.sh`'s `(max-min)/min`, the definition to
+check before quoting it against a table above that divides by the mean.
+**Every seed clears the constraint**, the tightest by **2.36%**.
+
+Nothing in the `.lpf` constrains `clk_sys`. nextpnr derives that
+constraint from the PLL dividers as they reach the netlist
+(`ecp5/pack.cc:2824`), and `NETLIST_PLL_PARAMS` in `run_synth.py` checks
+those dividers against the netlist — so the number the timing check is
+measured against and the number the board will run at come from the same
+place.
+
+**The bitstream is 427699 bytes at seed 1**, which is what
+`run_synth.py oca_crypto_pll` reproduces; that build was taken after the
+sweep, so `build/` now holds it rather than seed 4's. The size belongs
+to the placement, not to the design: seed 4 packed 426793 bytes from the
+same netlist, 906 fewer. A bitstream size quoted without its seed says
+nothing here.
+
+**What the PLL and the diagnostics cost: 32 LUTs and 11 flip-flops.**
+The pre-PLL top on the same four pins — `oca_uart_crypto` at 25 MHz,
+seed 1, 2026-08-14, same toolchain — measured 13030 TRELLIS_COMB, 12518
+TRELLIS_FF, 6 DP16KD, 20 MULT18X18D, **49.85 MHz against a 25 MHz
+constraint**, and packed 423971 bytes. Block RAM and multipliers did not
+move; the datapath clock went from 25 to 48.0769 MHz, a factor **1.923**.
+The area half of that comparison is sound because area is
+deterministic. The clock half is one seed against four and is not a
+comparison at all: what it records is that the two builds were asked for
+different things.
+
+That row cannot be rebuilt from this tree. `oca_uart_crypto` gave up its
+pins and its heartbeat counter to this top, and a design with no `.lpf`
+gets neither a timing check nor a packed bitstream, so what that target
+reports today is area alone on a third netlist.
+
+**Three things these figures do not establish**, and they travel with
+them wherever they are quoted:
+
+1. **Nothing has run on silicon.** No bitstream containing this design
+   has been loaded onto the board. 48.0769 MHz is a place-and-route
+   result about a netlist.
+2. **The margin is small now, and it did not used to be.** 49.85 against
+   a 25 MHz requirement is a 99% margin that could not fail; 2.36% is a
+   number an RTL change can spend without looking like it did. Every
+   change to this design has to be re-synthesised before it is believed.
+3. **Two four-seed spreads exist for it and neither orders the other.**
+   An earlier sweep, before the reset and heartbeat corrections, spread
+   **8.1%** — over the 8% at which `sweep.sh` prints its note and
+   `.claude/skills/synth-sweep` calls placement difficulty the finding.
+   This netlist, three registers larger, spreads **6.9%**. That is not
+   an improvement and is not presented as one: two four-seed draws
+   cannot order two netlists, which is the same rule that stopped
+   `oca_core` and `oca_dual` being ordered by their 6.2% and 7.3%.
 
 ### The whole board, pinned: oca_top placed, and did not close
 

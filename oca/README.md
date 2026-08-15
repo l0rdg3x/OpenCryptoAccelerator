@@ -160,12 +160,13 @@ Python 3.14).
 .venv/bin/python hw/sim/run_slip_rx.py
 .venv/bin/python hw/sim/run_slip_tx.py
 .venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
+.venv/bin/python hw/sim/run_crypto_pll.py      # the board top: PLL, crypto, LED
 .venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
 cd hw/sim && ../../.venv/bin/python test_proto_model.py
 ```
 
-Those 21 runners are all the cocotb suites, and `test_proto_model.py`
+Those 22 runners are all the cocotb suites, and `test_proto_model.py`
 above is plain Python (2 tests). Three more need no toolchain at all:
 `pytest hw/host` (46 tests), `pytest hw/syn/test_run_synth.py` (4) and
 the offline `hw/host/cli.py --fake selftest` (6 steps), measured
@@ -191,14 +192,18 @@ values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
 pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
 7/7, console 8/8, fifo 4/4, uart_console 4/4,
 uart_echo 3/3, uart_rx 4/4, uart_tx 5/5, slip_rx 12/12 at both `BYTES`
-values, slip_tx 7/7, uart_crypto 7/7 across its two `LED_BITS` builds —
-**142**, plus twenty-nine re-runs at a second parameter — and
-post-synthesis keystore 4/4 and oca_proto 2/2, which is **177 passing
-executions over 21 runners** with no failures and two skips, measured
-2026-08-12. This read 183 tests over 25 runners and 222 executions until
-the Ethernet suites were deleted that day: rgmii 10/10, udp_seam 10/10
+values, slip_tx 7/7, uart_crypto 5/5, crypto_pll 3/3 on its one
+`LED_BITS` = 8 build — **143**, plus twenty-four re-runs at a second
+parameter — and post-synthesis keystore 4/4 and oca_proto 2/2, which is
+**173 passing executions over 22 runners** with no failures and no
+skips, measured 2026-08-12 with the two crypto suites re-measured
+2026-08-15. This read 183 tests over 25 runners and 222 executions until
+the Ethernet suites were deleted on 2026-08-12: rgmii 10/10, udp_seam 10/10
 at both `HDR_Q_DEPTH` values, eth_mac 8/8 and oca_path 7/7 all passed
-while they existed, and they are the 45 executions that went. The last
+while they existed, and they are the 45 executions that went. What that
+left — 148 tests over 21 runners and 177 executions — stood until
+2026-08-15, when the heartbeat left `run_uart_crypto` for
+`run_crypto_pll` and took that suite's second build with it. The last
 two built from the patched vendor tree at `hw/vendor/build/`, which is
 gitignored, so in a fresh checkout or a new worktree they exited
 non-zero instead and the same before-figure read 207 executions over 23

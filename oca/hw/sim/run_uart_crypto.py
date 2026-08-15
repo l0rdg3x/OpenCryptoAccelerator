@@ -5,15 +5,20 @@ Exit code is the contract: runner.test() only inspects results.xml under
 pytest and Verilator exits 0 on $finish however the assertions went, so
 the count is read back here.
 
-TWICE, AT TWO LED_BITS, and the second run is not a second chance at the
-same defect. LED_BITS is the width of the heartbeat counter, and at the
-board's 25 a half-period is 0.671 s of simulated time -- 16.8 million
-clocks -- which no run can watch. So the suite runs once as the bitstream
-is built, where the two heartbeat tests are skipped and everything else
-is exercised on exactly the design that ships, and once at 8, where the
-heartbeat tests run and the rest runs again against a parameter it does
-not touch. Neither run alone covers the module: the default is the one
-the board gets, the small one is the only one that can see D2.
+ONE BUILD, AT THE DEFAULT PARAMETERS. It ran twice at two LED_BITS until
+the heartbeat left this module for oca_crypto_pll: the counter was the
+only thing here that could not be simulated at the width the board gets,
+and the two tests that watched it are hw/sim/test_crypto_pll.py's now.
+What is left elaborates at CLK_HZ's default, 25_000_000, which is the
+frequency the standalone build of this module runs at and the one every
+bit time in test_uart_crypto.py is counted from.
+
+THE PLL BUILD IS NOT COVERED HERE. oca_crypto_pll hands this module
+48.0769 MHz, where the divisor is 417 rather than 217; run_crypto_pll.py
+elaborates that combination and so exercises the sampler-error guard at
+it, but nothing shifts a byte through the module at that frequency in
+any suite. The bit timing is proved at 25 MHz and carried across by the
+guard, which is an argument and not a measurement.
 """
 
 import os
@@ -44,9 +49,6 @@ from cocotb_tools.check_results import get_results  # noqa: E402
 
 SIM_DIR = Path(__file__).resolve().parent
 
-DEFAULT_LED_BITS = 25
-SMALL_LED_BITS = 8
-
 
 def failed_tests() -> int:
     num_tests, num_failed = get_results(SIM_DIR / "results.xml")
@@ -55,15 +57,13 @@ def failed_tests() -> int:
     return num_failed
 
 
-def run_at(led_bits: int, tag: str) -> int:
-    os.environ["OCA_LED_BITS"] = str(led_bits)
-    build_dir = SIM_DIR / f"sim_build_uart_crypto{tag}"
+def main() -> int:
+    build_dir = SIM_DIR / "sim_build_uart_crypto"
     runner = get_runner("verilator")
     runner.build(
         sources=SOURCES,
         hdl_toplevel="oca_uart_crypto",
         build_dir=build_dir,
-        parameters={"LED_BITS": led_bits},
         always=True,
     )
     (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
@@ -73,13 +73,7 @@ def run_at(led_bits: int, tag: str) -> int:
         test_dir=SIM_DIR,
         build_dir=build_dir,
     )
-    return failed_tests()
-
-
-def main() -> int:
-    failed = run_at(DEFAULT_LED_BITS, "")
-    failed += run_at(SMALL_LED_BITS, "_led")
-    return 1 if failed else 0
+    return 1 if failed_tests() else 0
 
 
 if __name__ == "__main__":

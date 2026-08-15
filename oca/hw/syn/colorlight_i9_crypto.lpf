@@ -34,11 +34,19 @@
 # covering fails the build with "IO <name> is unconstrained in LPF"
 # (ecp5/main.cc:287).
 #
-# 25 MHZ is the whole timing requirement of this design. Every module in
-# it runs on clk25 and there is no PLL: the AEAD engine reaches ~50 MHz
-# out of context (docs/RECORD.md), so the margin here is the reason this
-# is the first crypto design in this project that can be expected to
-# close.
+# 25 MHZ constrains the oscillator pin, and it is the only frequency
+# stated here even though the datapath no longer runs at it. Since
+# oca_crypto_pll took over as the design this file builds, clk25 feeds
+# an EHXPLLL and the AEAD core runs on clk_sys at 48.0769 MHz. nextpnr
+# propagates this constraint through the PLL, deriving the clk_sys
+# constraint from the dividers in the netlist and logging it, so the
+# derived clock needs no line of its own -- and inventing one would let
+# it disagree with the dividers.
+#
+# The margin that made a crypto design expectable to close is smaller
+# now, and it is measured rather than assumed: the AEAD engine reaches
+# ~50 MHz out of context (docs/RECORD.md), which is what 48.0769 is
+# asking of it.
 #
 # The FREQUENCY line is also the spelling check on clk25: a net that does
 # not exist warns rather than passing quietly (common/kernel/basectx.cc:108).

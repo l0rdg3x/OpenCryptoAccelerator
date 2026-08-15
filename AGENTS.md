@@ -155,7 +155,8 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_uart_echo.py          # 3/3 pass
 .venv/bin/python hw/sim/run_slip_rx.py            # 12/12 pass, + 12 at BYTES=64
 .venv/bin/python hw/sim/run_slip_tx.py            # 7/7 pass
-.venv/bin/python hw/sim/run_uart_crypto.py        # 5/7 pass + 2 skip, then 7/7 at LED_BITS=8
+.venv/bin/python hw/sim/run_uart_crypto.py        # 5/5 pass
+.venv/bin/python hw/sim/run_crypto_pll.py         # 3/3 pass, its one build at LED_BITS=8
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
@@ -166,17 +167,21 @@ complete because **there is no aggregate RTL runner here at all** —
 so every suite is invoked by name and a suite missing from this list is
 a suite nobody runs.
 
-**The 21 cocotb runners alone measure 148 tests over 177 passing executions**,
-six of them on a synthesised netlist from the two gate runners. Twenty-nine tests
+**The 22 cocotb runners alone measure 149 tests over 173 passing executions**,
+six of them on a synthesised netlist from the two gate runners. Twenty-four tests
 run a second time at a non-default parameter — five for `chacha20` at
 `ROUNDS_PER_CYCLE` = 2, four for `poly1305` at `ROWS_PER_CYCLE` = 5,
-three for `oca_pktbuf` at the smallest `BYTES` it accepts, all twelve of
-`oca_slip_rx` at `BYTES` = 64 and five of `oca_uart_crypto` at
-`LED_BITS` = 8 — which is what separates the two figures: 142 tests
-outside the gate runners, plus 29 re-runs, plus their 6.
+three for `oca_pktbuf` at the smallest `BYTES` it accepts and all twelve
+of `oca_slip_rx` at `BYTES` = 64 — which is what separates the two
+figures: 143 tests outside the gate runners, plus 24 re-runs, plus their
+6. `run_crypto_pll.py` is not among them although it names a parameter:
+`LED_BITS` = 8 is its only build, because a heartbeat at the board's 25
+bits is 16.8 million clocks a half-period and no run can watch one, so
+there is no default-parameter build of that top for anything to re-run
+against.
 
 Beyond the cocotb runners, four more things here run and can fail, and
-none of them is inside the 148 or the 177: **46 tests in `hw/host/`, 4
+none of them is inside the 149 or the 173: **46 tests in `hw/host/`, 4
 in `hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py`** —
 measured 2026-08-13, all sub-second, none needing Verilator, yosys or a
 board — and the C backend's **126 known-answer checks** behind the
@@ -187,26 +192,41 @@ exit-code contract as well.
 is no unit they share: a simulator test case, a simulator execution, a
 Python test case, a KAT check and a selftest step are five different
 things, and a single headline number would have to pick one and
-mislead about the rest. That is how "148 tests" came to be read as the
-repository's total in three documents at once.
+mislead about the rest. That is how the cocotb test count — 148 on the
+day it happened — came to be read as the repository's total in three
+documents at once.
 
 Measured by running every one of them on 2026-08-12, after the Ethernet
-removal: **177 passing executions, no failures, and every runner exits
-0.** Two tests skip — `oca_uart_crypto`'s heartbeat pair, which needs
-`LED_BITS` small enough to simulate and so runs only on the second
-build, exactly as `oca_blink`'s does.
+removal, and the two crypto suites again on 2026-08-15, when the board
+top gained its PLL: **173 passing executions, no failures, no skips, and
+every runner exits 0.** Nothing skips any more. What used to skip was
+`oca_uart_crypto`'s heartbeat pair, which needed a `LED_BITS` small
+enough to simulate and so ran only on that suite's second build; the
+counter has left for `oca_crypto_pll`, and the three tests that watch it
+there run on the one build that suite has.
 
 **This read 222 executions over 25 runners, and 183 tests, until that
-removal** — 177 of those tests over the 23 runners that are not the gate
-pair, plus the 6 on a netlist, which is how the old figure was written
-and why the coincidence of that 177 with today's 177 executions is worth
-naming, so nobody reads a stale figure as a current one. Deleted with
-the route: `run_rgmii` (10 tests, 10 executions), `run_udp_seam` (10
-tests, 20 executions, running twice at two `HDR_Q_DEPTH` values),
-`run_eth_mac` (8) and `run_oca_path` (7) — 35 tests and 45 executions.
-So 222 − 45 = 177 executions, and 183 − 35 = 148 tests over 21 runners.
+removal** — 177 of those tests over the 23 runners that were not the
+gate pair, plus the 6 on a netlist, which is how the old figure was
+written. Deleted with the route: `run_rgmii` (10 tests, 10 executions),
+`run_udp_seam` (10 tests, 20 executions, running twice at two
+`HDR_Q_DEPTH` values), `run_eth_mac` (8) and `run_oca_path` (7) — 35
+tests and 45 executions. So 222 − 45 = 177 executions, and 183 − 35 =
+148 tests over 21 runners, which is what that day left; the PLL work
+then took the executions to 173 and the tests to 149 over 22.
 Nothing in the tree needs `vendor_patches.py build` any more; that
 script and the tree it patched are gone.
+
+**Two 177s met in that paragraph and they were never one measurement.**
+One counts tests, over the 23 non-gate runners of the pre-removal tree;
+the other counts executions, over everything the removal left, and it
+was this file's headline figure until 2026-08-15. They were equal for as
+long as the arithmetic happened to make them so, and no longer — the PLL
+work moved the execution figure to 173 and left the historical 177
+exactly where it was. The reason to name the pair survives their
+parting: two figures matching is not evidence they measure the same
+population, and the safe reading is always the one that asks which
+population and which tree before reusing a number.
 
 **Two before-figures are both true and they differed by a
 precondition.** `run_eth_mac` and `run_oca_path` built from the patched
@@ -228,9 +248,11 @@ and six suites were missing from the list. The console and UART chain —
 `run_console` 8, `run_fifo` 4, `run_uart_console` 4, `run_uart_echo` 3,
 `run_uart_rx` 4, `run_uart_tx` 5, 28 tests — was written on 2026-08-11
 and appeared in no document at all, while being the only host channel
-the board has. The serial bridge and the crypto console add 26 more:
-`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7. The list above
-now carries all of them, which is the actual fix.
+the board has. The serial bridge and the crypto console added 26 more:
+`run_slip_rx` 12, `run_slip_tx` 7, `run_uart_crypto` 7 — that last one
+is 5 today, with `run_crypto_pll`'s 3 beside it, since the heartbeat
+moved to the board top. The list above now carries all of them, which is
+the actual fix.
 
 **A parameter with one tested value is a parameter that does not work.**
 Both of these switch the datapath rather than sizing it, and both went

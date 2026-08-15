@@ -5,9 +5,10 @@ This is the whole-path test the Ethernet route took with it. Nothing is
 injected on an internal bus: every request is shifted into `uart_rx` as
 start bit, eight data bits and stop bit at 217 clocks a bit, and every
 response is recovered by sampling `uart_tx` the same way. The DUT is
-`oca_uart_crypto` itself -- the module `run_synth.py oca_uart_crypto`
-builds the bitstream from -- so there is no generated harness between the
-test and the thing that ships.
+`oca_uart_crypto` itself -- every module the bitstream carries except
+the clocking around them, which is oca_crypto_pll's and cannot be
+simulated (hw/sim/test_crypto_pll.py) -- so there is no generated
+harness between the test and the thing that ships.
 
 Every expected value comes from `aead_model` through `proto_model` and
 `slip_model`. No ciphertext, tag or status byte is written by hand.
@@ -45,27 +46,36 @@ than accidents:
    with both bounds forced by construction. There is one peer on a
    serial line and no concurrency is claimed here. The shape avoided is
    the bound that cannot be violated: every frame, counter delta and
-   edge count here is asserted against an exact value, with no
-   inequality anywhere. cnt_done across a stats was `> ` until
+   reading of the `trouble` latch here is asserted against an exact
+   value, with no inequality anywhere. cnt_done across a stats was `> ` until
    2026-08-12, which is a weaker claim than the design supports -- the
    delta is exactly one, for the same reason cnt_rx's is.
 
 3. THE LINT GATE NEVER READ THE FILE IT NAMED, because the harness was
    generated from a hand-written pin list. There is no harness and no
-   pin list here: cocotb elaborates oca_uart_crypto.sv, and its four
-   ports are the four the .lpf constrains.
+   pin list here: cocotb elaborates oca_uart_crypto.sv itself, the file
+   oca_crypto_pll instantiates and run_synth.py builds from. The pins
+   are one level up now -- this module lost its LED to that top and
+   gained a reset -- so which pads the four lines reach is that top's
+   .lpf and not this file's business.
 
 4. A TIE VALUE THAT DIFFERED FROM THE TOP WENT UNDETECTED, for the same
-   reason. Nothing in this file ties an input of the design under test:
-   the only signal it drives is the UART receive pin.
+   reason. This file ties one input and only one: `rst_n` high, which is
+   the standalone configuration oca_uart_crypto.sv's header describes --
+   with nothing to gate on, the module's own power-on counter is the only
+   reset root. THAT IS NOT THE TIE THE BOARD GETS. oca_crypto_pll wires
+   rst_n to oca_clkrst's rst_n_sys, which is gated on PLL lock, and the
+   test that reads it is hw/sim/test_crypto_pll.py -- which asserts the
+   core is held while the PLL is unlocked and released once it locks.
+   Nothing in this file could see that tie change. Every other signal
+   driven here is the UART receive pin.
 """
 
-import os
 import struct
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
+from cocotb.triggers import ClockCycles, FallingEdge
 
 from aead_model import aead_encrypt
 from proto_model import (HDR_LEN, MAGIC, OP_LOAD_KEY, OP_OPEN, OP_SEAL,
@@ -74,7 +84,11 @@ from proto_model import (HDR_LEN, MAGIC, OP_LOAD_KEY, OP_OPEN, OP_SEAL,
                          parse_response)
 from slip_model import END, ESC, ESC_END, ESC_ESC, decode, encode
 
-CLK_NS = 40                 # 25 MHz, the board's oscillator on P3
+# CLK_HZ is a parameter now and this file elaborates the default, which
+# is the 25 MHz board oscillator on P3. Both numbers below are that
+# default's: at oca_crypto_pll's 48.0769 MHz the divisor is 417 and none
+# of the bit timing here would land.
+CLK_NS = 40                 # 25 MHz
 DIV = 217                   # 25e6 / 115200
 BYTE_CYCLES = 10 * DIV      # start + eight data + stop
 
@@ -83,13 +97,6 @@ BYTES = 2048                # oca_uart_crypto's localparam, both sides of it
 # Out of reset the two packet buffers walk both their banks and the SLIP
 # decoder walks its own, and each holds its input off while it does.
 CLEAR_CYCLES = 4 * (BYTES // 8) + 256
-
-# The build decides LED_BITS and the two heartbeat tests have to agree
-# with it. At the default 25 a half-period is 0.671 s of simulated time
-# and no run can afford to watch one, so those two are skipped and what
-# holds the default is run_synth.py's flip-flop floor on this file.
-LED_BITS = int(os.environ.get("OCA_LED_BITS", "25"))
-LED_TESTS_FIT = LED_BITS <= 12
 
 KEY = bytes(range(32))
 KEY2 = bytes(range(32, 64))
@@ -122,14 +129,14 @@ async def _sink(dut):
     """
     while True:
         await FallingEdge(dut.uart_tx)
-        await ClockCycles(dut.clk25, DIV // 2)
+        await ClockCycles(dut.clk, DIV // 2)
         if dut.uart_tx.value != 0:
             continue                      # a glitch, not a start bit
         byte = 0
         for bit in range(8):
-            await ClockCycles(dut.clk25, DIV)
+            await ClockCycles(dut.clk, DIV)
             byte |= int(dut.uart_tx.value) << bit
-        await ClockCycles(dut.clk25, DIV)
+        await ClockCycles(dut.clk, DIV)
         assert dut.uart_tx.value == 1, f"stop bit low after 0x{byte:02x}"
         WIRE.out.append(byte)
 
@@ -145,31 +152,37 @@ async def setup(dut):
     it is why test_uart_console.py restarts its clock too.
 
     The DUT is NOT reset between tests: cocotb has no way to, and the key
-    store, the protocol counters and the sticky heartbeat latch all carry
+    store, the protocol counters and the sticky `trouble` latch all carry
     over. The tests below are written in the order they need and each one
     says where it depends on that order.
+
+    rst_n is tied high and never moves. This is the standalone build, the
+    one with no PLL to gate on, where oca_uart_crypto's own power-on
+    counter is the whole of the reset -- see item 4 of the header for
+    what that does NOT say about the board.
     """
     global _cleared
     dut.uart_rx.value = 1
-    cocotb.start_soon(Clock(dut.clk25, CLK_NS, unit="ns").start())
+    dut.rst_n.value = 1
+    cocotb.start_soon(Clock(dut.clk, CLK_NS, unit="ns").start())
     cocotb.start_soon(_sink(dut))
     if _cleared:
-        await ClockCycles(dut.clk25, 8)
+        await ClockCycles(dut.clk, 8)
         return
     _cleared = True
-    await ClockCycles(dut.clk25, CLEAR_CYCLES)
+    await ClockCycles(dut.clk, CLEAR_CYCLES)
 
 
 async def send_bytes(dut, data: bytes):
     """Shift bytes in at line rate, back to back with no idle between."""
     for byte in data:
         dut.uart_rx.value = 0
-        await ClockCycles(dut.clk25, DIV)
+        await ClockCycles(dut.clk, DIV)
         for i in range(8):
             dut.uart_rx.value = (byte >> i) & 1
-            await ClockCycles(dut.clk25, DIV)
+            await ClockCycles(dut.clk, DIV)
         dut.uart_rx.value = 1
-        await ClockCycles(dut.clk25, DIV)
+        await ClockCycles(dut.clk, DIV)
 
 
 async def wait_frame(dut, mark: int, budget_bytes: int = 4000):
@@ -181,7 +194,7 @@ async def wait_frame(dut, mark: int, budget_bytes: int = 4000):
     for _ in range(budget_bytes):
         if END in WIRE.out[mark:]:
             break
-        await ClockCycles(dut.clk25, BYTE_CYCLES)
+        await ClockCycles(dut.clk, BYTE_CYCLES)
     else:
         raise AssertionError(
             f"no END within {budget_bytes} byte times; the line carried "
@@ -210,26 +223,8 @@ async def exchange(dut, pkt: bytes, budget_bytes: int = 4000):
 async def silence(dut, byte_times: int) -> bytes:
     """Wait, and return whatever the transmitter said while we did."""
     mark = len(WIRE.out)
-    await ClockCycles(dut.clk25, byte_times * BYTE_CYCLES)
+    await ClockCycles(dut.clk, byte_times * BYTE_CYCLES)
     return bytes(WIRE.out[mark:])
-
-
-async def led_edges(dut, cycles: int) -> int:
-    """Transitions of led_n over a window of exactly `cycles` clocks.
-
-    Exact rather than approximate: the heartbeat is a free-running
-    counter bit, so over a window that is a whole multiple of its period
-    the count does not depend on where the window starts.
-    """
-    prev = int(dut.led_n.value)
-    edges = 0
-    for _ in range(cycles):
-        await RisingEdge(dut.clk25)
-        now = int(dut.led_n.value)
-        if now != prev:
-            edges += 1
-        prev = now
-    return edges
 
 
 def stats_of(frame: bytes) -> dict:
@@ -237,32 +232,6 @@ def stats_of(frame: bytes) -> dict:
     assert rsp["status"] == ST_OK, f"stats status {rsp['status']}"
     rx, drop, done, auth = struct.unpack("<4I", rsp["body"])
     return {"rx": rx, "drop": drop, "done": done, "auth": auth}
-
-
-LED_WINDOW = 4096
-
-
-@cocotb.test(skip=not LED_TESTS_FIT)
-async def test_the_heartbeat_is_slow_while_the_link_is_clean(dut):
-    """FIRST IN THE FILE, and it has to be.
-
-    `trouble` is sticky by design -- a fault that flashes once and clears
-    is a fault nobody catches -- so the slow rate can only be observed
-    before anything has been refused. It is not a hidden dependency: if a
-    test above this one had set the latch the count below would be the
-    fast one and this would fail rather than pass.
-
-    LED_WINDOW is a whole multiple of both periods, so both counts are
-    exact and neither assertion is a range that cannot be violated.
-    """
-    await setup(dut)
-    edges = await led_edges(dut, LED_WINDOW)
-    want = LED_WINDOW // (2 ** (LED_BITS - 1))
-    assert edges == want, (
-        f"D2 gave {edges} transitions in {LED_WINDOW} cycles, expected "
-        f"{want}: at LED_BITS={LED_BITS} the clean rate is bit "
-        f"{LED_BITS - 1} and the trouble rate is bit {LED_BITS - 4}, "
-        f"which would give {LED_WINDOW // (2 ** (LED_BITS - 4))}")
 
 
 @cocotb.test()
@@ -443,8 +412,13 @@ async def test_a_short_frame_is_refused_and_never_reaches_the_core(dut):
     measurement could not see an extra frame at all, that step fails
     instead of this one passing for the wrong reason.
 
-    This test latches `trouble`, which is why the slow-heartbeat test is
-    above it and the fast one below.
+    THE OTHER HALF OF THE BLIND SPOT IS `trouble`, and this is where it
+    is measured now that the LED has left this module. Sticky by design,
+    so the reading before the refused frame is as much a part of the
+    claim as the one after: a latch already set says nothing about what
+    set it, and the heartbeat tests that used to stand for this pair
+    (hw/sim/test_crypto_pll.py) can only see the bit once it has crossed
+    two clock domains. Here it is read at the port that carries it.
     """
     await setup(dut)
     _, f = await exchange(dut, build_stats(0x0040))
@@ -459,6 +433,12 @@ async def test_a_short_frame_is_refused_and_never_reaches_the_core(dut):
         f"a frame oca_proto answers moved cnt_rx by "
         f"{after_control - base}, expected 2 (the frame and the stats)")
 
+    assert int(dut.trouble.value) == 0, (
+        "the trouble latch is already set before any frame was refused, "
+        "so what it reports below is not the refusal: every exchange so "
+        "far was well formed and none of its six sources should have "
+        "fired")
+
     short = MAGIC + bytes([1, OP_STATS])          # four bytes, HDR_LEN is 8
     assert len(short) < HDR_LEN
     await send_bytes(dut, encode(short))
@@ -467,29 +447,14 @@ async def test_a_short_frame_is_refused_and_never_reaches_the_core(dut):
         f"a frame under HDR_LEN was answered with {quiet!r}; it must not "
         f"reach oca_core at all")
 
+    assert int(dut.trouble.value) == 1, (
+        "a frame oca_slip_rx refused left the trouble latch clear: no "
+        "counter the protocol has can see that frame, so this bit is the "
+        "only thing on the board that reports it")
+
     _, f = await exchange(dut, build_stats(0x0043))
     after_short = stats_of(f)["rx"]
     assert after_short - after_control == 1, (
         f"cnt_rx moved by {after_short - after_control} across the refused "
         f"frame and the stats that followed it, expected 1: the frame "
         f"reached oca_core")
-
-
-@cocotb.test(skip=not LED_TESTS_FIT)
-async def test_the_heartbeat_goes_fast_once_a_frame_has_been_refused(dut):
-    """LAST IN THE FILE, and it depends on the test above having run.
-
-    The three SLIP refusal counters are not reachable through opcode 04
-    and never can be, because a refused frame does not reach oca_core.
-    D2 is the whole of what the operator gets, and this is the assertion
-    that it says anything at all: after the short frame above, the
-    heartbeat must be at the fast rate, eight times the clean one.
-    """
-    await setup(dut)
-    edges = await led_edges(dut, LED_WINDOW)
-    want = LED_WINDOW // (2 ** (LED_BITS - 4))
-    clean = LED_WINDOW // (2 ** (LED_BITS - 1))
-    assert edges == want, (
-        f"D2 gave {edges} transitions in {LED_WINDOW} cycles after a frame "
-        f"was refused, expected {want}; {clean} would mean the refusal "
-        f"never reached the latch and the board reads healthy")
