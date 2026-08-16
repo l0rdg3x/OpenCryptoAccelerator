@@ -2,8 +2,11 @@
 # Sweep for build processes that outlived the work that started them.
 #
 # run_synth.py bounds anything it starts and kills the whole process
-# group, so nothing that goes through it can end up here. This is the
-# net under the cases that do not: a yosys invoked directly, a subagent
+# group, so a build that goes through it should reach its own bound
+# first and report properly -- but only while the ceiling below stays
+# above every bound run_synth.py carries, which is a thing to re-check
+# whenever a design declares a longer one. This is the net under the
+# cases that never had a bound: a yosys invoked directly, a subagent
 # that wrote its own timeout, an orphaned shell that relaunched a job
 # after its children were killed. All three have happened.
 #
@@ -21,8 +24,25 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 # 3600 until 2026-08-10, which was below the project's own flagship
 # build: oca_top's synthesis measures 3941 s, so this net would have
 # killed it 341 s from the end and called it a runaway. oca_top records
-# a 7200 s bound; this sits above it.
-CEILING_SECONDS=${OCA_BUILD_CEILING:-7500}
+# a 7200 s bound, and 7500 sat above it.
+#
+# 7500 until 2026-08-16, when oca_crypto_dual made it wrong the same
+# way. That design declares a 14400 s bound, and it needs one: its
+# place and route was measured at 31, 93, 108 and over 155 minutes on
+# four seeds of the same netlist, and over 219 on the netlist before
+# the protocol and Poly1305 cuts. Two builds that were still routing,
+# and still writing their logs, were killed here at 13168 s and 9347 s
+# and produced nothing. A net that kills a legitimate build before its
+# own bound does not report a runaway, it destroys evidence -- so this
+# sits above the largest bound in run_synth.py, not above the largest
+# build anyone has watched finish -- and it reads that bound out of the
+# file rather than restating it, so the next design to declare a longer
+# one moves this net with it instead of going stale a third time. The
+# literal is the fallback for a run_synth.py that cannot be read, and
+# it is the answer the derivation gives today.
+declared=$(grep -oE '^ +timeout=[0-9]+' "$ROOT/oca/hw/syn/run_synth.py" 2>/dev/null |
+           grep -oE '[0-9]+' | sort -n | tail -1)
+CEILING_SECONDS=${OCA_BUILD_CEILING:-$(( ${declared:-14400} + 600 ))}
 
 # Only ever this project's toolchain: never anything else the user is
 # running.
