@@ -640,7 +640,11 @@ now carries all of them, which is the actual fix.
   four placer seeds on commit `b0a94db` (yosys `f77ddfb87`, dividers
   1/5/4/10, VCO 500, `clk_tx` exactly 125): **51.83 / 51.91 / 50.48 /
   49.61 MHz — three seeds close, the fourth misses by 0.78%**. Mean
-  50.96, spread 4.6% on `(max-min)/min`. By this project's rule a rung
+  50.96, spread 4.6% on `(max-min)/min`. Provenance of the four: seed
+  4's figure is the sweep's, which stopped at the first seed to miss;
+  seeds 1-3 were re-run individually afterwards, so the one surviving
+  artefact in `build/` is seed 3's (50.48) and the other three rest on
+  the run transcripts. By this project's rule a rung
   a seed misses is not closed, so the variant is **measured, not
   shipped**: the board top stays at 48.0769, where every seed clears
   with margin, and a future seed hunt or netlist change can reopen the

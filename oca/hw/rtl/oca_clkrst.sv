@@ -92,9 +92,10 @@
  * reaches 50.44 at best -- but rgmii_rx_clk clears 125 MHz on none of
  * them, and the seed that comes closest overall (10) has clk_sys at
  * 47.40. So moving clk_sys would not help until the receive clock
- * closes. 50.00 has been asked for once, at one seed -- CLKOP_DIV 4,
- * CLKOS_DIV 10, VCO 500 -- and reached 48.22; that is one placement,
- * not a sweep, so the rung above is untested rather than ruled out.
+ * closes. 50.00 was asked of the old Ethernet top once (48.22, one
+ * seed) and of the crypto netlist over four seeds on 2026-08-16:
+ * 51.83 / 51.91 / 50.48 / 49.61 -- three close, one misses by 0.78%,
+ * so the rung is measured and not shipped (docs/RECORD.md, the ladder).
  *
  * ----------------------------------------------------------------------
  * RESETS
@@ -212,6 +213,14 @@
  *   clk_rx,  rst_rx     -> eth_mac_1g_fifo rx side
  *   clk_rx,  rst_n_rx   -> oca_rgmii rst_n
  *   phy_rst_n           -> P4
+ */
+/* CHANGE POLICY. This module is instantiated by oca_pll, which was
+ * measured on silicon at bring-up step 3. Any edit here must leave
+ * oca_pll's netlist bit-identical at the default parameters, proven by
+ * rebuilding oca_pll and comparing the .config hash against a baseline
+ * taken first -- the 2026-08-16 parameterisation was proven exactly
+ * that way. An edit that cannot pass that bar reopens the silicon
+ * measurement and needs the bench.
  */
 module oca_clkrst #(
     // Synchroniser depth. Two is the minimum that synchronises anything

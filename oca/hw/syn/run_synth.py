@@ -547,9 +547,9 @@ NETLIST_FF_FLOOR = {
     # oca_crypto_pll_50.sv itself holds no storage — it is one
     # instantiation — so it gets no bucket of its own; the heartbeat's
     # 32 stay attributed to oca_crypto_pll.sv, where the always_ff is
-    # written. Shared with the entry above by derivation, not measured
-    # on this target yet: its first build's census is what confirms
-    # them.
+    # written. Shared with the entry above by derivation, and confirmed
+    # by the census of every build in the 2026-08-16 four-seed sweep:
+    # all ten floors identical to the shipping top's, total 12589.
     "oca_crypto_pll_50": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
                           "oca_uart_rx.sv": 34, "oca_uart_tx8.sv": 23,
                           "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
@@ -629,8 +629,9 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # The 50.00 MHz variant holds the same registers by
                     # derivation — no width in the design moves between
                     # 417 and 434, per its NETLIST_FF_FLOOR entry — so
-                    # the floor is shared too. Not yet measured on this
-                    # target; the first build is what confirms it.
+                    # the floor is shared too. Confirmed by the
+                    # 2026-08-16 sweep's census: 12589, identical to
+                    # the shipping top.
                     "oca_crypto_pll_50": 12400,
                     # Exact rather than a few percent under, because
                     # these two are new and small enough that every
