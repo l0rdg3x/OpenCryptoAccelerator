@@ -116,6 +116,45 @@ def _cmd_bench(link: OcaLink, args: argparse.Namespace) -> int:
     return 0
 
 
+def _windows_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """Whether two [start, end) cycle windows share any cycle. Strict on
+    both sides: windows that abut -- one ends exactly where the other
+    starts, which is what a device that serialised the two runs reports
+    -- do not overlap."""
+    return a[0] < b[1] and b[0] < a[1]
+
+
+def _cmd_bench_pair(link: OcaLink, args: argparse.Namespace) -> int:
+    results = link.bench_pair(args.slot, args.blocks)
+    # The wire carries the window's CLOSE: [timestamp - duration,
+    # timestamp] (host-protocol.md section 8), both reads of the
+    # device's one free-running timebase.
+    windows = [(r["timestamp"] - r["duration"], r["timestamp"])
+               for r in results]
+    for i, (r, w) in enumerate(zip(results, windows)):
+        print(f"req[{i}] id=0x{r['req_id']:04x} blocks={args.blocks} "
+              f"duration_cycles={r['duration']} "
+              f"window_cycles=[{w[0]}, {w[1]}]")
+    overlap = _windows_overlap(windows[0], windows[1])
+    if overlap:
+        print("overlap=yes -- the two windows share cycles: "
+              "two engines ran concurrently")
+    else:
+        print("overlap=no -- the runs serialised: no cycle was shared")
+    if args.clock_hz is None:
+        print("cycles only: supply --clock-hz to derive a rate; "
+              "the host never guesses the clock")
+    else:
+        # The honest aggregate: all the blocks over the whole span both
+        # runs occupied, so serialised runs are not credited with a
+        # concurrency they did not have.
+        span = max(w[1] for w in windows) - min(w[0] for w in windows)
+        rate = 2 * args.blocks * args.clock_hz / span
+        print(f"aggregate_blocks_per_second={rate:.3f} over the "
+              f"{span}-cycle span at --clock-hz {args.clock_hz:g}")
+    return 0
+
+
 def _cmd_selftest(link: OcaLink, args: argparse.Namespace) -> int:
     try:
         run_selftest(link, log=print)
@@ -182,6 +221,24 @@ def build_parser() -> argparse.ArgumentParser:
                      help="the core clock in Hz, if you can vouch for it; "
                           "omitted, the output stays in cycles")
     be.set_defaults(func=_cmd_bench)
+
+    bp = sub.add_parser(
+        "bench-pair",
+        help="two pipelined bench requests, written back to back and "
+             "matched to their replies by req_id: reports both cycle "
+             "windows and whether they overlap. Overlap is the finding, "
+             "not the premise -- a dual-engine device overlaps them, a "
+             "single-core device serialises them and says so")
+    bp.add_argument("--slot", type=int, required=True,
+                     help="a loaded key slot; the same fail-closed check "
+                          "as a seal, on whichever engine answers")
+    bp.add_argument("--blocks", type=_blocks, required=True,
+                     help="times to run the block, 1..65535, same for "
+                          "both requests")
+    bp.add_argument("--clock-hz", type=_clock_hz, default=None,
+                     help="the core clock in Hz, if you can vouch for it; "
+                          "omitted, the output stays in cycles")
+    bp.set_defaults(func=_cmd_bench_pair)
 
     se = sub.add_parser(
         "selftest",

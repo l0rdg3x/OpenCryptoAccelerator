@@ -238,6 +238,54 @@ DESIGNS = {
         # spread is the part that varies, so the bound stays where it is.
         timeout=7200,
     ),
+    # The dual-core crypto console on the PLL: oca_clkrst plus two
+    # oca_core engines behind oca_dispatch/oca_collect, on the same four
+    # pins. ecp5_prims.sv and oca_clkrst.sv lead for oca_pll's reason
+    # (EHXPLLL's 36 parameters in front of the frontend that elaborates
+    # the override), and the middle of this list — oca_uart_rx through
+    # oca_uart_crypto_dual — IS hw/sim/run_uart_crypto_dual.py's
+    # SOURCES, the same same-list convention oca_crypto_pll records
+    # above: nothing enforces it, the two move together by hand.
+    #
+    # colorlight_i9_crypto.lpf, shared for oca_crypto_pll's reason: this
+    # top's four ports are exactly the four that file constrains, on the
+    # same balls, and the file must not gain a FREQUENCY line for
+    # clk_sys (see above — it would replace the derived constraint
+    # NETLIST_PLL_PARAMS makes load-bearing).
+    #
+    # NOTHING ABOUT THIS TARGET HAS BEEN BUILT OR MEASURED. The nearest
+    # figures are oca_dual's — an out-of-context four-seed sweep on
+    # 2026-08-15 whose Fmax seeds included one at 47.68 MHz, BELOW the
+    # 48.0769 MHz clk_sys asks for — and an out-of-context ceiling is
+    # not the pinned clock in either direction. This build may close,
+    # may need a seed hunt, or may not close; no document may claim
+    # closure until a sweep of this top at its commit says so.
+    #
+    # 14400, and the sizing is oca_crypto_pll's argument scaled to the
+    # dual history. In oca_dual's out-of-context sweep Router1 alone ran
+    # 950 s to over 3000 s across four seeds, with one build killed at
+    # the 1800 s default — and that was a target with no pins, no front
+    # end and no timing pressure. The pinned single-core build earned
+    # 7200 for adding the 48.0769 constraint to a datapath half this
+    # size, so twice the engines behind the same front end gets twice
+    # the bound. The ceiling has a precedent too: the 2026-08-04
+    # two-core out-of-context builds (no IO, no pins) were abandoned by
+    # hand after 3 h 22 min
+    # still bouncing between 50 and 2300 unrouted arcs, so a stage
+    # killed at 14400 s (4 h) is one that had stopped progressing, not
+    # one that needed patience. A bound, not a prediction: what the
+    # build costs is measured by building it.
+    "oca_crypto_dual": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv",
+            "oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_slip_rx.sv", "oca_slip_tx.sv",
+            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+            "oca_core.sv", "oca_dispatch.sv", "oca_collect.sv",
+            "oca_uart_crypto_dual.sv", "oca_crypto_dual.sv"],
+        lpf="colorlight_i9_crypto.lpf",
+        timeout=14400,
+    ),
     # The receive half of the console. J17 is settled; H18 is litex's
     # pairing and nothing more until a byte travels it, which is what an
     # echo makes the operator prove by supplying the expected value.
@@ -508,6 +556,50 @@ NETLIST_FF_FLOOR = {
                        "oca_clkrst.sv": 2, "oca_crypto_pll.sv": 32},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
+    # The pinned dual: oca_crypto_pll's front end around oca_dual's two
+    # cores, plus the fabric between them. NO BUILD OF THIS TOP EXISTS,
+    # so every figure below is a derivation, in three grades, and the
+    # census of the controller's first build is where corrections come
+    # from (wrong figures here are wrong upwards, which costs the
+    # synthesis stage and prints the number to fix).
+    #
+    # Doubled floors, exact by the same arithmetic as oca_dual's entry
+    # above, whose caveat holds here unchanged (a doubled figure cannot
+    # say WHICH core kept its storage): keystore 4626, proto 7200 — the
+    # per-core census on the current RTL is 3837, so the doubled floor
+    # keeps oca_proto's own under-the-census discipline.
+    #
+    # Measured elsewhere and carried over unchanged, because the front
+    # end is oca_uart_crypto's leaf for leaf at the same 48.0769 MHz
+    # clock: 34/23 for the UARTs ($clog2(417) = 9, confirmed by the
+    # oca_crypto_pll builds), 160/75 for the SLIP halves, 2 for
+    # oca_clkrst (this top consumes the same three outputs).
+    #
+    # Derived and NEVER CONFIRMED BY ANY BUILD — the controller's build
+    # is what turns these into measurements:
+    # - oca_fifo.sv 40: the byte FIFOs' measured 22 plus 18 for the two
+    #   DEPTH-8 WIDTH-1 expectation FIFOs in oca_collect (4-bit pointer
+    #   pairs plus overflow, 9 each). Their 8 storage bits each are
+    #   expected in distributed RAM like the byte FIFOs', not counted.
+    # - oca_dispatch.sv 8: state 2, target, last_used, sent 2, push0,
+    #   push1 — declarations, and yosys may fold some.
+    # - oca_collect.sv 16: state 2, src, last_served, fwd_done,
+    #   drn_done, fwd_first, merged_status 8, trouble — declarations.
+    # - oca_uart_crypto_dual.sv 6: por_count 4, rst_n_core, trouble —
+    #   the same three registers oca_uart_crypto.sv keeps under the PLL,
+    #   where its confirmed floor is also 6.
+    # - oca_crypto_dual.sv 32: beat 25, led_n, three 2-flop
+    #   synchronisers — structurally oca_crypto_pll.sv's D2 block, whose
+    #   measured 32 this repeats. THIS IS THE FLOOR THAT HOLDS LED_BITS
+    #   AT 25 for this top, for the reason recorded above: no simulation
+    #   elaborates the board's counter width.
+    "oca_crypto_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200,
+                        "oca_uart_rx.sv": 34, "oca_uart_tx8.sv": 23,
+                        "oca_fifo.sv": 40, "oca_slip_rx.sv": 160,
+                        "oca_slip_tx.sv": 75, "oca_dispatch.sv": 8,
+                        "oca_collect.sv": 16,
+                        "oca_uart_crypto_dual.sv": 6,
+                        "oca_clkrst.sv": 2, "oca_crypto_dual.sv": 32},
 }
 
 # The AEAD engine's own storage — ChaCha20's block state, Poly1305's
@@ -583,7 +675,22 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # 302 and the encoder's 75 as measured on 2026-08-12.
                     # A legitimate reduction should fail this and be
                     # re-measured, which on a module this size is cheap.
-                    "oca_slip_rx": 302, "oca_slip_tx": 75}
+                    "oca_slip_rx": 302, "oca_slip_tx": 75,
+                    # DERIVED, NOT MEASURED — no build of this top
+                    # exists, and this floor is the one number here
+                    # whose measurement only the controller's build can
+                    # supply. The arithmetic: oca_crypto_pll's measured
+                    # 12589 (2026-08-16), plus a second core at ~12094
+                    # (oca_core's out-of-context 12033 was measured
+                    # before the bubble-and-bench commit and never
+                    # rebuilt; that commit moved the two pinned tops by
+                    # +61 and +60, so ~+61 is the best available
+                    # correction), plus the fabric's ~42 (dispatch 8,
+                    # collect 16, tag-FIFO pointers 18) ≈ 24725. Floored
+                    # at 24400 — ~1.3% under the derivation, the same
+                    # discipline as the entries above — and to be
+                    # re-floored from the census the first build prints.
+                    "oca_crypto_dual": 24400}
 
 # The cell no flip-flop census can see, and nothing else checks either.
 #
@@ -615,6 +722,12 @@ NETLIST_PRIM_COUNT = {
     # dividers below unchecked, and with them the 48.0769 MHz that every
     # throughput figure for this design divides into a cycle count.
     "oca_crypto_pll": {"EHXPLLL": 1},
+    # The dual board top: the same one oca_clkrst instance, so the same
+    # one PLL — and the same reason the entry matters more than its
+    # census: it is what reaches check_pll, and with it the dividers
+    # behind the 48.0769 MHz that every dual throughput figure will
+    # divide into a cycle count.
+    "oca_crypto_dual": {"EHXPLLL": 1},
 }
 
 # The PLL exists is not the same claim as the PLL is the one the design
@@ -663,6 +776,13 @@ NETLIST_PLL_PARAMS = {
     # report a clean 48.08 against a clock that is not 48.08.
     "oca_crypto_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                        "CLKOS_DIV": 13},
+    # The same four from the same oca_clkrst, instantiated by
+    # oca_crypto_dual: everything oca_crypto_pll's entry argues — why
+    # 48.0769 can only be CLKOS, and why a wrong CLKOS_DIV here would
+    # move the constraint and the measurement together — holds
+    # unchanged for this second pinned consumer of that instance.
+    "oca_crypto_dual": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
+                        "CLKOS_DIV": 13},
 }
 
 # The dividers being the ones this table names is still not the claim
@@ -696,6 +816,11 @@ NETLIST_PLL_PARAMS = {
 TOP_CLK_SYS_CONST = {
     "oca_pll": None,
     "oca_crypto_pll": ("oca_crypto_pll.sv", "CLK_SYS_HZ"),
+    # oca_crypto_dual.sv carries the third hand-copy of 625e6/13 (its
+    # header counts them), and it reaches oca_uart_crypto_dual as CLK_HZ
+    # the same way — the same mute-serial-line failure if it drifts, so
+    # the same check.
+    "oca_crypto_dual": ("oca_crypto_dual.sv", "CLK_SYS_HZ"),
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).

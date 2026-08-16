@@ -5,6 +5,7 @@ must fail loudly and specifically on actually raises its own exception
 type rather than being swallowed or folded into another one.
 """
 
+import itertools
 import sys
 from pathlib import Path
 
@@ -334,6 +335,127 @@ def test_bench_nonzero_reserved_bytes_are_rejected():
         pass
     else:
         raise AssertionError("expected ProtocolError")
+
+
+class _SwappedPairReplies:
+    """FakeBoard behind a transport that reverses the order of queued
+    response frames -- completion order differing from request order,
+    which the fake's one-engine serialisation can never produce on its
+    own and the dual device produces whenever core 1 finishes first.
+    The frames themselves are the fake's, byte for byte."""
+
+    def __init__(self) -> None:
+        self._board = FakeBoard()
+
+    def write(self, data: bytes) -> None:
+        self._board.write(data)
+
+    def read(self, timeout: float) -> bytes:
+        data = self._board.read(timeout)
+        if not data:
+            return data
+        frames = slip_model.decode(data)
+        return b"".join(slip_model.encode(f) for f in reversed(frames))
+
+
+class _SameIdTwice:
+    """A transport that answers every bench with a well-formed body but
+    always echoing the FIRST req_id it ever saw -- what a device that
+    lost track of its pipeline would look like. The second reply is a
+    duplicate, not an answer, and bench_pair must say so."""
+
+    def __init__(self) -> None:
+        self._out = bytearray()
+        self._stuck_id = None
+
+    def write(self, data: bytes) -> None:
+        for req in (f for f in slip_model.decode(data) if f):
+            parsed = proto_model.parse_response(req)  # same header layout
+            if self._stuck_id is None:
+                self._stuck_id = parsed["req_id"]
+            body = bytes(16)  # duration 0, timestamp 0, reserved zero
+            resp = (proto_model.MAGIC
+                    + bytes([proto_model.VERSION, parsed["opcode"]])
+                    + self._stuck_id.to_bytes(2, "little")
+                    + bytes([parsed["slot"], proto_model.ST_OK])
+                    + body)
+            self._out += slip_model.encode(resp)
+
+    def read(self, timeout: float) -> bytes:
+        out, self._out = bytes(self._out), bytearray()
+        return out
+
+
+def test_bench_pair_happy_path_serialises_on_the_one_engine_fake():
+    """Two pipelined benches against the one-engine fake: both answered,
+    results in request order, and the windows abut without overlapping
+    -- the fake's documented decision, and the 'non-overlap reported as
+    such' half of the pair contract."""
+    link = _link()
+    link.load_key(0, bytes(range(32)))
+    r0, r1 = link.bench_pair(0, 8)
+    expected = FakeBoard.BENCH_BASE + 8 * FakeBoard.BENCH_PER_BLOCK
+    assert r0["duration"] == expected
+    assert r1["duration"] == expected
+    assert r0["req_id"] != r1["req_id"]
+    # Abutting, not overlapping: the second window opens exactly where
+    # the first closed.
+    assert r1["timestamp"] - r1["duration"] == r0["timestamp"]
+
+
+def test_bench_pair_matches_replies_by_req_id_not_arrival_order():
+    """With the two replies delivered in reversed order, the results
+    must still come back in REQUEST order: the first request finished
+    first on the fake, so its timestamp is the smaller one, and only
+    req_id matching can put it back in slot 0."""
+    link = OcaLink(_SwappedPairReplies(), timeout=0.2)
+    link.load_key(0, bytes(range(32)))
+    r0, r1 = link.bench_pair(0, 8)
+    assert r0["timestamp"] < r1["timestamp"], (
+        "results came back in arrival order, not request order: "
+        "bench_pair did not match by req_id")
+
+
+def test_bench_pair_foreign_req_id_is_detected():
+    link = _link()
+    # Pinned, not left to the random seed: break_req_id XORs the echoed
+    # id with 0xFFFF, and at exactly id0 = 0x7FFF the two mangled ids
+    # land back on the pair's own ids in swapped order -- a 1-in-65536
+    # flake. Any id pair away from that corner proves the same thing.
+    link._ids = itertools.count(0x0010)
+    link.load_key(0, bytes(range(32)))
+    link.transport.break_req_id = True
+    try:
+        link.bench_pair(0, 8)
+    except RequestIdMismatch:
+        pass
+    else:
+        raise AssertionError("expected RequestIdMismatch")
+
+
+def test_bench_pair_duplicated_req_id_is_detected():
+    """Both outstanding ids must be echoed once each: a device that
+    answers twice under one id has not answered the other request, and
+    reading the duplicate as that answer would report a measurement
+    that never happened."""
+    link = OcaLink(_SameIdTwice(), timeout=0.2)
+    try:
+        link.bench_pair(0, 8)
+    except RequestIdMismatch:
+        pass
+    else:
+        raise AssertionError("expected RequestIdMismatch")
+
+
+def test_bench_pair_unloaded_slot_raises_status_error():
+    """The same status discipline as a lone bench, on both replies."""
+    link = _link()
+    try:
+        link.bench_pair(3, 8)
+    except StatusError as exc:
+        assert exc.status == proto_model.ST_BAD_SLOT
+    else:
+        raise AssertionError("expected StatusError")
 
 
 def test_wire_byte_counters_advance():
