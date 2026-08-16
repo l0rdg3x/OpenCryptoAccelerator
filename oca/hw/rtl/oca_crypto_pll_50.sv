@@ -20,11 +20,14 @@
  * per-file flip-flop floors match oca_crypto_pll's exactly
  * (hw/syn/run_synth.py, NETLIST_FF_FLOOR).
  *
- * WHAT THIS FILE DOES NOT ESTABLISH is that the netlist closes
- * 50.00 MHz. The shipping top's four-seed sweep brackets this
- * constraint from both sides (docs/RECORD.md), so the rung is a
- * question for a sweep of THIS target, not an answer; and nothing here
- * has run on silicon. The elaboration is proven, the placement is not.
+ * MEASURED 2026-08-16, four placer seeds on commit b0a94db: clk_sys
+ * 51.83 / 51.91 / 50.48 / 49.61 MHz against the 50.00 required --
+ * three seeds close, the fourth misses by 0.78% (docs/RECORD.md, the
+ * PLL ladder). By the project's rule that is NOT closure, so this
+ * variant is measured and not shipped: the board top stays at
+ * 48.0769, where every seed clears. This file remains in the tree as
+ * the measured baseline for any future seed hunt or faster netlist.
+ * Nothing here has run on silicon.
  *
  * A thin instantiation and nothing else, so the design under this name
  * is provably oca_crypto_pll at another operating point rather than a
