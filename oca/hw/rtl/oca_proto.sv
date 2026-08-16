@@ -31,9 +31,10 @@
  * block feed, because giving it a stage of its own would add a second
  * read port and double the block RAM.
  *
- * A block costs the engine's 40 cycles instead of 64 (measured
+ * A block costs the engine's own cycles instead of 64 (measured
  * 2026-08-04, 8 ingress + 48 compute + 8 egress before, marginal 40
- * after) because the three phases now belong to different stages.
+ * after; 36 since the p_blk bubble removal of 2026-08-16) because the
+ * three phases belong to different stages.
  *
  * WHAT HOLDS THE SECURITY PROPERTY, NOW THAT ONE PACKET AT A TIME NO
  * LONGER DOES

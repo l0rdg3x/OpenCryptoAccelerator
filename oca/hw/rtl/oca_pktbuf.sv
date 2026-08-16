@@ -4,7 +4,7 @@
  *
  * 64 bits wide, written sequentially from the packet stream and read at
  * random word offsets. A 64-byte block costs 8 reads plus the read
- * pipeline, against the AEAD engine's 40 cycles to process one, so the
+ * pipeline, against the AEAD engine's 36 cycles to process one, so the
  * buffer no longer sets the pace: at one byte per cycle it needed 66
  * cycles to assemble a block the engine consumed in 40, which is why the
  * datapath moved to 64 bits (amendment of 2026-08-04 in

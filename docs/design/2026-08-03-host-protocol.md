@@ -428,6 +428,15 @@ spends on its tag:
 | 12 | 8 | timestamp, cycles, free-running |
 | 20 | 4 | reserved, zero |
 
+Duration is engine-take to `eng_done` — key derivation, N blocks, the
+tag — not packet latency. And a bench holds the pipeline for its whole
+run: at N = 65535 that is roughly 2.4 million cycles, so a host that
+pipelines requests behind a long bench can overflow the device's input
+FIFO — the short frame answers with a status error and the trouble
+latch fires, but a bench is a command to wait on, not to queue behind.
+The device's FIFO depths are sized for crypto traffic
+(`oca_uart_crypto.sv`).
+
 The duration is the cycle count from the command taking the engine to
 the engine reporting the tag done: key derivation, N blocks and the
 tag, so durations at two values of N differ by exactly the engine's

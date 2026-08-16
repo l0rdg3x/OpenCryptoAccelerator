@@ -115,7 +115,8 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_secret_zeroise.py     # 2/2 pass
 .venv/bin/python hw/sim/run_keystore.py           # 4/4 pass
 .venv/bin/python hw/sim/run_pktbuf.py             # 12/12 pass, + 3 at BYTES=16
-.venv/bin/python hw/sim/run_oca_core.py           # 29/29 pass
+.venv/bin/python hw/sim/run_oca_core.py           # 31/31 pass
+.venv/bin/python hw/sim/run_aead_cycles.py        # 3/3 pass, differential cycle cost
 .venv/bin/python hw/sim/run_attack.py             # 16/16 pass
 .venv/bin/python hw/sim/run_clkrst.py             # 7/7 pass
 .venv/bin/python hw/sim/run_console.py            # 8/8 pass
@@ -138,10 +139,10 @@ complete because **there is no aggregate RTL runner here at all** —
 binary, so every suite is invoked by name and a suite missing from this
 list is a suite nobody runs.
 
-**The 22 cocotb runners measure 149 tests over 173 passing
+**The 23 cocotb runners measure 154 tests over 178 passing
 executions**, six of them on a synthesised netlist from the two gate
-runners. Beyond them, four more populations run and can fail: **46
-tests in `hw/host/`, 4 in `hw/syn/test_run_synth.py`, 2 in
+runners. Beyond them, four more populations run and can fail: **60
+tests in `hw/host/`, 4 in `hw/syn/test_run_synth.py`, 4 in
 `hw/sim/test_proto_model.py`** and the C backend's **126 known-answer
 checks** behind the single ctest above; the 6-step `cli.py --fake
 selftest` carries an exit-code contract as well. **No grand total is
@@ -185,7 +186,7 @@ The suites that need neither simulator nor RTL toolchain — sub-second,
 so there is no excuse for skipping them:
 
 ```sh
-.venv/bin/python -m pytest -q hw/host                  # 46 pass, host link + fake board
+.venv/bin/python -m pytest -q hw/host                  # 60 pass, host link + fake board
 .venv/bin/python -m pytest -q hw/syn/test_run_synth.py # 4 pass, yosys and nextpnr argv shapes
 .venv/bin/python hw/host/cli.py --fake selftest        # 6/6 steps, in-process fake, no wire
 ```

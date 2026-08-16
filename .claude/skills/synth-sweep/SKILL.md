@@ -12,23 +12,32 @@ this script's own definition of spread, `(max-min)/min`, the pinned
 toolchain gives:
 
 - **`oca_dual` (a pair): 7.3%**, four seeds (50.41 / 51.18 / 47.68 /
-  49.19 MHz, mean 49.61) on the netlist committed today, secret
-  zeroisation included, measured 2026-08-15 on yosys `f77ddfb87`
+  49.19 MHz, mean 49.61) on the netlist of 2026-08-15, secret
+  zeroisation included, measured that day on yosys `f77ddfb87`
   (`docs/RECORD.md`, "Two cores measured"). On the previous pin
   `41a4b5a03` the same sweep spread 4.8% (50.37 / 48.12 / 48.05 / 49.03,
   mean 48.89), measured 2026-08-05 in `d4ee09f`.
 - **`oca_core` (a single core): 6.2%**, four seeds (50.12 / 48.74 /
-  48.61 / 51.62 MHz, mean 49.77) on the netlist committed today,
-  measured 2026-08-15 on yosys `f77ddfb87` (`oca/hw/syn/README.md`,
+  48.61 / 51.62 MHz, mean 49.77) on the netlist of 2026-08-15,
+  measured that day on yosys `f77ddfb87` (`oca/hw/syn/README.md`,
   "Where the committed design stands"). On `41a4b5a03` the same sweep
   spread 6.5% (47.93 / 50.91 / 51.03 / 49.76, mean 49.91), measured
   2026-08-09.
+- **`oca_crypto_pll` (the board top, pinned): 7.7%**, four seeds
+  (49.19 / 51.21 / 52.99 / 51.55 MHz, mean 51.23) on the netlist of
+  `4f879ee`, measured 2026-08-16 on yosys `f77ddfb87`. That is the
+  widest spread recorded on a committed design, the one `sweep.sh`'s
+  over-8% note names. The netlist before that commit spread 6.9%, and
+  an uncommitted one before the reset and heartbeat corrections 8.1%
+  (`docs/RECORD.md`).
 
-The order of those two reversed with the toolchain bump. The pair used
-to be the tighter of the two and is now the wider, which is the point:
-one four-seed draw of each cannot order them as a property of the
-designs. Read every number here as what that sweep measured, not as a
-rule.
+The order of the first two reversed with the toolchain bump. The pair
+used to be the tighter of the two and is now the wider, which is the
+point: one four-seed draw of each cannot order them as a property of
+the designs. Read every number here as what that sweep measured, not as
+a rule. Note also that the 2026-08-16 bubble-and-bench commit changed
+the AEAD engine and `oca_proto`, so the `oca_core` and `oca_dual`
+netlists it left are not the ones their sweeps above measured.
 
 The 4.8% above is `oca_dual` on the old pin, and it is not the only
 4.8% in this repository: `oca/hw/syn/README.md` records a different
@@ -47,7 +56,9 @@ run.
 ```
 
 `target` is one of `run_synth.py`'s designs: `chacha20`, `poly1305`,
-`chacha20_poly1305`, `oca_core`, `oca_dual`. `seeds` defaults to 4.
+`chacha20_poly1305`, `oca_core`, `oca_dual`, or a pinned top such as
+`oca_crypto_pll` (on more than one clock the script reports the one
+with the least margin over its own constraint). `seeds` defaults to 4.
 
 ## What it does, and why each part matters
 

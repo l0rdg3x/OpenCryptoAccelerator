@@ -19,29 +19,33 @@
  * why the heartbeat below cannot be allowed to depend on it. What the
  * ladder gives us is the VCO and the lock, not the rung.
  *
- * THIS NETLIST CLOSES 48.0769, measured 2026-08-15 over four placer
- * seeds on yosys f77ddfb87, pinned against colorlight_i9_crypto.lpf:
- * 50.38 / 51.65 / 52.60 / 49.21 MHz on clk_sys, mean 50.96, spread 6.9%
- * on (max-min)/min, at 13062 TRELLIS_COMB and 12529 TRELLIS_FF -- 32
- * LUTs and 11 flip-flops more than the pre-PLL top. All four seeds clear
- * the constraint. docs/RECORD.md carries the entry and its limits.
+ * THIS NETLIST CLOSES 48.0769, measured 2026-08-16 over four placer
+ * seeds on yosys f77ddfb87 (commit 4f879ee, the bubble-and-bench
+ * change), pinned against colorlight_i9_crypto.lpf:
+ * 49.19 / 51.21 / 52.99 / 51.55 MHz on clk_sys, mean 51.23, spread 7.7%
+ * on (max-min)/min, at 13381 TRELLIS_COMB and 12589 TRELLIS_FF. All
+ * four seeds clear the constraint. The netlist before that change read
+ * 50.38 / 51.65 / 52.60 / 49.21, mean 50.96, spread 6.9%, at
+ * 13062 / 12529 -- 32 LUTs and 11 flip-flops more than the pre-PLL
+ * top. docs/RECORD.md carries both entries and their limits.
  *
  * WHAT THAT MARGIN IS NOT is the one the raw-oscillator build had. The
  * 49.85 belongs to a design with no PLL, its heartbeat in the only
  * domain there was and its reset made internally, and it was asked for
  * 25 MHz -- a 99% margin that could not fail. This one moves all three
  * and asks for 48.0769, and the worst of the four seeds clears it by
- * 2.36%. Re-synthesise any RTL change here before believing it,
+ * 2.31%. Re-synthesise any RTL change here before believing it,
  * including one that looks harmless: equal area would not make it the
  * same placement, which is the project's own lesson about reading an
  * Fmax across two netlists.
  *
- * TWO SEED SPREADS EXIST FOR THIS DESIGN AND NEITHER ORDERS THE OTHER.
- * An earlier four-seed sweep, taken before the reset and heartbeat
- * corrections described below, spread 8.1%; this one spreads 6.9% on a
- * netlist three registers larger. Two four-seed draws cannot order two
- * netlists -- .claude/skills/synth-sweep says so in as many words -- so
- * both are recorded and the comparison is refused.
+ * THREE SEED SPREADS EXIST FOR THIS DESIGN'S TOPS AND NONE ORDERS
+ * ANOTHER. A four-seed sweep taken before the reset and heartbeat
+ * corrections described below spread 8.1%; the 2026-08-15 netlist
+ * spread 6.9%; this one spreads 7.7%. Each belongs to a different
+ * netlist, and four-seed draws cannot rank netlists --
+ * .claude/skills/synth-sweep says so in as many words -- so all three
+ * are recorded and the comparison is refused.
  *
  * AND NOTHING HERE HAS RUN ON SILICON. No bitstream containing this
  * design has been loaded onto the board: 48.0769 MHz is a

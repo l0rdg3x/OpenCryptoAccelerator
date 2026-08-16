@@ -144,7 +144,11 @@ modules:
   the `c_done` / `p_done` / `p_blk_ready` handshakes, the buffer
   occupancy flag, and the sub-block counter derived from the block
   length. `dec` selects a multiplexer input, not a path. A 64-byte
-  block costs 40 cycles regardless of content.
+  block costs 36 cycles regardless of content (40 until the `p_blk`
+  handshake bubble was removed on 2026-08-16; the content-independence
+  is the property, it is unchanged, and the AAD-equality check in
+  `hw/sim/run_aead_cycles.py` still measures an AAD-only block costing
+  exactly what a data block costs).
 - **`oca_proto.sv`** sits above the three and is in scope here too. The
   tag comparison is one fixed-width equality consumed in a one-cycle
   state whose two arms both fall through to the same successor, so the

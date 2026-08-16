@@ -142,9 +142,9 @@ every runner and its per-suite counts live in `AGENTS.md`
 aggregate RTL runner: a suite missing from that list is a suite
 nobody runs.
 
-Current status: **173 passing executions over 22 cocotb runners**, no
-failures and no skips, measured 2026-08-12 with the two crypto suites
-re-measured 2026-08-15; per-suite counts are in the `AGENTS.md`
+Current status: **178 passing executions over 23 cocotb runners**, no
+failures and no skips, measured 2026-08-16 on the 36-cycle netlist
+(2026-08-12 for the suites that did not change); per-suite counts are in the `AGENTS.md`
 registry, and the counting history — how 222 became 177 and then 173,
 and why a fresh clone read 207 — is in `docs/RECORD.md`. The protocol
 model checks pass as plain Python; `verilator --lint-only -Wall` clean
@@ -205,8 +205,9 @@ they are wired to the ports, and `oca_dual` gives each core its own
 AXI-Stream pair, one per PHY: **0.569 Gbps per port at a 1500-byte MTU,
 56.9% of line rate, and 1.138 Gbps across both** — the committed pair's
 48.89 MHz mean on yosys `41a4b5a03` through the measured cycle model,
-1031 cycles for an MTU-sized packet; on `f77ddfb87` that pair means
-49.61 MHz and the same model gives 0.577 / 1.155. That mean is an out-of-context Fmax and no PLL divider
+1031 cycles for an MTU-sized packet -- the model of its day: since
+2026-08-16 a block costs 36 and an MTU packet 934; on `f77ddfb87` that pair means
+49.61 MHz and the day's model gives 0.577 / 1.155. That mean is an out-of-context Fmax and no PLL divider
 produces it, so read these as cycle budgets: at the 48.0769 MHz
 `oca_clkrst` delivers they are 0.560 per port. Both PHYs can be fed in cycle budget — whether two
 MACs fit beside the cores is settled below, and they do not — and
@@ -298,9 +299,11 @@ through buffer, engine and buffer, 8 to transmit, strictly sequential
 because the core was store and forward on one pair of buffers.
 Overlapping feed, compute and drain inside a command took it to **56**,
 and overlapping four packet stages across successive commands took it to
-**40**: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16 blocks. 40 is
-the engine's own cost, so the protocol layer now adds nothing on top of
-it, and that is the floor until the engine changes.
+**40**: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16 blocks. 40 was
+the engine's own cost, so the protocol layer added nothing on top of
+it -- and it stayed the floor until the engine changed: the p_blk
+retiming of 2026-08-16 took a block to 36 and the packet intercept to
+70 (`docs/RECORD.md`).
 
 **What that is worth end to end is a projection, not a measurement, and
 the ports it divides across were retired on 2026-08-12** for want of an

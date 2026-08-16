@@ -61,13 +61,14 @@ ctest --test-dir build --output-on-failure
 RTL simulation (requires Verilator and a Python virtualenv with cocotb —
 exact tool setup in [AGENTS.md](AGENTS.md)):
 
-The full registry — all 22 cocotb runners with their expected counts,
+The full registry — all 23 cocotb runners with their expected counts,
 plus the host, synthesis and protocol-model suites — lives in
 [AGENTS.md](AGENTS.md) "## How to build and test", the single list a
-suite must appear on to exist. Today it measures **173 passing
-executions with no failures and no skips** (2026-08-12, the two crypto
-suites re-measured 2026-08-15); outside the simulator, `pytest hw/host`
-(46), `pytest hw/syn/test_run_synth.py` (4), the protocol model (2),
+suite must appear on to exist. Today it measures **178 passing
+executions with no failures and no skips** (2026-08-12, the crypto
+suites re-measured 2026-08-15 for the PLL and 2026-08-16 for the
+bubble-and-bench commit); outside the simulator, `pytest hw/host`
+(60), `pytest hw/syn/test_run_synth.py` (4), the protocol model (4),
 the 6-step `--fake` selftest, and the 126 known-answer checks behind
 `ctest` — different units, never summed.
 

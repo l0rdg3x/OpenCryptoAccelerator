@@ -44,8 +44,11 @@ Hardware accelerator for:
 
 - MVP (ECP5): aggregate crypto-core throughput in the FPGA fabric of
   ~1.26 Gbps from two parallel AEAD engines, measured in simulation and
-  on hardware. **That is an aggregate cycle budget and not a saturated
-  port.** This bullet read "high enough to saturate one GbE host port
+  on hardware. (On the 36-cycle block measured 2026-08-16 on `4f879ee`
+  the same two-engine budget computes to ~1.41 Gbps; the sum below
+  carries the arithmetic and the ~1.26 stays the target of record until
+  it is re-set deliberately.) **That is an aggregate cycle budget and
+  not a saturated port.** This bullet read "high enough to saturate one GbE host port
   with margin" until 2026-08-06, which added the two engines together
   against a single port: `oca_dual` gives each core its own stream, so a
   port sees one core and carries 0.569 Gbps at a 1500-byte MTU on yosys
@@ -79,7 +82,11 @@ Hardware accelerator for:
   committed pair's 48.89 MHz on yosys `41a4b5a03` puts the same sum at
   ~1.25 Gbps, and its 49.61 on `f77ddfb87` at ~1.27, which is
   why this target is left where it is rather than chased by a
-  hundredth. This paragraph read "one port saturated with **26%
+  hundredth. The cycle side then moved by more than a hundredth: a
+  block costs **36 cycles since 2026-08-16** (`4f879ee`, the `p_blk`
+  bubble removal, measured differentially), which puts the same
+  two-engine sum at **~1.41 Gbps** on the 49.61 — stated beside the
+  ~1.26, which stands until the target is re-set deliberately. This paragraph read "one port saturated with **26%
   margin**" until 2026-08-06; the sum only clears a port if both engines
   sit behind that port, which `oca_dual` does not do.
   **Corrected 2026-08-04, then amended the same day: the cycle budget
@@ -96,6 +103,11 @@ Hardware accelerator for:
   adding anything to it. Measured differentially in simulation and
   exactly linear: 231, 391, 551 and 711 cycles for 4, 8, 12 and 16
   blocks, marginal 40.00.
+  **Amended 2026-08-16 (`4f879ee`): the engine's figure is 36.** The
+  one-cycle `p_blk` handshake bubble was removed — one side of the
+  handshake only, `poly1305.sv` untouched — and the same differential
+  measurement reads 214/358/502/646 for the same spans, marginal
+  exactly 36.00, packet intercept 71 → 70 (`docs/RECORD.md`).
   **What that is worth end to end is a projection, not a result** — the
   cycles and the clock are both measured, but nothing has run on
   silicon. At 1.6 bytes/cycle and the 48.53 MHz measured for the last
@@ -132,7 +144,11 @@ Hardware accelerator for:
   Gbps per port, 56.9% of line rate, 1.138 Gbps across both**; on
   `f77ddfb87` 49.61 gives 0.577 / 1.155, and at 48.16 it was
   0.561 / 1.121. Each of those pairs
-  is the arithmetic of the clock beside it and nothing more. **48.89 and
+  is the arithmetic of the clock beside it and nothing more, and all of
+  them are on the 40 + 71 model of their day: since 2026-08-16
+  (`4f879ee`) the measured model is 36 cycles per block plus 70 per
+  packet — 934 cycles at MTU — and these retired port figures are not
+  recomputed on it. **48.89 and
   49.61 MHz are out-of-context Fmax figures and no PLL divider produces
   either**, so these are
   cycle budgets and not rates — the 2026-08-10 amendment below gives the
@@ -167,7 +183,10 @@ Hardware accelerator for:
   because `clk_tx` divides the same VCO the ladder is coarse — nothing
   between 48.08 and 50.00, and 50.00 has since been built and does not
   close (48.22 against 50.00). Through the same cycle model the design
-  delivers **0.560 Gbps at MTU, 56.0% of line rate**.
+  delivers **0.560 Gbps at MTU, 56.0% of line rate** (the 1031-cycle
+  model of its day; the 36 + 70 model measured 2026-08-16 gives 934
+  cycles and 0.618 Gbps at the same 48.0769 MHz, on a design that no
+  longer exists to be rebuilt).
 
   **Amended 2026-08-11: it does not close timing at all.** Connecting
   the raw-IP ready pins on the UDP stack, which the board needs or one
@@ -191,7 +210,8 @@ Hardware accelerator for:
   ready pins.)
   Nothing has run on a board. The host
   datapath is no longer the limit — it costs the
-  engine's 40 cycles per 64-byte block and nothing on top, see
+  engine's 36 cycles per 64-byte block (40 until the `p_blk` bubble
+  removal of 2026-08-16, `4f879ee`) and nothing on top, see
   `docs/design/2026-08-03-host-protocol.md`. Measurements and method:
   `oca/hw/syn/README.md`.
 - Phase 3 (Artix-7 + LitePCIe): aggregate crypto-core throughput
@@ -218,7 +238,9 @@ Hardware accelerator for:
   and the GbE link is the larger number, not the smaller one. (This read
   0.581 and 58.1% until 2026-08-10: that figure divides an Fmax the PLL
   cannot deliver into the cycle model. The conclusion is unchanged and
-  the margin is wider.) What
+  the margin is wider. On the 36 + 70 model measured 2026-08-16 on
+  `4f879ee` the same clock gives 0.618 Gbps and 61.8%, the port idling
+  38% — the conclusion is still unchanged.) What
   bounds v1 is what fits and routes on the LFE5U-45F: three cores do
   not route at 76.4% occupancy (congestion, not timing), and one
   Ethernet port costs 8422 LUTs, which puts two cores with two ports at
