@@ -284,10 +284,13 @@ DESIGNS = {
 # oca_proto.sv: measured, not derived. The registers the module declares
 # add up to more than the netlist keeps — yosys folds fields it can prove
 # equal — so a figure computed from the RTL would fail a healthy build.
-# 3645 live at the RTL of this commit with the toolchain in tools/; the
-# floor sits just under that, loose enough to survive the optimiser
-# moving a few registers and tight enough to catch storage vanishing
-# wholesale, which is what the cmp2lut trap did to 89% of the key store.
+# 3837 live at the RTL of this commit with the toolchain in tools/,
+# measured 2026-08-16: 3645 before the bench counter, plus its 192 (a
+# 64-bit tick and two 64-bit captures). The floor stays at 3600 — under
+# the pre-bench figure on purpose, since what it exists to catch is
+# storage vanishing wholesale, which is what the cmp2lut trap did to
+# 89% of the key store, and a floor chasing the census upward buys
+# nothing against that while failing the next healthy refactor.
 # It has to be re-measured whenever oca_proto's state changes, and the
 # census check_netlist prints below is where the new number comes from.
 #
@@ -482,12 +485,15 @@ NETLIST_FF_FLOOR = {
     # Every figure in this entry was derived before the target had ever
     # been built. Two four-seed sweeps built it on 2026-08-15, the
     # second after the reset and heartbeat corrections added three
-    # registers, and the census of that netlist confirms all ten:
+    # registers, and the census of that netlist confirmed all ten:
     # 2313, 3645, 34, 23, 22, 160, 75, 6, 2, 32.
-    # Nine sit exactly on their floor and stay there, which is what a
-    # derived figure earns here -- a legitimate reduction should fail and
-    # be re-measured. oca_proto.sv is the one with slack, 45 registers or
-    # 1.2%, for the reason its own entry above gives.
+    # The 2026-08-16 sweep on the bubble-and-bench netlist reads the
+    # same ten with one change, oca_proto.sv at 3837 -- the bench
+    # counter's 192, as its entry above records. Nine sit exactly on
+    # their floor and stay there, which is what a derived figure earns
+    # here -- a legitimate reduction should fail and be re-measured.
+    # oca_proto.sv is the one with slack, now the bench counter's
+    # registers on top of the old 45, for the reason its entry gives.
     #
     # THE PAIR WORTH READING TWICE IS 34 AND 23. Predicted from
     # $clog2(417) = 9 where the standalone build has $clog2(217) = 8, and
@@ -525,7 +531,11 @@ NETLIST_FF_FLOOR = {
 # check_netlist prints is where the new number comes from. Adding
 # storage is free — this only ever fails downwards.
 #
-# oca_core measures 12033 live flip-flops, oca_dual exactly twice that.
+# oca_core measured 12033 live flip-flops on the netlist before the
+# 2026-08-16 bubble-and-bench change, oca_dual exactly twice that;
+# neither target has been rebuilt on it, so neither floor has been
+# exercised there. The two pinned tops below have, and moved by +61
+# and +60.
 NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # Floored ~1% under for the same reason as oca_core:
                     # chacha20.sv, poly1305.sv and chacha20_poly1305.sv
@@ -534,31 +544,38 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # per-file floor tight enough to catch an accumulator
                     # vanishing would fail a healthy build.
                     #
-                    # 12518 was the measurement, on the RTL before the
-                    # heartbeat left this module. The LED took 26
-                    # registers with it, so the figure to expect now is
-                    # 12492 -- DERIVED, NOT MEASURED, which is why the
-                    # floor stays where it was rather than being pulled
-                    # up behind it. Re-measure and tighten on the next
-                    # build of this target.
+                    # 12518 was the measurement on the RTL before the
+                    # heartbeat left this module; losing the LED's 26
+                    # made 12492 the derived expectation, and the build
+                    # of 2026-08-16 measured 12553 -- the derivation
+                    # plus the bubble-and-bench commit's net +61 (the
+                    # bubble removed ~131 registers, the bench counter
+                    # added 192; the finer split was not chased). The
+                    # floor stays at 12400: 153 registers of margin,
+                    # 1.2%, the same discipline as oca_core's, and the
+                    # smallest loss worth catching is still hundreds.
                     "oca_uart_crypto": 12400,
                     # The same datapath plus 37 registers: 32 in the
                     # new top, 2 surviving in oca_clkrst.sv, one bit each
                     # on the two UART divisor counters and the core's
-                    # registered rst_n_core. 12526 was the prediction and
-                    # 12529 is the measurement: the reset and heartbeat
-                    # corrections of 2026-08-15 added three registers
-                    # after that prediction was written, and the census,
-                    # the yosys log and the nextpnr log all read 12529.
+                    # registered rst_n_core. 12526 was the prediction,
+                    # 12529 the 2026-08-15 measurement (the reset and
+                    # heartbeat corrections added three registers after
+                    # the prediction was written), and 12589 the
+                    # 2026-08-16 one -- the bubble-and-bench commit's
+                    # net +60 here, against +61 on the top above; the
+                    # one-register disagreement between the two tops was
+                    # not chased, and the census, the yosys log and the
+                    # nextpnr log agree on 12589.
                     #
-                    # The floor stays at 12400 now that it is a margin
-                    # under a measurement rather than under a prediction:
-                    # 126 registers, 1.0%, the same discipline as
-                    # oca_core's 11900 under 12033. Loose enough that the
-                    # optimiser moving a few registers does not fail a
-                    # healthy build, tight enough that the smallest thing
-                    # worth catching -- a few hundred registers, a key
-                    # store, an accumulator -- cannot hide under it.
+                    # The floor stays at 12400, a margin under a
+                    # measurement: 189 registers, 1.5%, the same
+                    # discipline as oca_core's 11900 under 12033. Loose
+                    # enough that the optimiser moving a few registers
+                    # does not fail a healthy build, tight enough that
+                    # the smallest thing worth catching -- a few hundred
+                    # registers, a key store, an accumulator -- cannot
+                    # hide under it.
                     "oca_crypto_pll": 12400,
                     # Exact rather than a few percent under, because
                     # these two are new and small enough that every

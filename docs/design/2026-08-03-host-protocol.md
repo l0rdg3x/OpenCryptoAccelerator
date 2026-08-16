@@ -287,6 +287,12 @@ failures.
 The tag precedes the payload in both directions so the host finds it at
 a fixed offset without first computing lengths.
 
+> **Amended 2026-08-16.** A fifth command exists: `05` bench, the
+> on-chip cycle benchmark, defined in section 8. The addition is purely
+> additive — on a device built before it, `05` was an unknown opcode
+> and answered status `03`, exactly as this section already promises,
+> so hosts and devices can meet in either order.
+
 ### Status codes
 
 | code | meaning |
@@ -386,3 +392,71 @@ was closed on 2026-08-12 with nothing left for the bench to settle. See
 closure, and `SPEC.md`, PHASE 2. The host interface is the board's
 DAPLink USB serial; nothing in the sections above depends on which
 transport delivers the request.
+
+## 8. The bench command — added 2026-08-16
+
+Date: 2026-08-16. Additive: nothing above this section changes, and a
+device without this opcode answers it with status `03` as section 4
+promises for unknown opcodes.
+
+The serial link runs three orders of magnitude below the core, so a
+host-side timing of any command measures the transport, not the
+engine. The only honest performance number this board can produce is a
+cycle count measured on-chip, beside the engine, and this command is
+that counter's window on the wire.
+
+**`05` bench.** The layout is the seal's, with the block count in the
+message-length field counting blocks instead of bytes:
+
+| offset | size | field |
+|--------|------|-------|
+| 8  | 12 | nonce |
+| 20 | 2  | reserved, must be zero |
+| 22 | 2  | N — blocks to run, at least 1 |
+| 24 | 64 | the block |
+
+The device seals that one block N times under the slot's key — the same
+fail-closed slot check as a seal, the same path into the engine — from
+a single buffered copy, so the feed hides under the engine's per-block
+cost and the count measures the engine. The ciphertext is not
+returned. Response: the header, then the 16 bytes a successful seal
+spends on its tag:
+
+| offset | size | field |
+|--------|------|-------|
+| 8  | 4 | duration, cycles |
+| 12 | 8 | timestamp, cycles, free-running |
+| 20 | 4 | reserved, zero |
+
+Duration is engine-take to `eng_done` — key derivation, N blocks, the
+tag — not packet latency. And a bench holds the pipeline for its whole
+run: at N = 65535 that is roughly 2.4 million cycles, so a host that
+pipelines requests behind a long bench can overflow the device's input
+FIFO — the short frame answers with a status error and the trouble
+latch fires, but a bench is a command to wait on, not to queue behind.
+The device's FIFO depths are sized for crypto traffic
+(`oca_uart_crypto.sv`).
+
+The duration is the cycle count from the command taking the engine to
+the engine reporting the tag done: key derivation, N blocks and the
+tag, so durations at two values of N differ by exactly the engine's
+marginal per-block cost and their common intercept is everything a
+command pays once. `hw/sim/test_aead_cycles.py` asserts both against
+the differential measurement, and an off-by-one in the repeat counter
+is pinned by counting the engine's own block handshakes, which the
+response alone cannot show.
+
+The timestamp is the same counter's value at the instant the window
+closed, from a 64-bit timebase that runs from reset and is never
+cleared — at the board's 48.0769 MHz it wraps after ~12000 years. One
+engine's numbers do not need it; it exists so that a host driving two
+engines can prove their windows `[timestamp − duration, timestamp]`
+overlapped, which no pair of bare durations can show. The 32-bit
+duration cannot wrap: N is at most 65535 and a block costs the engine
+a two-digit number of cycles.
+
+Failures, all before the engine is touched: an unloaded or
+out-of-range slot is status `04`, judged first, exactly as a seal is;
+then anything that is not a header, sixteen argument bytes and one
+whole 64-byte block — a short or long packet, a nonzero reserved
+field, N of zero — is status `05`.

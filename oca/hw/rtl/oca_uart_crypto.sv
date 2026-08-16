@@ -47,11 +47,18 @@
  * so they cannot cost a byte. The third is the one that matters, and it
  * splits by what the host does. A host that sends a request and reads
  * the whole response before the next one never stalls the decoder for
- * longer than oca_core takes to accept a frame into a free bank, which
- * for the longest command is the 1351 cycles of a 2048-byte seal
- * (40 cycles per 64-byte block plus 71 per packet, docs/RECORD.md)
- * -- still under one byte time. So in that regime ONE entry would do
- * and every depth here is margin.
+ * longer than oca_core takes to accept a frame into a free bank --
+ * for the longest CRYPTO command that is the 1222 cycles of a
+ * 2048-byte seal (36 cycles per 64-byte block plus 70 per packet,
+ * docs/RECORD.md), still under one byte time, so in that regime ONE
+ * entry would do and every depth here is margin. The one command that
+ * bound does NOT cover is a bench (opcode 05): it holds its bank for
+ * its whole run, up to ~2.4M cycles at N = 65535, so a host that
+ * pipelines a request behind a long bench and keeps typing can
+ * overflow the input FIFO. Not silent -- the short frame answers with
+ * a status error and `trouble` latches -- and a request/response host
+ * never sees it, but the depths here are sized for crypto traffic,
+ * not for pipelining behind a bench.
  *
  * A host that keeps writing while a response is still coming back is a
  * different case and NO DEPTH FIXES IT. oca_proto is store and forward

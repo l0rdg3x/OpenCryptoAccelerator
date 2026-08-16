@@ -88,6 +88,34 @@ class _WrongOpcodeReply:
         return out
 
 
+class _CannedBenchReply:
+    """A transport that answers every request with status 00 and a body
+    of this test's choosing -- what a broken or foreign device would
+    look like if its bench response did not carry the 16 bytes
+    (duration, timestamp, reserved-zero) section 8 of
+    docs/design/2026-08-03-host-protocol.md promises. bench()'s own
+    body checks have to catch it; nothing upstream of them does."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+        self._out = bytearray()
+
+    def write(self, data: bytes) -> None:
+        frames = [f for f in slip_model.decode(data) if f]
+        assert len(frames) == 1
+        req = proto_model.parse_response(frames[0])  # same header layout
+        resp = (proto_model.MAGIC
+                + bytes([proto_model.VERSION, req["opcode"]])
+                + req["req_id"].to_bytes(2, "little")
+                + bytes([req["slot"], proto_model.ST_OK])
+                + self._body)
+        self._out += slip_model.encode(resp)
+
+    def read(self, timeout: float) -> bytes:
+        out, self._out = bytes(self._out), bytearray()
+        return out
+
+
 class _NoWriteAllowed:
     """A transport that fails the test if write() is ever called -- for
     proving a request is refused locally, before touching the wire."""
@@ -243,6 +271,69 @@ def test_stats_counters_present():
     link = _link()
     s = link.stats()
     assert set(s) == {"received", "dropped_header", "completed", "auth_failures"}
+
+
+def test_bench_happy_path_count_is_deterministic():
+    """The fake's count model is its contract: BENCH_BASE + N *
+    BENCH_PER_BLOCK fake cycles, openly arbitrary constants -- so the
+    whole wire round trip (build_bench out, <IQ4s back) is pinned to an
+    exact number, not just to 'some integer came back'."""
+    link = _link()
+    link.load_key(0, bytes(range(32)))
+    r = link.bench(0, 8)
+    assert r["duration"] == FakeBoard.BENCH_BASE + 8 * FakeBoard.BENCH_PER_BLOCK
+    assert r["timestamp"] >= r["duration"]  # the window closed after it opened
+
+
+def test_bench_durations_differ_by_the_marginal_cost():
+    """The property section 8 promises of the real counter, held by the
+    fake's linear model: two durations differ by exactly the per-block
+    cost times the block difference, and consecutive windows
+    [timestamp - duration, timestamp] do not overlap."""
+    link = _link()
+    link.load_key(0, bytes(range(32)))
+    r1 = link.bench(0, 4)
+    r2 = link.bench(0, 12)
+    assert r2["duration"] - r1["duration"] == 8 * FakeBoard.BENCH_PER_BLOCK
+    assert r2["timestamp"] - r2["duration"] >= r1["timestamp"]
+
+
+def test_bench_unloaded_slot_is_refused():
+    """Status 04, judged before anything touches the engine -- the same
+    fail-closed slot check as a seal."""
+    link = _link()
+    try:
+        link.bench(3, 8)
+    except StatusError as exc:
+        assert exc.status == proto_model.ST_BAD_SLOT
+    else:
+        raise AssertionError("expected StatusError")
+
+
+def test_bench_short_response_is_rejected():
+    """A status-00 bench reply whose body is shorter than the 16 bytes
+    the format promises must raise ProtocolError, not be sliced into
+    nonsense numbers."""
+    link = OcaLink(_CannedBenchReply(b"\x00" * 4), timeout=0.2)
+    try:
+        link.bench(0, 8)
+    except ProtocolError:
+        pass
+    else:
+        raise AssertionError("expected ProtocolError")
+
+
+def test_bench_nonzero_reserved_bytes_are_rejected():
+    """The last 4 body bytes are reserved-zero by section 8; a device
+    that fills them is not speaking this protocol version."""
+    body = bytes(12) + b"\x01\x00\x00\x00"
+    link = OcaLink(_CannedBenchReply(body), timeout=0.2)
+    try:
+        link.bench(0, 8)
+    except ProtocolError:
+        pass
+    else:
+        raise AssertionError("expected ProtocolError")
 
 
 def test_wire_byte_counters_advance():

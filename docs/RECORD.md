@@ -147,18 +147,19 @@ day it happened, came to be read as the repository's total in three
 documents at once. The populations (simulator tests, simulator
 executions, Python tests, KAT checks, selftest steps) share no unit,
 and no grand total exists anywhere in this project. The three
-populations outside the simulator and the C binary — 46 in `hw/host/`,
-4 in `hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py` —
-were measured 2026-08-13, all sub-second, none needing Verilator,
-yosys or a board.
+populations outside the simulator and the C binary — 60 in `hw/host/`,
+4 in `hw/syn/test_run_synth.py`, 4 in `hw/sim/test_proto_model.py` —
+were measured 2026-08-13 at 46 / 4 / 2 and re-measured 2026-08-16,
+when the bench opcode brought fourteen host tests and two model
+checks; all sub-second, none needing Verilator, yosys or a board.
 
-**The 22 cocotb runners measure 149 tests over 173 passing
+**The 23 cocotb runners measure 154 tests over 178 passing
 executions**, six of them on a synthesised netlist from the two gate
 runners. Twenty-four tests run a second time at a non-default
 parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
 `poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
 smallest `BYTES` it accepts and all twelve of `oca_slip_rx` at `BYTES`
-= 64 — which is what separates the two figures: 143 tests outside the
+= 64 — which is what separates the two figures: 148 tests outside the
 gate runners, plus 24 re-runs, plus their 6. `run_crypto_pll.py` is not
 among them although it names a parameter: `LED_BITS` = 8 is its only
 build, because a heartbeat at the board's 25 bits is 16.8 million
@@ -166,10 +167,18 @@ clocks a half-period and no run can watch one, so there is no
 default-parameter build of that top for anything to re-run against.
 
 Measured by running every runner in the registry on 2026-08-12, after
-the Ethernet removal, and the two crypto suites again on 2026-08-15,
-when the board top gained its PLL: **173 passing executions, no
-failures, no skips, and every runner exits 0.** At the execution level
-the step from the previous figure is 177 − 12 + 8 = 173:
+the Ethernet removal; the two crypto suites again on 2026-08-15, when
+the board top gained its PLL; and the suites the bubble-and-bench
+commit `4f879ee` touched again on it, 2026-08-16 — `run_oca_core`
+31/31, `run_aead_cycles` 3/3, `run_attack` 16/16, `run_uart_crypto`
+5/5, `run_crypto_pll` 3/3, `run_proto_gate` 2/2: **178 passing
+executions, no failures, no skips, and every runner exits 0.** At the
+execution level the step from the previous figure is 173 + 2 + 3 =
+178: `run_oca_core` gained the two bench-opcode tests and
+`run_aead_cycles` arrived with three, none of them re-run at a second
+parameter, so the 24 re-runs and the gate pair's 6 stand — 148 + 24 +
+6 = 178, and 148 + 6 = 154 tests over 23 runners. The step before it
+was 177 − 12 + 8 = 173:
 `run_uart_crypto` went from twelve passing executions over two builds
 to five over one, and `run_crypto_pll` arrived with three. Nothing
 skips any more.
@@ -371,7 +380,9 @@ now carries all of them, which is the actual fix.
   study"). Note that `ROWS_PER_CYCLE` in `poly1305.sv` competes with
   replication for the same 72 multipliers — 2 rows per cycle costs 40
   per engine, so one engine instead of two — while removing the
-  one-cycle `p_blk` bubble is free.
+  one-cycle `p_blk` bubble was free of multipliers: done 2026-08-16
+  (`4f879ee`, its own entry below), 36 cycles per block with the 20
+  MULT18X18D per engine unchanged.
 - **The host protocol is implemented and verified** (design:
   `docs/design/2026-08-03-host-protocol.md`). Four new modules behind a
   64-bit AXI-Stream boundary with `tkeep`: `oca_keystore.sv` (8 key
@@ -405,8 +416,11 @@ now carries all of them, which is the actual fix.
   MULT18X18D (27.8%), 4 DP16KD (3.7%)**, and **Fmax 50.12 / 48.74 /
   48.61 / 51.62, mean 49.77 MHz** over four placer seeds (measured
   2026-08-15 on yosys `f77ddfb87`; area identical on all four, as it
-  must be). The figures `run_synth.py oca_core` reproduces today, on a
-  netlist whose key store is present (see the `cmp2lut` bullet below).
+  must be). The figures `run_synth.py oca_core` reproduced on the RTL
+  of that day, on a netlist whose key store is present (see the
+  `cmp2lut` bullet below); the 36-cycle retiming and the bench counter
+  of 2026-08-16 changed the netlist and this target has not been
+  rebuilt since, so a rebuild today measures that commit, not this row.
   The spread is **6.2%**, against the pair's 7.3% on the same pin — both
   wide enough that a single seed from either settles nothing, and one
   four-seed draw of each is not enough to order them as a property of
@@ -486,7 +500,8 @@ now carries all of them, which is the actual fix.
   711 cycles for 4, 8, 12, 16 blocks, marginal 40.00. Of the 48 middle
   cycles at the 64-cycle stage, 40 were already the engine, which is why
   40 is the floor and why the remaining work was scheduling rather than
-  datapath.
+  datapath. The floor itself then moved: the `p_blk` bubble removal of
+  2026-08-16 took the engine's own cost to 36 (its own entry below).
 - **Two cores measured, and the port target the Ethernet route carried
   until it was retired on 2026-08-12.** The cell counts, the clocks and
   the cycle model in this bullet are measurements and stand; every
@@ -506,8 +521,11 @@ now carries all of them, which is the actual fix.
   `oca_dual` answers it: two independent AXI-Stream pairs, one per
   core.** Throughput follows from the measured cycle model — 40 cycles
   per 64-byte block plus 71 per packet, so 1031 cycles for a 1500-byte
-  MTU and 111 for a 64-byte packet — divided into the clock of the
-  netlist being described, **and it moves when that clock does** —
+  MTU and 111 for a 64-byte packet, the model of this bullet's day;
+  since 2026-08-16 (`4f879ee`) the measured model is 36 per block plus
+  70 per packet, 934 and 106 cycles, and none of the retired port
+  figures below has been recomputed on it — divided into the clock of
+  the netlist being described, **and it moves when that clock does** —
   which makes every figure below a cycle budget, since the clock in
   question is an Fmax and `oca_clkrst`'s PLL delivers 625/13 =
   48.0769 MHz whatever an out-of-context build reaches. On
@@ -691,7 +709,8 @@ now carries all of them, which is the actual fix.
   synthesised netlist — 2 of its 4 fail on a yosys older than
   `f77ddfb87`. The same net
   now covers `oca_proto` as well: a floor of 3600 live flip-flops
-  attributed to it (3645 measured, and `check_netlist` prints the census
+  attributed to it (3645 measured then, 3837 since the 2026-08-16 bench
+  counter, and `check_netlist` prints the census
   per file so the number can be re-measured), and `run_proto_gate.py`
   for the tag comparison, which is combinational and so invisible to any
   cell count. Cost:
@@ -727,7 +746,10 @@ now carries all of them, which is the actual fix.
   attributed to any one of the three engine files fails it, and the
   per-file floors report ok in all three cases.
 - **The board top closes 48.0769 MHz, over four placer seeds**
-  (2026-08-15). `oca_crypto_pll` is `oca_clkrst` in front of the whole
+  (2026-08-15; **superseded by the 2026-08-16 sweep three entries
+  below** — the bubble-and-bench commit `4f879ee` changed this netlist,
+  and this entry stays as the measurement of the one it names).
+  `oca_crypto_pll` is `oca_clkrst` in front of the whole
   of `oca_uart_crypto`, pinned against `colorlight_i9_crypto.lpf` on the
   console's four pins: the datapath runs on `clk_sys` at 48.0769 MHz
   instead of the 25 MHz pad, and the heartbeat stays behind on that pad
@@ -807,6 +829,107 @@ now carries all of them, which is the actual fix.
      netlists, which is what that skill says in as many words. Both
      spreads are recorded, each against the netlist it belongs to, and
      the comparison is refused.
+- **The `p_blk` handshake bubble is gone: a 64-byte block costs 36
+  cycles, measured, and `poly1305.sv` is untouched** (2026-08-16,
+  commit `4f879ee`). The MAC FSM sampled poly1305's registered
+  `blk_ready` and registered `p_blk` one edge later, so every 16-byte
+  sub-block spent two `S_WAIT` cycles instead of one — the +1 in the
+  4 × (9 + 1) = 40 decomposition above — and paid the same bubble again
+  under the length block. The wrapper's side of the handshake is now
+  combinational in `S_M_FEED` and `S_M_LEN`: `p_blk`, `p_data_in` and
+  `p_last` derive from `blk_ready`, `S_M_NEXT` and `S_M_LENP` are
+  deleted, and the MAC FSM has four states instead of six. **One side
+  only, never both**: on 2026-08-03 this same bubble was attacked from
+  both ends by two individually-correct proposals and the combination
+  silently corrupted the authentication tag ("What the rules cost"
+  above), so `poly1305.sv`'s contract stays byte-identical and the
+  comment at the site carries the rule.
+
+  Measured, not asserted, by a new differential runner
+  (`hw/sim/run_aead_cycles.py`) that was validated against this record
+  before being trusted: on the unedited RTL it reproduces the recorded
+  231/391/551/711 cycles for 4/8/12/16-block seals to the cycle, and on
+  the edited RTL reads **214/358/502/646** — marginal cost exactly
+  **36.00** on every span, packet intercept 71 → **70**. An AAD-only
+  block still costs exactly what a data block costs, so ChaCha20's 22
+  cycles stay hidden, with 14 cycles of slack where they had 18. Both
+  checks fail by mutation: the pristine wrapper reads 40.00 and fails
+  the marginal assertion, and a serialised-ChaCha mutant fails the AAD
+  equality at 188 against 144.
+
+  At the 48.0769 MHz the PLL delivers, the model is a cycle budget of
+  **934 cycles for a 1500-byte MTU packet** (24 blocks) and **106 for a
+  64-byte packet** — 0.618 and 0.232 Gbps per engine, against
+  1031 / 0.560 and 111 / 0.222 on the 40 + 71 model. Cycle budgets, not
+  rates: nothing has run on silicon, and the serial link the board
+  actually carries is three orders of magnitude below either number.
+- **Opcode 05 is an on-chip benchmark, and its counter agrees with the
+  testbench's instrument** (2026-08-16, commit `4f879ee`). The serial
+  link runs three orders of magnitude below the core, so the only
+  performance figure this board can honestly produce is a cycle count
+  taken by the fabric itself. The opcode takes N and one 64-byte block,
+  keys from a loaded slot through the same fail-closed check as seal,
+  re-feeds the block N times behind a repeat counter, and answers with
+  a 32-bit duration and a 64-bit free-running timestamp in the 16-byte
+  extra field stats already uses; unknown opcodes already answer status
+  03, so deployed hosts are undisturbed by construction. The duration
+  is **engine-take to `eng_done`** — a different quantity from the
+  packet spacing the differential runner measures, and each figure is
+  recorded as what it is. Exercised in simulation through the full
+  protocol path, benches of 4/8/16 blocks answer **210/354/642**:
+  marginal 36.00 again, intercept **66** where the packet model's is
+  70. Two instruments built independently agreeing on the marginal cost
+  is the point of having both; what the board answers once a bitstream
+  is loaded is the first performance figure this project can take on
+  silicon, and it has not been taken.
+- **The board top still closes 48.0769 MHz with the bubble removed and
+  the bench counter in** (2026-08-16, four placer seeds on commit
+  `4f879ee`, yosys `f77ddfb87`, pinned against
+  `colorlight_i9_crypto.lpf`, LFE5U-45F CABGA381 speed grade 6).
+
+  | | measured, four seeds |
+  |---|---|
+  | TRELLIS_COMB | 13381, **30.5%** of the device |
+  | TRELLIS_FF | 12589, 28.7% |
+  | DP16KD | 6, 5.6% |
+  | MULT18X18D | 20, 27.8% |
+  | EHXPLLL | 1 of 4 |
+  | DCCA | 2 |
+  | TRELLIS_IO | 4, every pad the `.lpf` names |
+  | `clk_sys` | 49.19 / 51.21 / 52.99 / 51.55 MHz — **mean 51.23**, spread 7.7% |
+
+  Area is identical across the four seeds, as synthesis being
+  deterministic requires; spread is `sweep.sh`'s `(max-min)/min`. **All
+  four seeds clear the 48.0769 MHz the PLL delivers**, and the tightest
+  clears it by **2.31%**.
+
+  Against the netlist of the entry above (13062 / 12529): **+319 LUTs,
+  +60 flip-flops**. The components that are known: the bubble removed
+  ~131 flip-flops (the 128-bit `p_data_in`, `p_blk`, `p_last`, one
+  `m_state` bit) and the bench counter added 192 (a 64-bit tick and two
+  64-bit captures) plus their muxes. The exact per-flop decomposition
+  of the remainder was not chased, and nothing finer than the netlist
+  totals is claimed. The whole-netlist census reads 12589 on this top
+  and 12553 on `oca_uart_crypto` (which reports area alone, having no
+  `.lpf`); `oca_proto.sv`'s attribution went 3645 → 3837, exactly the
+  bench counter's 192. Every floor in `run_synth.py` holds unchanged on
+  the two tops built — `oca_core` and `oca_dual` have not been rebuilt
+  on this commit, so theirs went unexercised — and `run_proto_gate`
+  replays 2/2 on the synthesised netlist.
+
+  **What this does not establish.**
+
+  1. **Nothing has run on silicon**, still: no bitstream containing any
+     crypto design has been loaded onto the board, and 48.0769 MHz
+     remains a place-and-route result about a netlist.
+  2. **The margin is the worst seed's 2.31%**, and an RTL change can
+     spend it without looking like it did. Re-synthesise before
+     believing any change here.
+  3. **Three four-seed spreads now exist for this design's tops — 8.1%,
+     6.9%, 7.7% — and each belongs to a different netlist.** None
+     orders another: four-seed draws cannot rank netlists, which is
+     what `.claude/skills/synth-sweep` says in as many words, and the
+     comparison is refused each time it gets easier to make.
 - **The Ethernet integration was merged** (`c153934`), designed in
   `docs/design/2026-08-05-ethernet-integration.md`, **and the route is
   retired as of 2026-08-12** because the board has no RJ45 socket and

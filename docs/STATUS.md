@@ -18,14 +18,15 @@ done, what is being worked on, what is next.
 
 **Phase 2 — RTL.** ChaCha20, Poly1305 and the AEAD engine, verified
 against RFC 8439. The host protocol — key store, packet buffers,
-protocol FSM — behind a 64-bit AXI-Stream pair. **173 passing
-executions over 22 cocotb runners, six of them on a synthesised
-netlist**, measured 2026-08-12 after the Ethernet removal below and the
-two crypto suites re-measured 2026-08-15 for the PLL: no failures, no
+protocol FSM — behind a 64-bit AXI-Stream pair. **178 passing
+executions over 23 cocotb runners, six of them on a synthesised
+netlist**, measured 2026-08-12 after the Ethernet removal below, the
+crypto suites re-measured 2026-08-15 for the PLL and 2026-08-16 for
+the bubble-and-bench commit: no failures, no
 skips, and every runner exits 0. That figure is the
 simulator's alone. Outside it, and outside every count this page gave
-before 2026-08-13: **46 tests in `hw/host/`, 4 in
-`hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py`** and the
+before 2026-08-13: **60 tests in `hw/host/`, 4 in
+`hw/syn/test_run_synth.py`, 4 in `hw/sim/test_proto_model.py`** and the
 126 known-answer checks of Phase 1 above. They are not one unit and are
 not summed here. Nothing in any of them has run on hardware. No suite
 needs a vendored tree to build any more. `verilator
@@ -38,7 +39,7 @@ Earlier counts — 222 executions before the Ethernet removal, 207 in a
 fresh clone, and two different 177s that never measured the same thing
 — belong to earlier trees and populations. `docs/RECORD.md` carries
 that counting history, each figure with its date and what it counted;
-today's figure is the 173 above.
+today's figure is the 178 above.
 
 **The open ECP5 toolchain**, built locally in `tools/`: yosys with the
 slang frontend, nextpnr-ecp5, prjtrellis, Verilator, openFPGALoader.
@@ -65,25 +66,47 @@ instead of the 25 MHz pin and the heartbeat stays behind on that
 reference. The pins went with it, so `colorlight_i9_crypto.lpf`
 constrains that top and no other.
 
-**And it closes 48.0769 MHz**, measured 2026-08-15 over four placer
-seeds on yosys `f77ddfb87`, LFE5U-45F CABGA381 speed 6:
+**The engine costs 36 cycles per 64-byte block, measured, and the
+board can answer with its own cycle counts** (2026-08-16, commit
+`4f879ee`). The one-cycle `p_blk` handshake bubble is gone — the
+wrapper's side made combinational, one side only, `poly1305.sv`
+untouched — taking a seal's marginal block from 40 to 36 cycles and
+the packet intercept from 71 to 70: 214/358/502/646 cycles for
+4/8/12/16-block seals, measured differentially by the new
+`run_aead_cycles` suite, both of whose checks fail by mutation. Opcode
+05 is an on-chip benchmark — N re-feeds of one 64-byte block behind
+the same fail-closed key check as seal, answering a 32-bit duration
+(engine-take to `eng_done`, intercept 66) and a 64-bit timestamp — and
+in simulation its counter agrees with the testbench's instrument on
+the marginal 36.00. At the PLL's 48.0769 MHz the cycle budget is **934
+cycles per 1500-byte MTU packet (0.618 Gbps per engine) and 106 per
+64-byte packet (0.232)**, against 1031 / 0.560 and 111 / 0.222 before.
 
-| `oca_crypto_pll`, four seeds, 2026-08-15 | |
+**And it closes 48.0769 MHz**, re-measured 2026-08-16 on that commit
+over four placer seeds on yosys `f77ddfb87`, LFE5U-45F CABGA381 speed
+6:
+
+| `oca_crypto_pll`, four seeds, 2026-08-16 | |
 |---|---|
-| LUT | 13062 — 29.8% of the device |
-| flip-flops | 12529 — 28.6% |
+| LUT | 13381 — 30.5% of the device |
+| flip-flops | 12589 — 28.7% |
 | block RAM | 6 of 108 |
 | multipliers | 20 of 72 |
 | PLL, clock buffers, IO | 1 EHXPLLL of 4, 2 DCCA, 4 TRELLIS_IO |
-| `clk_sys` | 50.38 / 51.65 / 52.60 / 49.21 MHz — mean 50.96, spread 6.9% |
-| against the 48.0769 the PLL delivers | all four clear it; the tightest by 2.36% |
-| bitstream | 427699 bytes at seed 1, 426793 at seed 4 — the size is the placement's, not the design's |
+| `clk_sys` | 49.19 / 51.21 / 52.99 / 51.55 MHz — mean 51.23, spread 7.7% |
+| against the 48.0769 the PLL delivers | all four clear it; the tightest by 2.31% |
 
 Area is identical across the seeds, as synthesis requires; the clock is
 the one with the least margin over its own constraint, not the fastest
-in the report. **The PLL and the diagnostics cost 32 LUTs and 11
-flip-flops**: the pre-PLL `oca_uart_crypto`, seed 1, 2026-08-14, same
-toolchain, measured 13030 LUTs, 12518 flip-flops, the same 6 block RAMs
+in the report. Against the 2026-08-15 netlist (13062 / 12529) this is
+**+319 LUTs and +60 flip-flops**: the bubble removed ~131 flip-flops,
+the bench counter added 192 plus its muxes, and the finer decomposition
+was not chased. The bitstream sizes on record (427699 / 426793 bytes)
+belong to that earlier netlist and its seeds. **The PLL and the
+diagnostics cost 32 LUTs and 11 flip-flops**, measured between the two
+netlists of 2026-08-14/15: the pre-PLL `oca_uart_crypto`, seed 1,
+2026-08-14, same toolchain, measured 13030 LUTs, 12518 flip-flops, the
+same 6 block RAMs
 and 20 multipliers, 49.85 MHz against a 25.00 MHz constraint, and a
 423971-byte bitstream — so the datapath clock went from 25 to 48.0769
 MHz, a factor 1.923. **No target in the tree reproduces that pre-PLL
@@ -91,7 +114,7 @@ row today**: `oca_uart_crypto` lost both its pins and its heartbeat
 counter, and a design with no `.lpf` gets neither a timing check nor a
 packed bitstream, so what it reports now is area alone. `build/` holds
 one pass, since a rebuild overwrites the last, so re-run rather than
-trusting any table. `docs/RECORD.md` carries both measurements in full.
+trusting any table. `docs/RECORD.md` carries every measurement in full.
 
 ## Not established
 
@@ -105,16 +128,17 @@ netlist, not a board that answered.
 **The margin changed character, and it is now small.** The pre-PLL top
 closed 49.85 MHz against a 25.00 MHz requirement, a 99% margin that
 could not fail; this one asks for 48.0769 and the worst of four seeds
-gives 2.36%. Any RTL change has to be re-synthesised before it is
+on the 2026-08-16 sweep gives 2.31%. Any RTL change has to be
+re-synthesised before it is
 believed, and a change that looks harmless may not close.
 
-**Two seed spreads exist for this design and neither orders the other.**
-An earlier four-seed sweep of `oca_crypto_pll`, before the reset and
-heartbeat corrections, spread 8.1%; the committed netlist, three
-registers larger, spreads 6.9%. That is **not** an improvement: two
-four-seed draws cannot order two netlists, which is what
-`.claude/skills/synth-sweep` says in as many words. Both are recorded
-against the netlist each belongs to and the comparison is refused.
+**Three seed spreads exist for this design's tops and none orders
+another.** A four-seed sweep of `oca_crypto_pll` before the reset and
+heartbeat corrections spread 8.1%; the 2026-08-15 netlist spread 6.9%;
+the current one (`4f879ee`) spreads 7.7%. No ordering is claimed:
+four-seed draws cannot rank netlists, which is what
+`.claude/skills/synth-sweep` says in as many words. Each is recorded
+against the netlist it belongs to and the comparison is refused.
 
 **Banks 2 and 7 are unmeasured.** J17 and H18 live in bank 2. The console
 has been talking through them at 115200 since 2026-08-11, so this is not
@@ -136,7 +160,9 @@ describes.
    it** with `oca/hw/host/cli.py selftest`. This is the step the whole
    project exists to reach: the crypto answering on silicon.
    `oca_uart_crypto` is not the target to load — it lost the pins to
-   this top and packs no bitstream any more.
+   this top and packs no bitstream any more. With the board answering,
+   read opcode 05's durations (`cli.py bench`) — the first performance
+   figure this project can take on silicon, expected 36 N + 66 cycles.
 
    **Watch D2 for a few seconds before the host opens the port.** The
    fast heartbeat latches on any malformed UART frame, and the edge a

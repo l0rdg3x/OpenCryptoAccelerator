@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Self-consistency checks for proto_model, run without any RTL."""
 
-from proto_model import (HDR_LEN, OP_SEAL, ST_OK, build_seal,
-                         parse_response, _header)
+import struct
+
+from proto_model import (HDR_LEN, OP_SEAL, ST_OK, build_bench, build_seal,
+                         parse_bench, parse_response, _header)
 
 
 def test_header_round_trips():
@@ -23,7 +25,25 @@ def test_seal_layout():
     assert pkt[HDR_LEN + 16:] == b"aadmsg"
 
 
+def test_bench_layout():
+    pkt = build_bench(2, 1, b"n" * 12, 5, bytes(range(64)))
+    assert pkt[:2] == b"\x4f\x43"
+    assert pkt[3] == 0x05
+    assert len(pkt) == HDR_LEN + 16 + 64
+    # reserved zero at 20..21, the block count at 22..23
+    assert pkt[HDR_LEN + 12:HDR_LEN + 16] == b"\x00\x00\x05\x00"
+    assert pkt[HDR_LEN + 16:] == bytes(range(64))
+
+
+def test_bench_extra_round_trips():
+    body = struct.pack("<IQ4x", 1234, 987654321)
+    got = parse_bench({"body": body})
+    assert got == {"duration": 1234, "timestamp": 987654321}
+
+
 if __name__ == "__main__":
     test_header_round_trips()
     test_seal_layout()
+    test_bench_layout()
+    test_bench_extra_round_trips()
     print("proto_model: OK")
