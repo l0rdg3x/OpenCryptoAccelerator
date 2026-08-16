@@ -364,9 +364,13 @@ DESIGNS = {
 # oca_proto.sv: measured, not derived. The registers the module declares
 # add up to more than the netlist keeps — yosys folds fields it can prove
 # equal — so a figure computed from the RTL would fail a healthy build.
-# 3837 live at the RTL of this commit with the toolchain in tools/,
-# measured 2026-08-16: 3645 before the bench counter, plus its 192 (a
-# 64-bit tick and two 64-bit captures). The floor stays at 3600 — under
+# 3902 live at the RTL of this commit with the toolchain in tools/,
+# measured 2026-08-16 on the seed-1 oca_crypto_pll netlist: 3645 before
+# the bench counter, plus its 192 (a 64-bit tick and two 64-bit
+# captures), plus the 65 the request's early length latch added (two
+# 16-bit lengths, five opcode decodes, len_bad, bench_bad, msg_one and
+# the 25 bits of first_*). yosys folded none of those 65, which is not
+# a rule: it is what this build measured. The floor stays at 3600 — under
 # the pre-bench figure on purpose, since what it exists to catch is
 # storage vanishing wholesale, which is what the cmp2lut trap did to
 # 89% of the key store, and a floor chasing the census upward buys
@@ -569,7 +573,9 @@ NETLIST_FF_FLOOR = {
     # 2313, 3645, 34, 23, 22, 160, 75, 6, 2, 32.
     # The 2026-08-16 sweep on the bubble-and-bench netlist reads the
     # same ten with one change, oca_proto.sv at 3837 -- the bench
-    # counter's 192, as its entry above records. Nine sit exactly on
+    # counter's 192, as its entry above records -- and the seed-1 build
+    # after the request's early length latch reads 3902, its 65 more.
+    # Nine sit exactly on
     # their floor and stay there, which is what a derived figure earns
     # here -- a legitimate reduction should fail and be re-measured.
     # oca_proto.sv is the one with slack, now the bench counter's
@@ -615,8 +621,9 @@ NETLIST_FF_FLOOR = {
     # Doubled floors, exact by the same arithmetic as oca_dual's entry
     # above, whose caveat holds here unchanged (a doubled figure cannot
     # say WHICH core kept its storage): keystore 4626, proto 7200 — the
-    # per-core census on the current RTL is 3837, so the doubled floor
-    # keeps oca_proto's own under-the-census discipline.
+    # per-core census on the current RTL is 3902, and the seed-1 build
+    # of this target reads 7804 for the pair, so the doubled floor keeps
+    # oca_proto's own under-the-census discipline.
     #
     # Measured elsewhere and carried over unchanged, because the front
     # end is oca_uart_crypto's leaf for leaf at the same 48.0769 MHz

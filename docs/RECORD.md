@@ -723,8 +723,9 @@ now carries all of them, which is the actual fix.
   synthesised netlist — 2 of its 4 fail on a yosys older than
   `f77ddfb87`. The same net
   now covers `oca_proto` as well: a floor of 3600 live flip-flops
-  attributed to it (3645 measured then, 3837 since the 2026-08-16 bench
-  counter, and `check_netlist` prints the census
+  attributed to it (3645 measured then, 3837 after the 2026-08-16 bench
+  counter and 3902 after the request's early length latch of the same
+  day, and `check_netlist` prints the census
   per file so the number can be re-measured), and `run_proto_gate.py`
   for the tag comparison, which is combinational and so invisible to any
   cell count. Cost:
