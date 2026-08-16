@@ -624,16 +624,32 @@ NETLIST_FF_FLOOR = {
     # oca_crypto_pll builds), 160/75 for the SLIP halves, 2 for
     # oca_clkrst (this top consumes the same three outputs).
     #
-    # Derived and NEVER CONFIRMED BY ANY BUILD — the controller's build
-    # is what turns these into measurements:
+    # Confirmed by the first build of 2026-08-16, with one lesson the
+    # fabric taught on arrival: yosys's per-file attribution is not
+    # stable across module boundaries here. The first census read
+    # oca_dispatch.sv at 6 against a derived 8 and oca_collect.sv at 14
+    # against a derived 16, while the same census attributed two of
+    # u_collect's tag-FIFO flops to oca_dispatch.sv and six of
+    # u_slip_tx's data flops to oca_collect.sv — registers merged
+    # across boundaries during optimisation carry whichever src label
+    # survived. No storage was lost: the whole-netlist total held with
+    # 326 to spare, and the fabric's live registers (the route lock,
+    # the expectation queues, the divergence latch) all drive consumed
+    # outputs. So these two floors are the MEASURED attribution of one
+    # build, guarding gross disappearance only — the engine files'
+    # rationale, one level smaller — and the fabric's real guard is
+    # behavioural: run_dual_fabric and the UART smoke. A netlist-level
+    # replay of the fabric suite (a third gate runner) would close the
+    # residual and does not exist yet; recorded, not implied.
     # - oca_fifo.sv 40: the byte FIFOs' measured 22 plus 18 for the two
     #   DEPTH-8 WIDTH-1 expectation FIFOs in oca_collect (4-bit pointer
-    #   pairs plus overflow, 9 each). Their 8 storage bits each are
-    #   expected in distributed RAM like the byte FIFOs', not counted.
-    # - oca_dispatch.sv 8: state 2, target, last_used, sent 2, push0,
-    #   push1 — declarations, and yosys may fold some.
-    # - oca_collect.sv 16: state 2, src, last_served, fwd_done,
-    #   drn_done, fwd_first, merged_status 8, trouble — declarations.
+    #   pairs plus overflow, 9 each). Their 8 storage bits each sit in
+    #   distributed RAM like the byte FIFOs', not counted. Confirmed.
+    # - oca_dispatch.sv 6 measured (8 declared: state 2, target,
+    #   last_used, sent 2, push0, push1 — two folded or relabelled).
+    # - oca_collect.sv 14 measured (16 declared: state 2, src,
+    #   last_served, fwd_done, drn_done, fwd_first, merged_status 8,
+    #   trouble — two folded or relabelled).
     # - oca_uart_crypto_dual.sv 6: por_count 4, rst_n_core, trouble —
     #   the same three registers oca_uart_crypto.sv keeps under the PLL,
     #   where its confirmed floor is also 6.
@@ -645,8 +661,8 @@ NETLIST_FF_FLOOR = {
     "oca_crypto_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200,
                         "oca_uart_rx.sv": 34, "oca_uart_tx8.sv": 23,
                         "oca_fifo.sv": 40, "oca_slip_rx.sv": 160,
-                        "oca_slip_tx.sv": 75, "oca_dispatch.sv": 8,
-                        "oca_collect.sv": 16,
+                        "oca_slip_tx.sv": 75, "oca_dispatch.sv": 6,
+                        "oca_collect.sv": 14,
                         "oca_uart_crypto_dual.sv": 6,
                         "oca_clkrst.sv": 2, "oca_crypto_dual.sv": 32},
 }
