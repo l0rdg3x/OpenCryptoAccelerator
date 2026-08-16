@@ -4,8 +4,11 @@ The long form: every measurement this project has taken, how it was
 arrived at, and what it does NOT establish. This was `AGENTS.md`'s
 "Current status" section until 2026-08-15, and it moved here whole so
 that AGENTS.md could stay what it is — the development rules and the
-how-to — while this file keeps growing. **Read it before quoting any
-figure or claiming a result**, and write every new bench number into it.
+how-to — while this file keeps growing. Since 2026-08-16 it also
+carries what the hard rules cost and the history of the test counts,
+moved here when AGENTS.md was cut to its imperatives. **Read it before
+quoting any figure or claiming a result**, and write every new bench
+number into it.
 
 **For where the project stands, read `docs/STATUS.md` first.** It is one
 page and it is the answer to "what is done, what is next"; this file is
@@ -26,8 +29,203 @@ says the old thing.
 description of the tree.** The route was retired on 2026-08-12 and the
 code deleted the same day, so no path, module or runner those passages
 name still exists unless the text says so explicitly. They run from "The
-occupancy study" to the end of the file, and the same warning is
+occupancy study" to the end of the file — and the test-count section
+below names the four deleted runners besides — and the same warning is
 repeated where the last of them sits.
+
+## What the rules cost
+
+Each hard rule in `AGENTS.md` is one imperative and a pointer; these
+are the stories behind the pointers that live nowhere else. Dates are
+given where one was recorded, and not invented where none was.
+
+- **Two per-file proposals, each correct alone, corrupted the tag
+  together** (2026-08-03). The area pass came out of a workflow that
+  read the three RTL files independently, and two of its proposals — an
+  early `blk_ready` in `poly1305.sv`, a combinational `p_blk` in the
+  wrapper — were each correct against the file their author had read
+  and silently corrupted the authentication tag when combined: both
+  attacked the same one-cycle handshake bubble, each assuming the
+  *other* side kept its signal registered. Per-file review cannot see
+  this by construction, and the official-vector suite is not a safety
+  net for a data-dependent handshake failure. The rule it bought:
+  before applying two proposals that touch opposite ends of one
+  handshake, measure the combination; never infer it from the parts.
+- **The AXI-Stream driver read `tready` after the edge, and the RTL
+  grew around it** — the `s_tready` rework of 2026-08-03. Polling
+  `tready` after the clock edge reads what the slave offered *before*
+  the transfer, the stale-read gotcha wearing a different hat, and RTL
+  adapted to such a source grows a `tready` that outlives the state
+  which consumes the byte: against a conforming master it silently
+  drops one byte per packet, with nothing in simulation to show it.
+  The discipline that replaced it stands in `AGENTS.md`: `await
+  ReadOnly()`, read `tready`, then `await RisingEdge`, advancing only
+  if `tready` was high and holding `tdata`/`tvalid`/`tlast` stable
+  until it is.
+- **Every cocotb runner exited 0 whatever its tests did**, found by
+  audit on 2026-08-09. cocotb's `runner.test()` only inspects
+  `results.xml` under pytest, and Verilator exits 0 on `$finish` even
+  with red tests, so anything driving the suites by exit code would
+  have called a red suite green. (`run_pktbuf.py` could already exit
+  non-zero, but only from its elaboration guard, never from a result;
+  `run_synth.py` is not a cocotb runner and always propagated its
+  failures.) Every runner now parses `results.xml` and exits 1 on any
+  failure — and on no tests at all, a suite that ran nothing not being
+  a pass — and each check was proved by mutation, a deliberately red
+  test exiting non-zero. What this does not establish is anything
+  about a runner added later: a new runner's green is trusted only
+  after its own mutation.
+- **`aad = NULL` with a non-zero length produced a valid tag covering
+  no AAD at all**, found by the same 2026-08-09 audit. No vector caught
+  it because no official vector passes the pair — `in` had its NULL
+  guard, `aad` did not — so the backend authenticated an empty AAD
+  where the caller supplied one, silently. The rule it bought: pointer
+  and length are validated as a pair for every pointer at the API
+  boundary, NULL with a non-zero length is `OCA_ERR_INVALID_ARG`, and
+  a new pointer argument arrives with its `(!p && len)` guard and its
+  bad-args test in the same change.
+- **The documentation errors of record were right figures written next
+  to stale ones**, not wrong measurements — the 2026-08-09 audit again.
+  Three of record: the two-port target corrected in one bullet and
+  still current in the next; the same netlist's seed-1 Fmax recorded as
+  48.52 in one file and 49.76 in another; a "not yet measured" caveat
+  left standing below the measurement it disclaimed. Hence the rule and
+  its grep checklist in `AGENTS.md`: a correction edits the figure in
+  place, everywhere it stands, in the same commit.
+- **The audit blamed the toolchain, and the toolchain had not changed**
+  (2026-08-09). The cmp2lut table's clocks (2026-08-04, RTL `bf3930f`)
+  did not reproduce on a re-run at `ee54b06`, and the audit concluded
+  "the nextpnr behind them was another binary". It was not:
+  `tools/nextpnr` holds one binary, built 2026-08-03 and never rebuilt,
+  and the pin (`49691a4`) landed six hours after that table on the same
+  day, recording the revisions of an already-built toolchain. What
+  differed was the RTL — `oca_pktbuf.sv` and `oca_proto.sv` moved
+  between those two commits — and `5492e3a` had already measured
+  exactly that: two netlists matching on every per-type cell total
+  (7768 LUT4, 12043 TRELLIS_FF, 1687 CCU2C, 4 DP16KD, 20 MULT18X18D)
+  and still placing differently at the same seed, the worst path moving
+  out of `chacha20.sv` into `oca_proto`. Equal totals are not an equal
+  netlist — the connectivity differs, or the path could not move — and
+  nextpnr at a fixed seed is deterministic, which is why a seed sweep
+  measures anything at all. It is the step from "the cell counts match"
+  to "therefore the tools changed" that has to be refused: quote an
+  Fmax with the commit it was taken on, and diff the RTL before blaming
+  the toolchain.
+- **Two builds ran away**, and that is why nothing invokes `yosys` or
+  `nextpnr-ecp5` except through `run_synth.py`. Once a stalled yosys
+  outlived the agent that started it; once a caller wrote its own
+  two-hour timeout and its orphaned shells relaunched the job after its
+  children were killed. `run_synth.py` bounds every stage with a hard
+  wall-clock timeout and kills the whole process group when one is hit:
+  a build that has produced nothing after half an hour will not produce
+  anything by carrying on, and a synthesis nobody is watching is worse
+  than no synthesis — it saturates a core and hides whether anything is
+  progressing. The `Stop` hook in `.claude/hooks/no-runaway-builds.sh`
+  is the net under the cases that bypass this anyway: it reports every
+  live build at the end of a turn and kills anything past an hour,
+  identifying processes by `/proc/PID/exe` because the command line may
+  carry a relative path. Neither incident's date was recorded.
+
+## The build environment
+
+The system libraries the published builds linked, recorded 2026-08-13
+on CachyOS and moved here from AGENTS.md when the rules were compressed
+on 2026-08-16: boost 1.91, ICU 78, tcl 8.6, readline, ncursesw, libffi,
+system fmt 12, zlib, bzip2, lzma, zstd, jemalloc, libatomic, and a
+C++20 compiler. openFPGALoader additionally links libftdi1, hidapi,
+libusb, zlib and libudev through pkg-config
+(`scripts/build-toolchain.sh`). These are used as found and never
+installed; the record exists because a figure's environment is part of
+its provenance, not because any of them is pinned.
+
+## The test counts
+
+The runner registry is `AGENTS.md`, "How to build and test": every RTL
+suite there is invoked by name, so the counts below were only ever as
+complete as that list — which is how the cocotb test count, 148 on the
+day it happened, came to be read as the repository's total in three
+documents at once. The populations (simulator tests, simulator
+executions, Python tests, KAT checks, selftest steps) share no unit,
+and no grand total exists anywhere in this project. The three
+populations outside the simulator and the C binary — 46 in `hw/host/`,
+4 in `hw/syn/test_run_synth.py`, 2 in `hw/sim/test_proto_model.py` —
+were measured 2026-08-13, all sub-second, none needing Verilator,
+yosys or a board.
+
+**The 22 cocotb runners measure 149 tests over 173 passing
+executions**, six of them on a synthesised netlist from the two gate
+runners. Twenty-four tests run a second time at a non-default
+parameter — five for `chacha20` at `ROUNDS_PER_CYCLE` = 2, four for
+`poly1305` at `ROWS_PER_CYCLE` = 5, three for `oca_pktbuf` at the
+smallest `BYTES` it accepts and all twelve of `oca_slip_rx` at `BYTES`
+= 64 — which is what separates the two figures: 143 tests outside the
+gate runners, plus 24 re-runs, plus their 6. `run_crypto_pll.py` is not
+among them although it names a parameter: `LED_BITS` = 8 is its only
+build, because a heartbeat at the board's 25 bits is 16.8 million
+clocks a half-period and no run can watch one, so there is no
+default-parameter build of that top for anything to re-run against.
+
+Measured by running every runner in the registry on 2026-08-12, after
+the Ethernet removal, and the two crypto suites again on 2026-08-15,
+when the board top gained its PLL: **173 passing executions, no
+failures, no skips, and every runner exits 0.** At the execution level
+the step from the previous figure is 177 − 12 + 8 = 173:
+`run_uart_crypto` went from twelve passing executions over two builds
+to five over one, and `run_crypto_pll` arrived with three. Nothing
+skips any more.
+What used to skip was `oca_uart_crypto`'s heartbeat pair, which needed
+a `LED_BITS` small enough to simulate and so ran only on that suite's
+second build; the counter has left for `oca_crypto_pll`, and the three
+tests that watch it there run on the one build that suite has.
+
+**The registry read 222 executions over 25 runners, and 183 tests,
+until that removal** — 177 of those tests over the 23 runners that were
+not the gate pair, plus the 6 on a netlist, which is how the old figure
+was written. Deleted with the route: `run_rgmii` (10 tests, 10
+executions), `run_udp_seam` (10 tests, 20 executions, running twice at
+two `HDR_Q_DEPTH` values), `run_eth_mac` (8) and `run_oca_path` (7) —
+35 tests and 45 executions. So 222 − 45 = 177 executions, and 183 − 35
+= 148 tests over 21 runners, which is what that day left; the PLL work
+then took the executions to 173 and the tests to 149 over 22. Nothing
+in the tree needs `vendor_patches.py build` any more; that script and
+the tree it patched are gone.
+
+**Two 177s met in that paragraph and they were never one measurement.**
+One counts tests, over the 23 non-gate runners of the pre-removal tree;
+the other counts executions, over everything the removal left, and it
+was the registry's headline figure until 2026-08-15. They were equal
+for as long as the arithmetic happened to make them so, and no longer —
+the PLL work moved the execution figure to 173 and left the historical
+177 exactly where it was. The reason to name the pair survives their
+parting: two figures matching is not evidence they measure the same
+population, and the safe reading is always the one that asks which
+population and which tree before reusing a number.
+
+**Two before-figures are both true and they differed by a
+precondition.** `run_eth_mac` and `run_oca_path` built from the patched
+vendor tree at `oca/hw/vendor/build/`, which `oca/.gitignore` excludes:
+it was present only where `vendor_patches.py build` had already run,
+and absent from a fresh checkout or a new worktree. Where it was
+present all four Ethernet suites passed and `main` read **222
+executions over 25 runners**. Where it was absent those two refused to
+build and exited non-zero, and the same `main` read **207 executions
+over the 23 producing runners** — the figure the registry carried until
+2026-08-12. Neither was wrong; only one of them was the whole tree.
+**Neither reproduces on `main` today**: the four runners, the vendor
+tree and `vendor_patches.py` were all deleted on 2026-08-12, so
+reaching either figure means checking out `fd3059c` first.
+
+The cocotb test count read **123** until 2026-08-12, and that gap was
+never arithmetic: the sum was exactly right over the fourteen suites it
+named, and six suites were missing from the list. The console and UART
+chain — `run_console` 8, `run_fifo` 4, `run_uart_console` 4,
+`run_uart_echo` 3, `run_uart_rx` 4, `run_uart_tx` 5, 28 tests — was
+written on 2026-08-11 and appeared in no document at all, while being
+the only host channel the board has. The serial bridge and the crypto
+console added 26 more: `run_slip_rx` 12, `run_slip_tx` 7,
+`run_uart_crypto` 7 — that last one is 5 today, with `run_crypto_pll`'s
+3 beside it, since the heartbeat moved to the board top. The registry
+now carries all of them, which is the actual fix.
 
 ## The measurements
 
@@ -121,7 +319,13 @@ repeated where the last of them sits.
   the engine's separation is recorded as a plausible congestion effect
   and kept out of the throughput figures. The masking change is covered
   by `hw/sim/test_dirty_pad.py`, without which no test in the project
-  could see it (`oca/hw/syn/README.md`).
+  could see it (`oca/hw/syn/README.md`). Measured 2026-08-06 with the
+  mask removed entirely: `run_dirty_pad.py` fails both its tests and
+  `run_chacha20_poly1305.py` fails **3 of its 7** — exactly the three
+  that encrypt, because on encryption the padding is XORed with
+  keystream before it reaches Poly1305 and is therefore not zero. The
+  decrypt tests all still pass, since the zero padding the testbench
+  supplies goes into Poly1305 unchanged whether it is masked or not.
 - **Engine replication: two, not three, and the reason is the router.**
   Placed and routed on 2026-08-04 rather than projected from one core
   (four seeds each, `--out-of-context`): 1 `oca_core` 11149 LUTs

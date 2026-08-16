@@ -136,84 +136,21 @@
   project-local yosys and nextpnr-ecp5; see `hw/syn/README.md` for the
   flow and the first results on the LFE5U-45F.
 
-Requirements: `../tools/verilator` built, `oca/.venv` with cocotb
-(installed from cocotb git master — release 2.0.1 does not support
-Python 3.14).
+The environment setup lives in `AGENTS.md` "## Environment rules";
+every runner and its per-suite counts live in `AGENTS.md`
+"## How to build and test" — the single registry. There is no
+aggregate RTL runner: a suite missing from that list is a suite
+nobody runs.
 
-```sh
-.venv/bin/python hw/sim/run_chacha20.py
-.venv/bin/python hw/sim/run_poly1305.py
-.venv/bin/python hw/sim/run_chacha20_poly1305.py
-.venv/bin/python hw/sim/run_dirty_pad.py
-.venv/bin/python hw/sim/run_secret_zeroise.py
-.venv/bin/python hw/sim/run_keystore.py
-.venv/bin/python hw/sim/run_pktbuf.py
-.venv/bin/python hw/sim/run_oca_core.py
-.venv/bin/python hw/sim/run_attack.py
-.venv/bin/python hw/sim/run_clkrst.py
-.venv/bin/python hw/sim/run_console.py
-.venv/bin/python hw/sim/run_fifo.py
-.venv/bin/python hw/sim/run_uart_rx.py
-.venv/bin/python hw/sim/run_uart_tx.py
-.venv/bin/python hw/sim/run_uart_console.py
-.venv/bin/python hw/sim/run_uart_echo.py
-.venv/bin/python hw/sim/run_slip_rx.py
-.venv/bin/python hw/sim/run_slip_tx.py
-.venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
-.venv/bin/python hw/sim/run_crypto_pll.py      # the board top: PLL, crypto, LED
-.venv/bin/python hw/sim/run_keystore_gate.py   # post-synthesis
-.venv/bin/python hw/sim/run_proto_gate.py      # post-synthesis
-cd hw/sim && ../../.venv/bin/python test_proto_model.py
-```
+Current status: **173 passing executions over 22 cocotb runners**, no
+failures and no skips, measured 2026-08-12 with the two crypto suites
+re-measured 2026-08-15; per-suite counts are in the `AGENTS.md`
+registry, and the counting history — how 222 became 177 and then 173,
+and why a fresh clone read 207 — is in `docs/RECORD.md`. The protocol
+model checks pass as plain Python; `verilator --lint-only -Wall` clean
+on all cores with `--top-module oca_core`.
 
-Those 22 runners are all the cocotb suites, and `test_proto_model.py`
-above is plain Python (2 tests). Three more need no toolchain at all:
-`pytest hw/host` (46 tests), `pytest hw/syn/test_run_synth.py` (4) and
-the offline `hw/host/cli.py --fake selftest` (6 steps), measured
-2026-08-13; the C backend's 126 known-answer checks sit behind the
-`ctest` in the build section. They are different units and are not
-summed. There is no aggregate runner, so a suite left off these lists
-is a suite nobody runs. Four cocotb runners — `run_rgmii`,
-`run_eth_mac`, `run_udp_seam` and `run_oca_path` — belonged to the
-Ethernet route and were deleted with it on 2026-08-12, together with the
-`oca/hw/vendor/` tree they built against. No suite here needs
-`vendor_patches.py build`, or any vendored source, any more.
-
-`run_attack.py` drives the same DUT as `run_oca_core.py` but is written
-to break the packet overlap rather than to confirm it. The two
-`*_gate.py` runners are the only ones that see a synthesised netlist:
-everything else elaborates the SystemVerilog and is blind to what yosys
-does with it, which is how a mis-mapped key store survived every green
-test run this project ever had.
-
-Current status: chacha20 5/5 tests pass at both `ROUNDS_PER_CYCLE`
-values, poly1305 4/4 tests pass at both `ROWS_PER_CYCLE` values, AEAD
-7/7 tests pass, dirty-padding 2/2, secret-zeroise 2/2, keystore 4/4,
-pktbuf 12/12 (+3 at BYTES=16), oca_core 29/29, attack 16/16, clkrst
-7/7, console 8/8, fifo 4/4, uart_console 4/4,
-uart_echo 3/3, uart_rx 4/4, uart_tx 5/5, slip_rx 12/12 at both `BYTES`
-values, slip_tx 7/7, uart_crypto 5/5, crypto_pll 3/3 on its one
-`LED_BITS` = 8 build — **143**, plus twenty-four re-runs at a second
-parameter — and post-synthesis keystore 4/4 and oca_proto 2/2, which is
-**173 passing executions over 22 runners** with no failures and no
-skips, measured 2026-08-12 with the two crypto suites re-measured
-2026-08-15. This read 183 tests over 25 runners and 222 executions until
-the Ethernet suites were deleted on 2026-08-12: rgmii 10/10, udp_seam 10/10
-at both `HDR_Q_DEPTH` values, eth_mac 8/8 and oca_path 7/7 all passed
-while they existed, and they are the 45 executions that went. What that
-left — 148 tests over 21 runners and 177 executions — stood until
-2026-08-15, when the heartbeat left `run_uart_crypto` for
-`run_crypto_pll` and took that suite's second build with it. The last
-two built from the patched vendor tree at `hw/vendor/build/`, which is
-gitignored, so in a fresh checkout or a new worktree they exited
-non-zero instead and the same before-figure read 207 executions over 23
-producing runners. Both numbers are real; they differed by whether
-`vendor_patches.py build` had run. Neither reproduces here now — the
-runners and that script were deleted on 2026-08-12, so either figure
-needs `fd3059c` checked out first.
-The protocol model checks pass as plain Python;
-`verilator --lint-only -Wall` clean on all cores with `--top-module
-oca_core`. Eight reworks are done — five on the engine, described next,
+Eight reworks are done — five on the engine, described next,
 and three on the host datapath described below: the 64-bit widening,
 then the overlap inside a command, then the overlap across packets. The
 Poly1305 limb rework took the AEAD engine from 65 to 20 ECP5
