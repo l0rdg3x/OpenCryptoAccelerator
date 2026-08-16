@@ -147,11 +147,23 @@ day it happened, came to be read as the repository's total in three
 documents at once. The populations (simulator tests, simulator
 executions, Python tests, KAT checks, selftest steps) share no unit,
 and no grand total exists anywhere in this project. The three
-populations outside the simulator and the C binary — 60 in `hw/host/`,
+populations outside the simulator and the C binary — 69 in `hw/host/`,
 4 in `hw/syn/test_run_synth.py`, 4 in `hw/sim/test_proto_model.py` —
-were measured 2026-08-13 at 46 / 4 / 2 and re-measured 2026-08-16,
-when the bench opcode brought fourteen host tests and two model
-checks; all sub-second, none needing Verilator, yosys or a board.
+were measured 2026-08-13 at 46 / 4 / 2, re-measured 2026-08-16 at
+60 / 4 / 4 when the bench opcode brought fourteen host tests and two
+model checks, and read 69 / 4 / 4 later the same day with the fabric's
+host-side tests in; all sub-second, none needing Verilator, yosys or a
+board.
+
+**The current figure is 162 tests over 186 executions across 25
+runners — 185 passing and one skipped by design**, counted by running
+every runner in the tree on 2026-08-16 rather than by adding up the
+registry. The two the fabric brought are `run_dual_fabric` (7 tests,
+6 passing and the fail-closed one skipped, because it needs RTL whose
+cores can disagree) and `run_uart_crypto_dual` (1). Against the 178
+below that is 178 + 7 + 1 = 186, and 154 + 8 = 162 tests. The
+paragraphs that follow are the count as it stood before them, kept as
+the history of how it moved.
 
 **The 23 cocotb runners measure 154 tests over 178 passing
 executions**, six of them on a synthesised netlist from the two gate
@@ -372,8 +384,10 @@ now carries all of them, which is the actual fix.
   the clock a pinned build gets. Both PHYs can be fed in cycle
   budget; whether two MACs
   fit beside the cores is settled below — they do not. Saturating one of them would need
-  both cores behind it, hence a distributor and a collector that do not
-  exist (the two-core bullet below, and commit 23742dc, which retracted
+  both cores behind it, hence a distributor and a collector, which did
+  not exist when this was written and do now — `oca_dispatch.sv` and
+  `oca_collect.sv`, built and swept on 2026-08-16, against no Ethernet
+  port (the two-core bullet below, and commit 23742dc, which retracted
   the "one port saturated with margin" reading this passage carried).
   This supersedes the 1.97-2.07 Gbps three-engine projection and the
   >= 2 Gbps target (`SPEC.md`, `oca/hw/syn/README.md` "The occupancy
@@ -539,9 +553,11 @@ now carries all of them, which is the actual fix.
   pre-zeroisation pair, left standing when the clock above was
   corrected to 48.89.)
   Saturating one would need both cores behind it, which needs a
-  distributor and a collector that do not exist, and which the per-core
-  key store makes non-trivial: a slot is loaded into one core and only
-  that core can use it.
+  distributor and a collector — written since, on 2026-08-16 — and
+  which the per-core key store made non-trivial: a slot is loaded into
+  one core and only that core can use it. The fabric's answer to that
+  is to broadcast the load-key command to both cores and let each keep
+  its own copy, so every slot is live in both.
 
   **With the secret zeroisation merged — the pair as committed — four
   seeds give 24621 LUTs (56.1%), 24066 FF (54.9%), 40 MULT18X18D, 8
@@ -592,7 +608,9 @@ now carries all of them, which is the actual fix.
   Two ports are not merely tight, they are out. Two cores behind one
   port land at 75.3%, against the 76.4% at which this device stopped
   routing in the occupancy study — and would additionally need a
-  distributor, a collector and an answer to the per-core key store.
+  distributor, a collector and an answer to the per-core key store. All
+  three were written on 2026-08-16, for a fabric with no Ethernet port
+  in it; the row this passage is about remains unbuilt.
   **The one row that has since been built came in 2011 LUTs under its
   sum**, because adding a core measured alone to a port measured alone
   counts twice the logic the optimiser shares. (It was 2928 under until
@@ -1347,6 +1365,156 @@ now carries all of them, which is the actual fix.
   sits on the data lines by LiteEth precedent and not by geometry, and a
   one-unit-interval misalignment cannot be repaired by any tap value,
   with `link_up` low while the PHY's own link LED is lit as the tell.
+
+- **Two cuts to the critical path, and what each one moved**
+  (2026-08-16, commits `a529470` and `a307d87`, yosys `f77ddfb87`,
+  LFE5U-45F CABGA381 speed grade 6). The two-engine fabric was built
+  for the first time at seed 1 and reported **46.40 MHz against its
+  48.0769 MHz constraint**, binding not in the cryptography but in one
+  core's protocol engine: `opcode[4]` through the next-state cone of
+  `pr_state` into the **clock enable** of `blk_last`, 33 hops and
+  21.550 ns, of which **17.496 ns was routing** and 3.529 ns logic,
+  with two single hops of 2.92 ns crossing the die.
+
+  The first cut moved the request arithmetic off the deciding edge.
+  `args` is a shift register, so bytes 20..23 stand at `args[127:96]`
+  only on the edge `P_ARGS` decides on; the 18-bit adder for
+  `want_len`, the two 18-bit compares of `len_bad` and the first-block
+  comparators all had to resolve in that one cycle. The lengths are now
+  latched from the word that carries them — the second of four, two
+  cycles earlier — and everything derived from them is registered.
+  Cost: **+65 flip-flops per core** (`oca_proto.sv` census 3837 →
+  3902, 7674 → 7804 for the pair), +2 LUTs on the single-engine top.
+
+  That moved the fabric to 47.94 MHz at seed 1 and moved the binding
+  cone to Poly1305, where the second cut applies: the B operand of the
+  multiplier was a five-way choice over r and 5r made in the cycle that
+  multiplied, so the mux, the haul to the MULT18X18D column and the
+  accumulate behind it stood in one 20.86 ns path. `row` is
+  deterministic, so the choice is now made one cycle early, for the row
+  that will be multiplied next. **No cycle is added**, and the module
+  header's claim that multiplier inputs and outputs are registered —
+  true of the output side only — became true of both.
+
+  **The cycle model is unchanged and was measured, not assumed**:
+  `run_aead_cycles` reads 4 blocks = 214, 8 = 358, 12 = 502, 16 = 646
+  cycles on both branches, so 36 at the margin, with a bench intercept
+  of 66. Suites green on the merged branch: `run_oca_core` 31/31,
+  `run_attack` 16/16, `run_poly1305` 4/4, `run_chacha20_poly1305` 7/7,
+  `run_aead_cycles` 3/3, `run_dirty_pad` 2/2, `run_proto_gate` 2/2 on
+  the synthesised netlist. Three mutations show the suites can see
+  these cuts: reading `aad_len` from `rx_rd_data[31:16]` instead of
+  `[47:32]` fails 26 of `run_oca_core`'s 31; forcing `first_len` to a
+  constant 64 fails 14 of them; replacing the operand lookahead's
+  `row + 1` with `row` fails 3 of `run_poly1305`'s 4.
+
+- **The fabric still does not close 48.0769 MHz: three seeds of four**
+  (2026-08-16, `oca_crypto_dual` on commit `a307d87`, four placer
+  seeds, pinned against `colorlight_i9_crypto.lpf`).
+
+  | | measured, four seeds |
+  |---|---|
+  | TRELLIS_COMB | 26290, **60.0%** of the device |
+  | TRELLIS_FF | 25124, 57.3% |
+  | DP16KD | 10, 9.3% |
+  | MULT18X18D | 40, 55.6% |
+  | EHXPLLL | 1 of 4 |
+  | `clk_sys` | 50.28 / 50.66 / **46.23** / 51.15 MHz |
+
+  Mean 49.58, **spread 10.6%** on `(max-min)/min` — wider than any
+  spread recorded anywhere in this repository, where ten are written
+  down and the largest is 8.1%. That is what a device at 60% occupancy
+  does to a placer. Seed 3 misses by 3.84%
+  **on the same cone as the seeds that pass**: 21.633 ns against
+  19.890, all of the difference in routing (13.542 vs 11.939) and none
+  in logic (7.566 vs 7.426). By this project's rule a constraint a
+  seed misses is not closed, so the fabric is **measured, not
+  shipped**, exactly as the 50.00 MHz rung was.
+
+  What the two cuts did establish here is a pass/fail difference, not
+  a ranking: every measurement of the earlier netlists failed the
+  constraint — 46.40 as first built, 46.86 and 47.94 with the protocol
+  cut alone — and three of the four seeds with both cuts clear it by
+  4.6 to 6.4%. The gap between the two groups (2.34 MHz) is wider than
+  the passing netlist's own spread between those three seeds
+  (0.87 MHz). It remains three seeds against three, on a design whose
+  fourth seed lands 4.9 MHz below its best.
+
+  **What this does not establish.** Nothing ran on silicon. The
+  shippable two-engine configuration has not been measured at all: the
+  next rung down the ladder is 625/14 = 44.643 MHz, where the worst
+  seed measured here would sit 3.5% inside, and that is a sweep nobody
+  has run. And a fourth seed of the unmodified fabric does not exist —
+  two attempts were killed by their bounds, so "the fabric as first
+  built fails" rests on one seed of that netlist and two of the next.
+
+- **The board top: four seeds again, and no improvement established**
+  (2026-08-16, `oca_crypto_pll` on commit `a307d87`).
+
+  | | this netlist | the one before it (`4f879ee`) |
+  |---|---|---|
+  | TRELLIS_COMB | 13412 | 13381 |
+  | TRELLIS_FF | 12788 | 12589 |
+  | `clk_sys`, four seeds | 51.06 / 49.06 / 53.31 / 51.75 | 49.19 / 51.21 / 52.99 / 51.55 |
+  | mean | 51.30 | 51.23 |
+  | worst seed's margin over 48.0769 | **2.04%** | 2.31% |
+
+  All four seeds clear, as before. **The two cuts bought this top
+  nothing that four seeds can see**: the means differ by 0.07 MHz and
+  the worst seed is 0.13 MHz lower than the worst seed before. A
+  seed-1 to seed-1 reading of the same pair says +3.8%, and that
+  reading is noise — this file's own rule is that four-seed draws
+  cannot rank netlists, and a one-seed draw certainly cannot. The cuts
+  are kept because of what they did to the fabric, and because the
+  cycle model is untouched, not because this top got faster.
+
+- **The 50.00 MHz rung, asked a second time, answers the same**
+  (2026-08-16, `oca_crypto_pll_50` on commit `a307d87`, four placer
+  seeds): **52.58 / 51.59 / 50.58 / 49.26 MHz — three seeds close,
+  the fourth misses by 1.48%.** Mean 51.00, spread 6.7%. Against the
+  first asking on `b0a94db` (51.83 / 51.91 / 50.48 / 49.61, mean 50.96,
+  spread 4.6%) the mean moved by 0.05 MHz and the failing seed got
+  *worse* by 0.35. The entry above that one invited a netlist change to
+  reopen the question with those four figures as its baseline; the
+  netlist changed twice today and the answer did not move. The board
+  top stays at 48.0769 MHz.
+
+- **No place-and-route option rescued the fabric, and three of the four
+  did not finish** (2026-08-16, `oca_crypto_dual` on the netlist as
+  first built, all at seed 1 against that netlist's 46.40 MHz):
+
+  | option | result |
+  |---|---|
+  | `--placer-heap-timingweight 35` | **44.15 MHz**, worse by 2.25 |
+  | `--tmg-ripup` | did not finish inside the design's 14400 s bound |
+  | `--router router2 --tmg-ripup` | did not finish; overuse stuck near 50000 across 69 router iterations |
+  | `--placer-heap-timingweight 35 --placer-heap-critexp 5 --tmg-ripup` | did not finish |
+
+  This closes the "tune the placer" avenue for this design with
+  evidence rather than opinion: the only knob that completed made the
+  result worse, and the ones aimed squarely at timing-driven routing
+  cost more than four hours each without producing a bitstream. The
+  gain came from RTL.
+
+- **Place and route of the fabric varies fivefold with the seed, and
+  every bound in this project is wall clock** (2026-08-16). Measured
+  on one netlist: **31, 93, 108 and over 155 minutes** for seeds 1, 4,
+  2 and 3; over 219 minutes for a seed of the netlist before the cuts;
+  4 to 15 minutes for the single-engine tops. Two builds still inside
+  nextpnr's router, still writing their logs, were killed at 13168 s
+  and 9347 s by the `no-runaway-builds` hook while eleven builds shared
+  a sixteen-core machine, and neither reported anything.
+
+  Two things were wrong and both are fixed. The hook's ceiling stood
+  at 7500 s while `oca_crypto_dual` declares a 14400 s bound, so the
+  net sat *below* a legitimate build and destroyed evidence instead of
+  catching a runaway; it now derives the ceiling from the largest
+  `timeout=` in `run_synth.py` plus ten minutes (`29bc9af`), so the
+  next design to declare a longer bound moves it too. And the sweeps
+  that day ran up to eleven builds at once, which is what turned a
+  93-minute seed into a killed one: concurrency multiplies straight
+  into a wall-clock bound.
+
 
 ## The vendored Ethernet stack
 

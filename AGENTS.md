@@ -128,10 +128,30 @@ RTL (Phase 2), from `oca/`:
 .venv/bin/python hw/sim/run_slip_rx.py            # 12/12 pass, + 12 at BYTES=64
 .venv/bin/python hw/sim/run_slip_tx.py            # 7/7 pass
 .venv/bin/python hw/sim/run_uart_crypto.py        # 5/5 pass
+.venv/bin/python hw/sim/run_uart_crypto_dual.py   # 1/1 pass, two cores over the real UART
+.venv/bin/python hw/sim/run_dual_fabric.py        # 6/7 pass, 1 skipped by design
 .venv/bin/python hw/sim/run_crypto_pll.py         # 3/3 pass, its one build at LED_BITS=8
 .venv/bin/python hw/sim/run_keystore_gate.py      # 4/4 pass, post-synthesis
 .venv/bin/python hw/sim/run_proto_gate.py         # 2/2 pass, post-synthesis
 ```
+
+`run_dual_fabric.py`'s seventh test is the fail-closed one, and it
+needs RTL whose cores CAN diverge, so it is skipped by default and
+**`--divergent` alone is not enough** — it also needs a source copy
+that makes them differ:
+
+```sh
+mkdir -p /tmp/div && sed 's/oca_core #(.BYTES (BYTES)) u_core1 (/oca_core #(.BYTES (BYTES), .NUM_SLOTS (4)) u_core1 (/' \
+    hw/sim/oca_dual_harness.sv > /tmp/div/oca_dual_harness.sv
+.venv/bin/python hw/sim/run_dual_fabric.py --divergent --src-override /tmp/div
+```
+
+That run reads 6/7 as well, and the two failures are the same test
+swapped: on the pristine tree the divergence test is skipped and
+`test_clean_broadcast_keeps_trouble_low` passes; on the copy the
+divergence test passes and the clean one cannot, because those cores
+can no longer answer a slot-6 load-key identically. Neither ordering
+is a defect and both were run on 2026-08-16.
 
 That is every RTL runner in the repository, and the list has to be
 complete because **there is no aggregate RTL runner here at all** —
@@ -139,9 +159,12 @@ complete because **there is no aggregate RTL runner here at all** —
 binary, so every suite is invoked by name and a suite missing from this
 list is a suite nobody runs.
 
-**The 23 cocotb runners measure 154 tests over 178 passing
-executions**, six of them on a synthesised netlist from the two gate
-runners. Beyond them, four more populations run and can fail: **60
+**The 25 cocotb runners measure 162 tests over 186 executions, 185 of
+them passing and one skipped by design** (the fail-closed test above),
+six of the passing ones on a synthesised netlist from the two gate
+runners. Counted by running every runner in the tree on 2026-08-16,
+not by adding up this list. Beyond them, four more populations run and
+can fail: **69
 tests in `hw/host/`, 4 in `hw/syn/test_run_synth.py`, 4 in
 `hw/sim/test_proto_model.py`** and the C backend's **126 known-answer
 checks** behind the single ctest above; the 6-step `cli.py --fake
