@@ -154,7 +154,9 @@ Hardware accelerator for:
   cycle budgets and not rates — the 2026-08-10 amendment below gives the
   clock a pinned build gets. Saturating
   a single port needs both cores behind it, which needs a distributor, a
-  collector and an answer to the per-core key store; saturating both
+  collector and an answer to the per-core key store — all three written
+  on 2026-08-16, for a fabric that has no Ethernet port in it and does
+  not close its clock on every seed; saturating both
   needs four cores, and three do not route. Full line rate on any port
   stays out of reach until the Artix-7 phase.
   **Amended 2026-08-09: the MAC question the next paragraph leaves open
@@ -247,7 +249,8 @@ Hardware accelerator for:
   94.5% of the device. Whether two cores behind one port would route at
   75.3% is **unmeasured** — that configuration has never been built,
   and it would need a distributor, a collector and an answer to the
-  per-core key store besides. The host interface stops being the
+  per-core key store besides — which exist since 2026-08-16, for a
+  fabric with no port in it. The host interface stops being the
   smaller number only from Phase 3.
 - Final OCA-50 board: 50 Gbps aggregate multi-core/multi-session, with
   reproducible benchmarks (scripts + documented host configuration).

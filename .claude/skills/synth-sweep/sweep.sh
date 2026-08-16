@@ -97,8 +97,10 @@ print(f"  clock {clk}")
 print(f"  Fmax  {' / '.join(f'{x:.2f}' for x in v)}")
 print(f"  mean  {mean:.2f} MHz   spread {spread:.1f}%")
 if spread > 8.0:
-    print("  NOTE: spread exceeds every seed spread recorded on the"
-          "\n        committed designs (widest 7.7%, 2026-08-16) - it"
-          "\n        may have become harder to place. That is a finding,"
-          "\n        not noise.")
+    print("  NOTE: over 8%. The widest recorded on a committed design"
+          "\n        is 10.6% (oca_crypto_dual, 2026-08-16, 60.0% full,"
+          "\n        one seed of four missing its constraint); the board"
+          "\n        top reads 7.7% and 8.7% on two netlists of that day."
+          "\n        A wide spread means it may have become harder to"
+          "\n        place. That is a finding, not noise.")
 PY

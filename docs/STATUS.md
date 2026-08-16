@@ -18,28 +18,27 @@ done, what is being worked on, what is next.
 
 **Phase 2 — RTL.** ChaCha20, Poly1305 and the AEAD engine, verified
 against RFC 8439. The host protocol — key store, packet buffers,
-protocol FSM — behind a 64-bit AXI-Stream pair. **178 passing
-executions over 23 cocotb runners, six of them on a synthesised
-netlist**, measured 2026-08-12 after the Ethernet removal below, the
-crypto suites re-measured 2026-08-15 for the PLL and 2026-08-16 for
-the bubble-and-bench commit: no failures, no
-skips, and every runner exits 0. That figure is the
+protocol FSM — behind a 64-bit AXI-Stream pair. **185 passing
+executions over 25 cocotb runners, six of them on a synthesised
+netlist**, every runner in the tree run on 2026-08-16: no failures, and
+every runner exits 0. That figure is the
 simulator's alone. Outside it, and outside every count this page gave
-before 2026-08-13: **60 tests in `hw/host/`, 4 in
+before 2026-08-13: **69 tests in `hw/host/`, 4 in
 `hw/syn/test_run_synth.py`, 4 in `hw/sim/test_proto_model.py`** and the
 126 known-answer checks of Phase 1 above. They are not one unit and are
 not summed here. Nothing in any of them has run on hardware. No suite
 needs a vendored tree to build any more. `verilator
---lint-only -Wall` is clean. Nothing skips any more: the pair that did
-was `oca_uart_crypto`'s heartbeat, which needed a `LED_BITS` small
-enough to simulate, and the counter now sits in `oca_crypto_pll`, whose
-only build is that small.
+--lint-only -Wall` is clean. **One test skips, by design**: the
+fabric's fail-closed check needs RTL whose two cores can disagree, so
+it runs only against a source copy that makes them — `AGENTS.md` gives
+the invocation. On that copy it passes and the clean-broadcast test
+cannot, the two being mutually exclusive by construction.
 
 Earlier counts — 222 executions before the Ethernet removal, 207 in a
 fresh clone, and two different 177s that never measured the same thing
 — belong to earlier trees and populations. `docs/RECORD.md` carries
 that counting history, each figure with its date and what it counted;
-today's figure is the 178 above.
+today's figure is the 185 above, over 186 executions.
 
 **The open ECP5 toolchain**, built locally in `tools/`: yosys with the
 slang frontend, nextpnr-ecp5, prjtrellis, Verilator, openFPGALoader.
@@ -82,6 +81,23 @@ the marginal 36.00. At the PLL's 48.0769 MHz the cycle budget is **934
 cycles per 1500-byte MTU packet (0.618 Gbps per engine) and 106 per
 64-byte packet (0.232)**, against 1031 / 0.560 and 111 / 0.222 before.
 
+**Two cuts to the critical path, and neither costs a cycle**
+(2026-08-16, `a529470` and `a307d87`). The first: the request's two
+lengths are latched from the argument word that carries them, two
+cycles before `P_ARGS` decides, so the 18-bit adder, the length
+compares and the first-block comparators no longer resolve on the
+deciding edge — `+65 flip-flops` per core. The second: Poly1305's
+multiplier B operand is chosen one cycle ahead, for the row that will
+be multiplied next, taking a five-way mux off the path into the DSP
+column — **+134 flip-flops** per core for the operand register, and no
+state added to the schedule: the board top went 12589 → 12788
+flip-flops for the two cuts together. `run_aead_cycles` measures the same
+36 cycles at the margin and the same intercept of 66 after both, and
+three mutations show the suites can see the cuts. What they bought is
+in `docs/RECORD.md`: on the fabric, the difference between failing its
+constraint on every seed measured and clearing it on three of four; on
+the board top, **nothing four seeds can see**.
+
 **And it closes 48.0769 MHz**, re-measured 2026-08-16 on that commit
 over four placer seeds on yosys `f77ddfb87`, LFE5U-45F CABGA381 speed
 6:
@@ -116,6 +132,19 @@ packed bitstream, so what it reports now is area alone. `build/` holds
 one pass, since a rebuild overwrites the last, so re-run rather than
 trusting any table. `docs/RECORD.md` carries every measurement in full.
 
+**Two engines behind one serial line, built and measured — and not
+shipped** (2026-08-16). `oca_dispatch` routes each request to a core on
+the opcode in its first beat and holds the route to `tlast`,
+broadcasting only load-key so both private key stores hold every slot;
+`oca_collect` merges the two answers fail-closed, with a sticky
+`trouble` on divergence or a full expectation queue. It simulates
+clean. On silicon terms it does not qualify: four placer seeds give
+**50.28 / 50.66 / 46.23 / 51.15 MHz** against the same 48.0769, so one
+seed misses by 3.84% and by this project's rule the constraint is not
+closed. The spread, 10.6%, is the widest recorded here — a device at
+60% occupancy. The fabric is kept as measured, not shipped, exactly as
+the 50.00 MHz rung is.
+
 ## Not established
 
 **No bitstream containing crypto has been loaded onto the board.** What
@@ -128,17 +157,32 @@ netlist, not a board that answered.
 **The margin changed character, and it is now small.** The pre-PLL top
 closed 49.85 MHz against a 25.00 MHz requirement, a 99% margin that
 could not fail; this one asks for 48.0769 and the worst of four seeds
-on the 2026-08-16 sweep gives 2.31%. Any RTL change has to be
-re-synthesised before it is
+gives 2.31% on `4f879ee` and **2.04%** after the two cuts. Any RTL
+change has to be re-synthesised before it is
 believed, and a change that looks harmless may not close.
 
-**Three seed spreads exist for this design's tops and none orders
+**Four seed spreads exist for this design's tops and none orders
 another.** A four-seed sweep of `oca_crypto_pll` before the reset and
 heartbeat corrections spread 8.1%; the 2026-08-15 netlist spread 6.9%;
-the current one (`4f879ee`) spreads 7.7%. No ordering is claimed:
+`4f879ee` spreads 7.7%; the netlist with both cuts spreads 8.7%. No
+ordering is claimed:
 four-seed draws cannot rank netlists, which is what
 `.claude/skills/synth-sweep` says in as many words. Each is recorded
-against the netlist it belongs to and the comparison is refused.
+against the netlist it belongs to and the comparison is refused — and
+that refusal has teeth: seed 1 alone reads 49.19 against 51.06 across
+the cuts, which looks like +3.8% and is noise, the four-seed means
+being 51.23 and 51.30.
+
+**The 50.00 MHz rung was asked a second time and answered the same.**
+On the netlist with both cuts, four seeds give 52.58 / 51.59 / 50.58 /
+49.26 — three close, the fourth misses by 1.47%, where the first
+asking missed by 0.78%. The board top stays at 48.0769.
+
+**No place-and-route option helped the fabric.**
+`--placer-heap-timingweight 35` made it worse (44.15 against 46.40);
+`--tmg-ripup`, `router2 --tmg-ripup` and the two together each ran past
+the design's four-hour bound without finishing. The gain came from RTL,
+and this avenue is closed with evidence rather than opinion.
 
 **Banks 2 and 7 are unmeasured.** J17 and H18 live in bank 2. The console
 has been talking through them at 115200 since 2026-08-11, so this is not
@@ -173,6 +217,18 @@ describes.
    is for. `oca_crypto_pll.sv`'s header has the full table.
 2. Time the PLL with a stopwatch, and measure bank 2 while the meter is
    out.
+3. **Decide what the two-engine fabric is for.** It closes on three
+   seeds of four at 48.0769 and is therefore not shippable there. The
+   next rung down is 625/14 = 44.643 MHz, where the worst seed measured
+   would sit 3.5% inside — two engines at that clock carry 1.86 times
+   one engine at 48.0769, and the sweep that would settle it has not
+   been run. The alternative is to keep cutting: both tops now bind on
+   the same carry chain inside the AEAD, **18.76 to 21.63 ns** over the
+   eight seeds of the two tops. Its logic sits between 7.06 and 7.71 ns
+   whichever seed it is, so the ~2.9 ns of spread is mostly routing —
+   but not entirely, and not on every pair: between the fabric's seeds
+   1 and 4 the whole difference is logic, and routing moves the other
+   way by 0.02 ns.
 
 ## Closed
 

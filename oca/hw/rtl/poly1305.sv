@@ -95,23 +95,22 @@ module poly1305 #(
     end
 
     // One row of products per slot, registered on both sides so the DSP
-    // blocks can absorb them.
-    logic [LW+1:0] mul_a [ROWS_PER_CYCLE][NL];
-    logic [LW+2:0] mul_b [ROWS_PER_CYCLE][NL];
-    logic [56:0]   prod  [ROWS_PER_CYCLE][NL];
-
-    always_comb begin
-        for (int sl = 0; sl < ROWS_PER_CYCLE; sl++) begin
-            automatic int unsigned j = row * ROWS_PER_CYCLE + sl;
-            for (int i = 0; i < NL; i++) begin
-                mul_a[sl][i] = sum_d[i];
-                if (j >= NL)
-                    mul_b[sl][i] = '0;                 // padding row
-                else
-                    mul_b[sl][i] = (i + j >= NL) ? r5_d[j] : {3'b000, r_d[j]};
-            end
-        end
-    end
+    // blocks can absorb them. The A operand is `sum_d`, a register, and
+    // reaches the multiplier with nothing in front of it. The B operand
+    // is a five-way choice over r and 5r, and it used to be made in the
+    // cycle that multiplied: the ECP5 build put that mux, the haul to
+    // the MULT18X18D column and the accumulate that follows it in one
+    // 20.86 ns path, which became the critical path of the two-engine
+    // top once the protocol engine's own cone was cut. The row index is
+    // deterministic, so the choice is made one cycle early instead --
+    // for the row that will be multiplied next, not the one being
+    // multiplied now. No cycle is added: the operand for row 0 is
+    // prepared while the accumulator waits in S_WAIT, and every later
+    // row while its predecessor multiplies.
+    logic [LW+1:0] mul_a  [ROWS_PER_CYCLE][NL];
+    logic [LW+2:0] mul_b  [ROWS_PER_CYCLE][NL];   // registered
+    logic [LW+2:0] mul_b_c[ROWS_PER_CYCLE][NL];
+    logic [56:0]   prod   [ROWS_PER_CYCLE][NL];
 
     logic [63:0] t_next [NL];
 
@@ -127,6 +126,26 @@ module poly1305 #(
         S_IDLE, S_WAIT, S_MUL, S_DRAIN, S_C1, S_C2, S_FIN, S_FIN2, S_TAG
     } fsm_t;
     fsm_t state;
+
+    // The row whose operands are being prepared: the next one while the
+    // multiply walks, row 0 in every other state, which is what makes the
+    // wait before a block double as the first row's preparation. Out of
+    // range at the end of the walk, where the padding row takes over.
+    logic [2:0] row_nx;
+    always_comb row_nx = (state == S_MUL) ? row + 3'd1 : 3'd0;
+
+    always_comb begin
+        for (int sl = 0; sl < ROWS_PER_CYCLE; sl++) begin
+            automatic int unsigned j = row_nx * ROWS_PER_CYCLE + sl;
+            for (int i = 0; i < NL; i++) begin
+                mul_a[sl][i] = sum_d[i];
+                if (j >= NL)
+                    mul_b_c[sl][i] = '0;               // padding row
+                else
+                    mul_b_c[sl][i] = (i + j >= NL) ? r5_d[j] : {3'b000, r_d[j]};
+            end
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -148,15 +167,19 @@ module poly1305 #(
                 f[i]     <= '0;
             end
             for (int sl = 0; sl < ROWS_PER_CYCLE; sl++)
-                for (int i = 0; i < NL; i++)
-                    prod[sl][i] <= '0;
+                for (int i = 0; i < NL; i++) begin
+                    mul_b[sl][i] <= '0;
+                    prod[sl][i]  <= '0;
+                end
         end else begin
             done <= 1'b0;
-            // registered products, every cycle: the DSP blocks absorb
-            // these registers
+            // registered operands and products, every cycle: the DSP
+            // blocks absorb these registers
             for (int sl = 0; sl < ROWS_PER_CYCLE; sl++)
-                for (int i = 0; i < NL; i++)
-                    prod[sl][i] <= mul_a[sl][i] * mul_b[sl][i];
+                for (int i = 0; i < NL; i++) begin
+                    mul_b[sl][i] <= mul_b_c[sl][i];
+                    prod[sl][i]  <= mul_a[sl][i] * mul_b[sl][i];
+                end
 
             case (state)
                 S_IDLE: if (start) begin

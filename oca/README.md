@@ -212,7 +212,9 @@ produces it, so read these as cycle budgets: at the 48.0769 MHz
 `oca_clkrst` delivers they are 0.560 per port. Both PHYs can be fed in cycle budget — whether two
 MACs fit beside the cores is settled below, and they do not — and
 neither port is saturated, and saturating one would need both cores
-behind it — a distributor and a collector that do not exist. This
+behind it — a distributor and a collector, which did not exist when
+this was written and do now (`oca_dispatch.sv` and `oca_collect.sv`,
+2026-08-16, for a fabric with no Ethernet port in it). This
 supersedes the 1.97-2.07 Gbps three-engine projection, and
 `SPEC.md`'s MVP target is corrected to match (`hw/syn/README.md`, "The
 occupancy study"). **Amended 2026-08-09: whether two ports fit was still

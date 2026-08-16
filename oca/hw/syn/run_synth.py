@@ -253,13 +253,15 @@ DESIGNS = {
     # clk_sys (see above — it would replace the derived constraint
     # NETLIST_PLL_PARAMS makes load-bearing).
     #
-    # NOTHING ABOUT THIS TARGET HAS BEEN BUILT OR MEASURED. The nearest
-    # figures are oca_dual's — an out-of-context four-seed sweep on
-    # 2026-08-15 whose Fmax seeds included one at 47.68 MHz, BELOW the
-    # 48.0769 MHz clk_sys asks for — and an out-of-context ceiling is
-    # not the pinned clock in either direction. This build may close,
-    # may need a seed hunt, or may not close; no document may claim
-    # closure until a sweep of this top at its commit says so.
+    # BUILT AND SWEPT ON 2026-08-16, AND IT DOES NOT CLOSE. Four placer
+    # seeds on a307d87 read 50.28 / 50.66 / 46.23 / 51.15 MHz against
+    # the 48.0769 MHz clk_sys asks for: the third misses by 3.85%, so
+    # the constraint is not closed and this target is measured, not
+    # shipped. The warning this comment used to carry — oca_dual's
+    # out-of-context seed at 47.68 MHz — pointed the right way, and an
+    # out-of-context ceiling is still not a pinned clock in either
+    # direction. docs/RECORD.md carries the sweep; the rung below,
+    # 625/14 = 44.643 MHz, has not been measured.
     #
     # 14400, and the sizing is oca_crypto_pll's argument scaled to the
     # dual history. In oca_dual's out-of-context sweep Router1 alone ran
@@ -755,20 +757,20 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # A legitimate reduction should fail this and be
                     # re-measured, which on a module this size is cheap.
                     "oca_slip_rx": 302, "oca_slip_tx": 75,
-                    # DERIVED, NOT MEASURED — no build of this top
-                    # exists, and this floor is the one number here
-                    # whose measurement only the controller's build can
-                    # supply. The arithmetic: oca_crypto_pll's measured
-                    # 12589 (2026-08-16), plus a second core at ~12094
-                    # (oca_core's out-of-context 12033 was measured
-                    # before the bubble-and-bench commit and never
-                    # rebuilt; that commit moved the two pinned tops by
-                    # +61 and +60, so ~+61 is the best available
-                    # correction), plus the fabric's ~42 (dispatch 8,
-                    # collect 16, tag-FIFO pointers 18) ≈ 24725. Floored
-                    # at 24400 — ~1.3% under the derivation, the same
-                    # discipline as the entries above — and to be
-                    # re-floored from the census the first build prints.
+                    # DERIVED FIRST, THEN MEASURED TWICE. The derivation
+                    # was oca_crypto_pll's measured 12589 (2026-08-16),
+                    # plus a second core at ~12094, plus the fabric's
+                    # ~42 (dispatch 8, collect 16, tag-FIFO pointers 18)
+                    # ≈ 24725, floored at 24400. The first build of that
+                    # day censused 24726 — one flip-flop off the
+                    # derivation — and the netlist after the protocol
+                    # and Poly1305 cuts censuses 25124, the two cuts
+                    # having added 65 and 134 per core. The floor stays
+                    # at 24400: it is ~2.9% under the current census,
+                    # the same under-the-census discipline as the
+                    # entries above, and what it exists to catch is
+                    # storage vanishing wholesale rather than the last
+                    # few percent of a healthy refactor.
                     "oca_crypto_dual": 24400}
 
 # The cell no flip-flop census can see, and nothing else checks either.
@@ -980,7 +982,12 @@ def kill_group(proc, timeout, log_path):
     print(f"\nTIMEOUT after {timeout}s — killing process group {pgid}.\n"
           f"Nothing was measured. The log so far is {log_path}.\n"
           f"If this build legitimately needs longer, say so with --timeout "
-          f"rather than removing the bound.", file=sys.stderr)
+          f"rather than removing the bound — and raise OCA_BUILD_CEILING "
+          f"with it, because .claude/hooks/no-runaway-builds.sh derives "
+          f"its own ceiling from the timeout= literals in this file and "
+          f"cannot see a --timeout given on the command line. It would "
+          f"kill the longer build from outside, mid-route, with nothing "
+          f"reported.", file=sys.stderr)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(pgid, sig)
