@@ -92,9 +92,10 @@
  * reaches 50.44 at best -- but rgmii_rx_clk clears 125 MHz on none of
  * them, and the seed that comes closest overall (10) has clk_sys at
  * 47.40. So moving clk_sys would not help until the receive clock
- * closes. 50.00 has been asked for once, at one seed -- CLKOP_DIV 4,
- * CLKOS_DIV 10, VCO 500 -- and reached 48.22; that is one placement,
- * not a sweep, so the rung above is untested rather than ruled out.
+ * closes. 50.00 was asked of the old Ethernet top once (48.22, one
+ * seed) and of the crypto netlist over four seeds on 2026-08-16:
+ * 51.83 / 51.91 / 50.48 / 49.61 -- three close, one misses by 0.78%,
+ * so the rung is measured and not shipped (docs/RECORD.md, the ladder).
  *
  * ----------------------------------------------------------------------
  * RESETS
@@ -213,6 +214,14 @@
  *   clk_rx,  rst_n_rx   -> oca_rgmii rst_n
  *   phy_rst_n           -> P4
  */
+/* CHANGE POLICY. This module is instantiated by oca_pll, which was
+ * measured on silicon at bring-up step 3. Any edit here must leave
+ * oca_pll's netlist bit-identical at the default parameters, proven by
+ * rebuilding oca_pll and comparing the .config hash against a baseline
+ * taken first -- the 2026-08-16 parameterisation was proven exactly
+ * that way. An edit that cannot pass that bar reopens the silicon
+ * measurement and needs the bench.
+ */
 module oca_clkrst #(
     // Synchroniser depth. Two is the minimum that synchronises anything
     // (see the header); raising it costs one flop per domain per stage
@@ -220,7 +229,20 @@ module oca_clkrst #(
     parameter int RST_SYNC_STAGES = 2,
     // B50612D Table 86: RESET_PU >= 10 ms, RESET_WAIT >= 20 us.
     parameter int PHY_RST_MS      = 10,
-    parameter int PHY_WAIT_US     = 20
+    parameter int PHY_WAIT_US     = 20,
+    // The PLL divider set. The defaults are ecppll's answer for 25 MHz
+    // in, 125 MHz and 48 MHz out, transcribed from the run quoted in
+    // the header — the configuration bring-up step 3 measured on
+    // silicon, and the default elaboration is that design unchanged.
+    // Parameters rather than localparams so a variant top can ask for
+    // another rung of the clk_sys ladder (the header's IF 48.08 MHz
+    // DOES NOT CLOSE TIMING); every guard below recomputes from them,
+    // so a set the PLL cannot make still fails the lint rather than
+    // the board.
+    parameter int CLKI_DIV        = 1,
+    parameter int CLKFB_DIV       = 5,
+    parameter int CLKOP_DIV       = 5,
+    parameter int CLKOS_DIV       = 13
 ) (
     // 25 MHz board oscillator, P3 (LLC_GPLL0T_IN).
     input  logic clk_in,
@@ -253,21 +275,23 @@ module oca_clkrst #(
     output logic phy_ready
 );
 
-    // ecppll's answer for 25 MHz in, 125 MHz and 48 MHz out, transcribed
-    // from the run quoted in the header. Editing any of them moves
-    // what the guards below check.
+    // The board's oscillator. Not a parameter: every clock this module
+    // makes is made from the 25 MHz on P3.
     localparam int CLKI_HZ    = 25_000_000;
-    localparam int CLKI_DIV   = 1;
-    localparam int CLKFB_DIV  = 5;
-    localparam int CLKOP_DIV  = 5;
-    localparam int CLKOS_DIV  = 13;
-    localparam int CLKOP_CPH  = 2;
-    localparam int CLKOS_CPH  = 2;
 
     localparam int PFD_HZ     = CLKI_HZ / CLKI_DIV;
     localparam int VCO_HZ     = PFD_HZ * CLKFB_DIV * CLKOP_DIV;
     localparam int CLK_TX_HZ  = VCO_HZ / CLKOP_DIV;
     localparam int CLK_SYS_HZ = VCO_HZ / CLKOS_DIV;
+
+    // ecppll's own arithmetic for the output phase, recomputed rather
+    // than transcribed so a divider override keeps ecppll's phase too:
+    // half an output period in VCO cycles, truncated (the header, and
+    // libtrellis/tools/ecppll.cpp:301). CLKOP_DIV/2 because one CLKOP
+    // period is exactly CLKOP_DIV VCO cycles; 2 for both the 625 and
+    // the 500 MHz VCO. The secondary output inherits it, per the header.
+    localparam int CLKOP_CPH  = CLKOP_DIV / 2;
+    localparam int CLKOS_CPH  = CLKOP_CPH;
 
     // Each of these is the only check of its kind anywhere in the flow;
     // the header says which tool declines to make it.

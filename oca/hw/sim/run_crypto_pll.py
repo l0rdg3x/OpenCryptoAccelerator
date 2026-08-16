@@ -21,14 +21,18 @@ that refuses a CLK_HZ whose stop-bit sample lands outside the budget --
 is exercised here at the frequency the top says the board runs at.
 
 THAT IS THE COPY AND NOT THE CLOCK, and the difference is the whole of
-what this suite cannot see. 48_076_923 is a localparam in
-oca_crypto_pll.sv, hand-copied from oca_clkrst's arithmetic, and nothing
-in this build reads any further: EHXPLLL has no body, so no simulation
-turns CLKOS_DIV into a frequency. Setting that divider to 11 -- a real
-56.82 MHz clock carrying a divisor computed for 48.08 -- leaves all three
-tests here green, which was measured and not assumed. What compares the
-two is hw/syn/run_synth.py's check_clk_sys_const, against the dividers in
-the built netlist, before place & route.
+what this suite cannot see. 48_076_923 is oca_crypto_pll's CLK_SYS_HZ
+parameter default, since 2026-08-16 guarded at elaboration against the
+divider parameters it forwards to oca_clkrst -- a CLK_SYS_HZ overridden
+apart from its dividers refuses to elaborate, which the old hand-copied
+localparam could not do. What no guard here reaches is the CLOCK:
+EHXPLLL has no body, so no simulation turns CLKOS_DIV into a frequency,
+and a coherent override of the whole set -- a real 56.82 MHz clock
+carrying its own matching divisor -- leaves all three tests green. On
+the pre-parameter RTL that was measured, not assumed, by setting the
+divider alone to 11. What compares the RTL's constant with the dividers
+in the built netlist is hw/syn/run_synth.py's check_clk_sys_const,
+before place & route.
 """
 
 import os
