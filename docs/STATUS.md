@@ -89,7 +89,9 @@ compares and the first-block comparators no longer resolve on the
 deciding edge — `+65 flip-flops` per core. The second: Poly1305's
 multiplier B operand is chosen one cycle ahead, for the row that will
 be multiplied next, taking a five-way mux off the path into the DSP
-column — no state added at all. `run_aead_cycles` measures the same
+column — **+134 flip-flops** per core for the operand register, and no
+state added to the schedule: the board top went 12589 → 12788
+flip-flops for the two cuts together. `run_aead_cycles` measures the same
 36 cycles at the margin and the same intercept of 66 after both, and
 three mutations show the suites can see the cuts. What they bought is
 in `docs/RECORD.md`: on the fabric, the difference between failing its
@@ -173,7 +175,7 @@ being 51.23 and 51.30.
 
 **The 50.00 MHz rung was asked a second time and answered the same.**
 On the netlist with both cuts, four seeds give 52.58 / 51.59 / 50.58 /
-49.26 — three close, the fourth misses by 1.48%, where the first
+49.26 — three close, the fourth misses by 1.47%, where the first
 asking missed by 0.78%. The board top stays at 48.0769.
 
 **No place-and-route option helped the fabric.**
@@ -221,9 +223,12 @@ describes.
    would sit 3.5% inside — two engines at that clock carry 1.86 times
    one engine at 48.0769, and the sweep that would settle it has not
    been run. The alternative is to keep cutting: both tops now bind on
-   the same carry chain inside the AEAD, 19.6 to 21.6 ns depending on
-   the seed, with the logic identical across seeds and the routing
-   carrying every bit of the difference.
+   the same carry chain inside the AEAD, **18.76 to 21.63 ns** over the
+   eight seeds of the two tops. Its logic sits between 7.06 and 7.71 ns
+   whichever seed it is, so the ~2.9 ns of spread is mostly routing —
+   but not entirely, and not on every pair: between the fabric's seeds
+   1 and 4 the whole difference is logic, and routing moves the other
+   way by 0.02 ns.
 
 ## Closed
 

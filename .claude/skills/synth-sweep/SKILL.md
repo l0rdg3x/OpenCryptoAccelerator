@@ -25,11 +25,17 @@ toolchain gives:
   2026-08-09.
 - **`oca_crypto_pll` (the board top, pinned): 7.7%**, four seeds
   (49.19 / 51.21 / 52.99 / 51.55 MHz, mean 51.23) on the netlist of
-  `4f879ee`, measured 2026-08-16 on yosys `f77ddfb87`. That is the
-  widest spread recorded on a committed design, the one `sweep.sh`'s
-  over-8% note names. The netlist before that commit spread 6.9%, and
-  an uncommitted one before the reset and heartbeat corrections 8.1%
-  (`docs/RECORD.md`).
+  `4f879ee`, measured 2026-08-16 on yosys `f77ddfb87`. The netlist
+  before that commit spread 6.9%, and an uncommitted one before the
+  reset and heartbeat corrections 8.1% (`docs/RECORD.md`).
+- **`oca_crypto_dual` (the two-engine fabric): 10.6%**, four seeds
+  (50.28 / 50.66 / 46.23 / 51.15 MHz, mean 49.58) on `a307d87`, later
+  the same day. **That is the widest recorded here**, and the same
+  sweep is why: at 60.0% occupancy one seed of four missed the
+  constraint the other three cleared by 4.6 to 6.4%. The board top on
+  that same RTL spread 8.7% (51.06 / 49.06 / 53.31 / 51.75). Both are
+  over the note's threshold below, and both were the finding rather
+  than the noise.
 
 The order of the first two reversed with the toolchain bump. The pair
 used to be the tighter of the two and is now the wider, which is the

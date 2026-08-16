@@ -26,17 +26,18 @@
  * and the OR below are oca_crypto_pll's untouched: nine causes, still
  * one LED, still deliberately coarse.
  *
- * NOTHING HERE HAS BEEN BUILT, MEASURED OR RUN. No figure in this
- * header, on purpose: the dual datapath is roughly two cores' worth of
- * logic behind one front end, and the only pinned numbers that exist
- * for a pair are oca_dual's — an out-of-context sweep whose four seeds
- * included one at 47.68 MHz, BELOW the 48.0769 MHz clk_sys asks for
- * (docs/RECORD.md, the 2026-08-15 entry, measured on a target with no
- * transport and no pins). That is a warning, not a prediction: an
- * out-of-context Fmax is a ceiling, not the clock the board runs, and
- * this netlist is not that netlist. The pinned build may close, may
- * need a seed hunt, or may not close at all — and no document may say
- * which until a sweep of THIS top at ITS commit says so.
+ * THIS TOP HAS BEEN BUILT AND SWEPT, AND IT DOES NOT CLOSE. Four
+ * placer seeds on 2026-08-16 read 50.28 / 50.66 / 46.23 / 51.15 MHz
+ * against the 48.0769 MHz clk_sys asks for: three clear it by 4.6 to
+ * 6.4% and the third misses by 3.85%, so by this project's rule the
+ * constraint is not closed and this top is measured, not shipped.
+ * 26290 LUTs and 25124 flip-flops, 60.0% of the device, and the
+ * spread across the four seeds is 10.6% — the widest recorded here.
+ * The warning this header used to carry was right for the reason it
+ * gave: oca_dual's out-of-context sweep had a seed at 47.68 MHz, and
+ * an out-of-context Fmax is a ceiling rather than the clock a board
+ * runs. docs/RECORD.md carries the sweep and what it does not settle;
+ * the rung below, 625/14 = 44.643 MHz, has never been measured.
  */
 `default_nettype none
 

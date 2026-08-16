@@ -40,6 +40,12 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 # one moves this net with it instead of going stale a third time. The
 # literal is the fallback for a run_synth.py that cannot be read, and
 # it is the answer the derivation gives today.
+#
+# What the derivation cannot see is run_synth.py's own --timeout, which
+# is a command-line argument and never reaches this file. A build given
+# a longer bound that way needs OCA_BUILD_CEILING raised with it, or
+# this net kills it exactly as it killed the two of 2026-08-16;
+# run_synth.py's timeout message says so where an operator meets it.
 declared=$(grep -oE '^ +timeout=[0-9]+' "$ROOT/oca/hw/syn/run_synth.py" 2>/dev/null |
            grep -oE '[0-9]+' | sort -n | tail -1)
 CEILING_SECONDS=${OCA_BUILD_CEILING:-$(( ${declared:-14400} + 600 ))}

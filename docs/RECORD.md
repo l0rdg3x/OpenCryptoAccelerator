@@ -1421,13 +1421,21 @@ now carries all of them, which is the actual fix.
   | EHXPLLL | 1 of 4 |
   | `clk_sys` | 50.28 / 50.66 / **46.23** / 51.15 MHz |
 
-  Mean 49.58, **spread 10.6%** on `(max-min)/min` — wider than any
-  spread recorded anywhere in this repository, where ten are written
-  down and the largest is 8.1%. That is what a device at 60% occupancy
-  does to a placer. Seed 3 misses by 3.84%
+  Mean 49.58, **spread 10.6%** on `(max-min)/min` — the widest of any
+  four-seed sweep of a committed top in this repository, where the
+  previous widest was 8.1% and the netlist of the entry below it
+  spreads 8.7%. It is *not* the widest figure of that shape anywhere
+  here: `oca/hw/syn/README.md` records a 46.84-54.08 MHz stock row,
+  15.5% on the same formula, and a repo-wide grep finds roughly
+  seventeen distinct spread percentages. That is what a device at 60%
+  occupancy does to a placer. Seed 3 misses by 3.85%
   **on the same cone as the seeds that pass**: 21.633 ns against
-  19.890, all of the difference in routing (13.542 vs 11.939) and none
-  in logic (7.566 vs 7.426). By this project's rule a constraint a
+  19.890, with 1.603 ns of the 1.743 in routing (13.542 vs 11.939) and
+  the remaining 0.140 in logic (7.566 vs 7.426). Across all eight seeds
+  of the two tops that cone's logic sits between 7.06 and 7.71 ns, so
+  routing carries most of the seed spread but not all of it: between
+  this design's seeds 1 and 4 the whole difference is logic, and
+  routing moves the other way. By this project's rule a constraint a
   seed misses is not closed, so the fabric is **measured, not
   shipped**, exactly as the 50.00 MHz rung was.
 
@@ -1456,11 +1464,11 @@ now carries all of them, which is the actual fix.
   | TRELLIS_COMB | 13412 | 13381 |
   | TRELLIS_FF | 12788 | 12589 |
   | `clk_sys`, four seeds | 51.06 / 49.06 / 53.31 / 51.75 | 49.19 / 51.21 / 52.99 / 51.55 |
-  | mean | 51.30 | 51.23 |
+  | mean | 51.29 | 51.23 |
   | worst seed's margin over 48.0769 | **2.04%** | 2.31% |
 
   All four seeds clear, as before. **The two cuts bought this top
-  nothing that four seeds can see**: the means differ by 0.07 MHz and
+  nothing that four seeds can see**: the means differ by 0.06 MHz and
   the worst seed is 0.13 MHz lower than the worst seed before. A
   seed-1 to seed-1 reading of the same pair says +3.8%, and that
   reading is noise — this file's own rule is that four-seed draws
@@ -1471,7 +1479,7 @@ now carries all of them, which is the actual fix.
 - **The 50.00 MHz rung, asked a second time, answers the same**
   (2026-08-16, `oca_crypto_pll_50` on commit `a307d87`, four placer
   seeds): **52.58 / 51.59 / 50.58 / 49.26 MHz — three seeds close,
-  the fourth misses by 1.48%.** Mean 51.00, spread 6.7%. Against the
+  the fourth misses by 1.47%.** Mean 51.00, spread 6.7%. Against the
   first asking on `b0a94db` (51.83 / 51.91 / 50.48 / 49.61, mean 50.96,
   spread 4.6%) the mean moved by 0.05 MHz and the failing seed got
   *worse* by 0.35. The entry above that one invited a netlist change to
@@ -1496,14 +1504,25 @@ now carries all of them, which is the actual fix.
   cost more than four hours each without producing a bitstream. The
   gain came from RTL.
 
-- **Place and route of the fabric varies fivefold with the seed, and
-  every bound in this project is wall clock** (2026-08-16). Measured
-  on one netlist: **31, 93, 108 and over 155 minutes** for seeds 1, 4,
-  2 and 3; over 219 minutes for a seed of the netlist before the cuts;
-  4 to 15 minutes for the single-engine tops. Two builds still inside
-  nextpnr's router, still writing their logs, were killed at 13168 s
-  and 9347 s by the `no-runaway-builds` hook while eleven builds shared
-  a sixteen-core machine, and neither reported anything.
+- **Place and route of the fabric varies more than fourfold with the
+  seed, and every bound in this project is wall clock** (2026-08-16).
+  Measured on one netlist, from each build's own artefacts — the yosys
+  JSON's timestamp to its nextpnr log's: **31.9, 93.9, 108.3 and 141.6
+  minutes** for seeds 1, 4, 2 and 3, so 4.4x between the fastest and
+  the slowest; 4 to 15 minutes for the single-engine tops. A seed of
+  the netlist before the cuts ran 240 minutes and was killed by
+  `run_synth.py`'s own 14400 s bound, which reported properly.
+
+  Two other builds were killed at 13168 s and 9347 s by the
+  `no-runaway-builds` hook while eleven builds shared a sixteen-core
+  machine, and neither reported anything. **That pair rests on the
+  hook's own report in the session transcript and on nothing else**:
+  one of the two logs was overwritten by the re-run that replaced it
+  and the other ends at the nextpnr invocation with no output, so the
+  13168 and the 9347 cannot be re-derived from this tree. What the
+  tree does still show is the shape of the problem — a completed seed
+  of this design at 141.6 minutes, well past the 125-minute ceiling
+  that was in force.
 
   Two things were wrong and both are fixed. The hook's ceiling stood
   at 7500 s while `oca_crypto_dual` declares a 14400 s bound, so the
