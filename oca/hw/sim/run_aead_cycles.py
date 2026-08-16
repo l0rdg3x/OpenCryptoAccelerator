@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+"""Run the per-block cycle-cost tests under the project-local Verilator."""
+
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+VERILATOR_BIN = ROOT / "tools" / "verilator" / "bin"
+
+os.environ["PATH"] = str(VERILATOR_BIN) + os.pathsep + os.environ["PATH"]
+
+try:
+    from cocotb.runner import get_runner  # cocotb 1.x  # noqa: E402
+except ModuleNotFoundError:
+    from cocotb_tools.runner import get_runner  # cocotb 2.x  # noqa: E402
+from cocotb_tools.check_results import get_results  # noqa: E402
+
+SIM_DIR = Path(__file__).resolve().parent
+RTL = ROOT / "oca" / "hw" / "rtl"
+
+
+def failed_tests() -> int:
+    """Red tests in the run that just finished.
+
+    runner.test() only inspects results.xml under pytest, and Verilator
+    exits 0 on $finish even with failing tests: without this check the
+    process exits 0 however the suite went, and anything driving these
+    runners by exit code would call a red suite green.
+    """
+    num_tests, num_failed = get_results(SIM_DIR / "results.xml")
+    if num_tests == 0:
+        raise RuntimeError("results.xml records no tests")
+    return num_failed
+
+
+def main() -> int:
+    runner = get_runner("verilator")
+    runner.build(
+        sources=[
+            RTL / "chacha20.sv",
+            RTL / "poly1305.sv",
+            RTL / "chacha20_poly1305.sv",
+            RTL / "oca_keystore.sv",
+            RTL / "oca_pktbuf.sv",
+            RTL / "oca_proto.sv",
+            RTL / "oca_core.sv",
+        ],
+        hdl_toplevel="oca_core",
+        build_dir=SIM_DIR / "sim_build_aead_cycles",
+        always=True,
+    )
+    (SIM_DIR / "results.xml").unlink(missing_ok=True)  # never grade a stale file
+    runner.test(
+        hdl_toplevel="oca_core",
+        test_module="test_aead_cycles",
+        test_dir=SIM_DIR,
+        build_dir=SIM_DIR / "sim_build_aead_cycles",
+    )
+    return 1 if failed_tests() else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -16,11 +16,11 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from aead_model import aead_encrypt
-from proto_model import (HDR_LEN, OP_LOAD_KEY, OP_OPEN, OP_SEAL, OP_STATS,
-                         ST_AUTH_FAIL, ST_BAD_LENGTH, ST_BAD_MAGIC,
+from proto_model import (HDR_LEN, OP_BENCH, OP_LOAD_KEY, OP_OPEN, OP_SEAL,
+                         OP_STATS, ST_AUTH_FAIL, ST_BAD_LENGTH, ST_BAD_MAGIC,
                          ST_BAD_OPCODE, ST_BAD_SLOT, ST_BAD_VERSION, ST_OK,
-                         build_load_key, build_open, build_seal, build_stats,
-                         parse_response)
+                         build_bench, build_load_key, build_open, build_seal,
+                         build_stats, parse_bench, parse_response)
 
 KEY = bytes(range(32))
 NONCE = bytes(range(12))
@@ -496,6 +496,80 @@ async def test_inconsistent_lengths(dut):
     pkt[23] = 0x00
     rsp = await command(dut, bytes(pkt))
     assert rsp["status"] == ST_BAD_LENGTH, f"status {rsp['status']}"
+
+
+@cocotb.test()
+async def test_bench_response_shape(dut):
+    """Opcode 05 answers a header and the 16-byte extra field, no body.
+
+    parse_bench asserts the shape: exactly sixteen bytes, the reserved
+    four of them zero so a later field cannot appear there unnoticed.
+    The engine monitor pins N — the response itself never says how many
+    blocks ran, so without that anchor a repeat counter off by one
+    still returns a plausible duration. The duration floor is the
+    engine's marginal cost, asserted exactly in test_aead_cycles; and
+    cnt_done must move, because a bench that succeeded is a command
+    like any other.
+    """
+    watch = await setup(dut)
+    await command(dut, build_load_key(0x70, 2, KEY))
+    before = counters(await command(dut, build_stats(0x71)))
+
+    n = 4
+    fed0 = watch.blocks_in
+    rsp = await command(dut, build_bench(0x72, 2, NONCE, n, bytes(range(64))))
+    assert rsp["status"] == ST_OK, f"bench status {rsp['status']}"
+    assert rsp["opcode"] == OP_BENCH and rsp["req_id"] == 0x72
+    got = parse_bench(rsp)
+    assert watch.blocks_in - fed0 == n, \
+        f"bench of {n} blocks fed {watch.blocks_in - fed0} to the engine"
+    assert got["duration"] >= 36 * n, \
+        f"duration {got['duration']} below the engine floor {36 * n}"
+    assert got["timestamp"] >= got["duration"], \
+        "the window opens before the timebase started counting"
+
+    after = counters(await command(dut, build_stats(0x73)))
+    assert after["done"] == before["done"] + 2, \
+        f"cnt_done {before['done']} -> {after['done']}, want +2 (stats, bench)"
+
+
+@cocotb.test()
+async def test_bench_refusals(dut):
+    """The bench fails closed on every argument it takes.
+
+    An unloaded slot answers 04 before the lengths are looked at,
+    exactly as a seal is judged. Then the length gate: a bench is a
+    header, sixteen argument bytes and one whole 64-byte block — a zero
+    N has no cycle count to mean, and a nonzero reserved field is a
+    request from a wire format this device does not speak yet.
+    """
+    await setup(dut)
+    block = bytes(64)
+
+    rsp = await command(dut, build_bench(0x74, 5, NONCE, 1, block))
+    assert rsp["status"] == ST_BAD_SLOT, f"unloaded slot: {rsp['status']}"
+
+    await command(dut, build_load_key(0x75, 5, KEY))
+
+    rsp = await command(dut, build_bench(0x76, 5, NONCE, 1, block)[:-1])
+    assert rsp["status"] == ST_BAD_LENGTH, f"63-byte block: {rsp['status']}"
+
+    rsp = await command(dut, build_bench(0x77, 5, NONCE, 1, block) + b"\x00")
+    assert rsp["status"] == ST_BAD_LENGTH, f"65-byte block: {rsp['status']}"
+
+    zero_n = bytearray(build_bench(0x78, 5, NONCE, 1, block))
+    zero_n[22:24] = b"\x00\x00"
+    rsp = await command(dut, bytes(zero_n))
+    assert rsp["status"] == ST_BAD_LENGTH, f"N = 0: {rsp['status']}"
+
+    reserved = bytearray(build_bench(0x79, 5, NONCE, 1, block))
+    reserved[20] = 0x01
+    rsp = await command(dut, bytes(reserved))
+    assert rsp["status"] == ST_BAD_LENGTH, f"reserved set: {rsp['status']}"
+
+    # and none of the refusals wedged the path
+    rsp = await command(dut, build_bench(0x7A, 5, NONCE, 2, block))
+    assert rsp["status"] == ST_OK, f"bench after refusals: {rsp['status']}"
 
 
 @cocotb.test()

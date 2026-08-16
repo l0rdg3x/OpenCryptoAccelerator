@@ -4,8 +4,9 @@ one reply, judged the way proto_model.py already defines it.
 
 This is plumbing, not a second protocol implementation: request and
 response bytes come from and go to oca/hw/sim/proto_model.py unchanged
-(build_load_key, build_seal, build_open, build_stats, parse_response),
-and SLIP encoding comes from oca/hw/sim/slip_model.py unchanged. Wire
+(build_load_key, build_seal, build_open, build_stats, build_bench,
+parse_response), and SLIP encoding comes from oca/hw/sim/slip_model.py
+unchanged. Wire
 format: docs/design/2026-08-03-host-protocol.md. RTL framing this is
 judged against: oca/hw/rtl/oca_slip_rx.sv, oca_slip_tx.sv.
 """
@@ -273,3 +274,29 @@ class OcaLink:
             "completed": completed,
             "auth_failures": auth_failures,
         }
+
+    def bench(self, slot: int, nblocks: int, *, nonce: bytes = bytes(12),
+               block: bytes = bytes(64)) -> dict[str, int]:
+        """Run the on-chip benchmark: seal one 64-byte block nblocks
+        times under the slot's key, returning {"duration", "timestamp"}.
+
+        Both values are cycles of the DEVICE's clock, whose frequency
+        this module cannot know and does not guess -- converting to
+        time is the caller's business, with a clock the caller can
+        vouch for. The nonce and block defaults are fixed zeros: the
+        wire layout is the seal's (host-protocol.md section 8), but the
+        product of a bench is the count, not the ciphertext.
+        """
+        req_id = self._next_req_id()
+        resp = self._roundtrip(
+            proto_model.build_bench(req_id, slot, nonce, nblocks, block),
+            req_id)
+        body = resp["body"]
+        if len(body) != 16:
+            raise ProtocolError(
+                f"bench response body is {len(body)} bytes, want 16")
+        duration, timestamp, reserved = struct.unpack("<IQ4s", body)
+        if reserved != b"\x00" * 4:
+            raise ProtocolError(
+                f"bench response reserved bytes not zero: {reserved.hex()}")
+        return {"duration": duration, "timestamp": timestamp}

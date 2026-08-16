@@ -56,14 +56,15 @@ def secret_regs(dut) -> list[tuple[str, object]]:
         ("u_poly.a_flat", p.a_flat),
         ("u_poly.tag", p.tag),
         # chacha20_poly1305.sv: the key, the derived one-time key and the
-        # plaintext/ciphertext in flight
+        # plaintext/ciphertext in flight. p_data_in is not here because
+        # it is no longer a register: since the p_blk handshake bubble
+        # was removed it is combinational from mac_buf, which is listed.
         ("key_r", dut.key_r),
         ("nonce_r", dut.nonce_r),
         ("p_key", dut.p_key),
         ("c_data_in", dut.c_data_in),
         ("mac_buf", dut.mac_buf),
         ("out_data", dut.out_data),
-        ("p_data_in", dut.p_data_in),
     ]
     for name in POLY_DIGIT_ARRAYS:
         arr = getattr(p, name)
@@ -164,7 +165,7 @@ async def test_reset_clears_secrets_after_message(dut):
     # is over the registers that do; the other test covers the rest.
     keyed = ("u_chacha.st", "u_chacha.st_init", "u_chacha.data_out",
              "u_poly.s", "u_poly.tag", "u_poly.a_flat", "key_r", "nonce_r",
-             "p_key", "c_data_in", "mac_buf", "out_data", "p_data_in")
+             "p_key", "c_data_in", "mac_buf", "out_data")
     empty = [n for n in keyed if before[n] == 0]
     assert not empty, f"idle engine holds no secret in: {', '.join(empty)}"
 

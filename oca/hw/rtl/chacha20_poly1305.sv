@@ -90,8 +90,8 @@ module chacha20_poly1305 (
     } in_fsm_t;
     in_fsm_t state;
 
-    typedef enum logic [2:0] {
-        S_M_IDLE, S_M_FEED, S_M_NEXT, S_M_LEN, S_M_LENP, S_M_TAG
+    typedef enum logic [1:0] {
+        S_M_IDLE, S_M_FEED, S_M_LEN, S_M_TAG
     } mac_fsm_t;
     mac_fsm_t m_state;
 
@@ -201,10 +201,12 @@ module chacha20_poly1305 (
     logic len_bad;
     always_comb len_bad = (state == S_ACCEPT) && in_valid && (in_len > 7'd64);
 
-    // The buffer is released once its last sub-block has been handed to
-    // poly1305 (p_data_in is registered by then), or straight away for a
-    // zero-length section, which contributes no MAC block.
-    always_comb mac_take = (m_state == S_M_NEXT && sub_done)
+    // The buffer is released in the cycle poly1305 consumes its last
+    // sub-block: p_data_in is combinational from mac_buf, but poly1305
+    // registers the sum on that same edge, so a write landing on the
+    // release edge is never seen. A zero-length section is released
+    // straight away, it contributes no MAC block.
+    always_comb mac_take = (m_state == S_M_FEED && p_blk_ready && sub_done)
                         || (m_state == S_M_IDLE && mac_valid
                             && mac_len == 7'd0);
     always_comb buf_free = !mac_valid || mac_take;
@@ -335,20 +337,40 @@ module chacha20_poly1305 (
         end
     end
 
+    // The wrapper's side of the poly1305 handshake is combinational on
+    // blk_ready: the sub-block is consumed on the edge after poly1305
+    // re-enters S_WAIT, one cycle there instead of two, 36 cycles per
+    // 64-byte block instead of 40. Only this side may be unregistered.
+    // An early blk_ready in poly1305.sv is the same one-cycle repair
+    // from the other end, and the two combined silently corrupt the tag
+    // (hw/syn/README.md, "How this pass was found").
+    always_comb begin
+        p_blk     = 1'b0;
+        p_last    = 1'b0;
+        p_data_in = '0;
+        case (m_state)
+            S_M_FEED: begin
+                p_blk     = p_blk_ready;
+                p_data_in = mask_sub(mac_buf[sub_idx * 128 +: 128], sub_len);
+            end
+            S_M_LEN: begin
+                p_blk     = p_blk_ready;
+                p_last    = 1'b1;
+                p_data_in = {ct_len, aad_len};
+            end
+            default: ;
+        endcase
+    end
+
     // MAC FSM: drains the buffer into poly1305, then the length block.
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            m_state   <= S_M_IDLE;
-            p_blk     <= 1'b0;
-            p_last    <= 1'b0;
-            done      <= 1'b0;
-            p_data_in <= '0;
+            m_state <= S_M_IDLE;
+            done    <= 1'b0;
         end else if (len_bad) begin
             // poly1305 goes into reset on this same edge, so a half-fed
             // block here would wait on a blk_ready that never returns
             m_state <= S_M_IDLE;
-            p_blk   <= 1'b0;
-            p_last  <= 1'b0;
             done    <= 1'b0;
         end else begin
             done <= 1'b0;
@@ -364,34 +386,15 @@ module chacha20_poly1305 (
                 end
                 S_M_FEED: begin
                     if (p_blk_ready) begin
-                        p_blk     <= 1'b1;
-                        p_last    <= 1'b0;
-                        p_data_in <= mask_sub(mac_buf[sub_idx * 128 +: 128],
-                                              sub_len);
-                        m_state   <= S_M_NEXT;
-                    end
-                end
-                S_M_NEXT: begin
-                    p_blk <= 1'b0;
-                    if (sub_done) begin
-                        m_state <= mac_last ? S_M_LEN : S_M_IDLE;
-                    end else begin
-                        sub_idx <= sub_idx + 2'd1;
-                        m_state <= S_M_FEED;
+                        if (sub_done)
+                            m_state <= mac_last ? S_M_LEN : S_M_IDLE;
+                        else
+                            sub_idx <= sub_idx + 2'd1;
                     end
                 end
                 S_M_LEN: begin
-                    if (p_blk_ready) begin
-                        p_blk     <= 1'b1;
-                        p_last    <= 1'b1;
-                        p_data_in <= {ct_len, aad_len};
-                        m_state   <= S_M_LENP;
-                    end
-                end
-                S_M_LENP: begin
-                    p_blk   <= 1'b0;
-                    p_last  <= 1'b0;
-                    m_state <= S_M_TAG;
+                    if (p_blk_ready)
+                        m_state <= S_M_TAG;
                 end
                 S_M_TAG: begin
                     if (p_done) begin

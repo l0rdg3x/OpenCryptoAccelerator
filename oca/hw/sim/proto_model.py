@@ -16,6 +16,7 @@ OP_LOAD_KEY = 0x01
 OP_SEAL = 0x02
 OP_OPEN = 0x03
 OP_STATS = 0x04
+OP_BENCH = 0x05
 
 ST_OK = 0x00
 ST_BAD_MAGIC = 0x01
@@ -55,6 +56,28 @@ def build_open(req_id: int, slot: int, nonce: bytes, aad: bytes,
 
 def build_stats(req_id: int) -> bytes:
     return _header(OP_STATS, req_id, 0)
+
+
+def build_bench(req_id: int, slot: int, nonce: bytes, nblocks: int,
+                block: bytes) -> bytes:
+    """The on-chip benchmark: one 64-byte block, run nblocks times.
+
+    The layout is the seal's, with the block count in the msg_len field
+    (counting blocks, not bytes) and the aad_len field reserved as zero.
+    """
+    assert len(nonce) == 12 and len(block) == 64
+    assert 1 <= nblocks <= 0xFFFF
+    return (_header(OP_BENCH, req_id, slot) + nonce
+            + struct.pack("<HH", 0, nblocks) + block)
+
+
+def parse_bench(rsp: dict) -> dict:
+    """Unpack a bench response body: duration, timestamp, 4 zero bytes."""
+    body = rsp["body"]
+    assert len(body) == 16, f"bench body is {len(body)} bytes, want 16"
+    duration, timestamp, reserved = struct.unpack("<IQ4s", body)
+    assert reserved == b"\x00" * 4, f"reserved bytes not zero: {reserved!r}"
+    return {"duration": duration, "timestamp": timestamp}
 
 
 def parse_response(pkt: bytes) -> dict:

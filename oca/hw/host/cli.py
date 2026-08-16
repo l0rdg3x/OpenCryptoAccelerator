@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import math
 import sys
 from pathlib import Path
 
@@ -51,6 +52,28 @@ def _fixed_hex(nbytes: int, label: str):
     return convert
 
 
+def _blocks(s: str) -> int:
+    try:
+        n = int(s, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {s!r}") from exc
+    if not 1 <= n <= 0xFFFF:
+        raise argparse.ArgumentTypeError(
+            f"--blocks must be 1..65535 (a 16-bit field on the wire), got {n}")
+    return n
+
+
+def _clock_hz(s: str) -> float:
+    try:
+        hz = float(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {s!r}") from exc
+    if not math.isfinite(hz) or hz <= 0:
+        raise argparse.ArgumentTypeError(
+            f"--clock-hz must be a positive finite frequency, got {s!r}")
+    return hz
+
+
 def _cmd_load_key(link: OcaLink, args: argparse.Namespace) -> int:
     link.load_key(args.slot, args.key)
     print(f"loaded slot {args.slot}")
@@ -74,6 +97,22 @@ def _cmd_stats(link: OcaLink, args: argparse.Namespace) -> int:
     s = link.stats()
     print(f"received={s['received']} dropped_header={s['dropped_header']} "
           f"completed={s['completed']} auth_failures={s['auth_failures']}")
+    return 0
+
+
+def _cmd_bench(link: OcaLink, args: argparse.Namespace) -> int:
+    r = link.bench(args.slot, args.blocks)
+    print(f"blocks={args.blocks} duration_cycles={r['duration']} "
+          f"timestamp_cycles={r['timestamp']}")
+    if args.clock_hz is None:
+        # Cycles are the device's only honest unit: the host cannot
+        # know the clock the board actually runs (an Fmax is not that
+        # clock), so without --clock-hz no rate is derived.
+        print("cycles only: supply --clock-hz to derive a rate; "
+              "the host never guesses the clock")
+    else:
+        rate = args.blocks * args.clock_hz / r["duration"]
+        print(f"blocks_per_second={rate:.3f} at --clock-hz {args.clock_hz:g}")
     return 0
 
 
@@ -129,6 +168,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("stats", help="read the four wire-protocol counters")
     st.set_defaults(func=_cmd_stats)
+
+    be = sub.add_parser(
+        "bench",
+        help="on-chip cycle benchmark: seal one block N times, report "
+             "the engine's own cycle count (opcode 05)")
+    be.add_argument("--slot", type=int, required=True,
+                     help="a loaded key slot; the same fail-closed check "
+                          "as a seal")
+    be.add_argument("--blocks", type=_blocks, required=True,
+                     help="times to run the block, 1..65535")
+    be.add_argument("--clock-hz", type=_clock_hz, default=None,
+                     help="the core clock in Hz, if you can vouch for it; "
+                          "omitted, the output stays in cycles")
+    be.set_defaults(func=_cmd_bench)
 
     se = sub.add_parser(
         "selftest",

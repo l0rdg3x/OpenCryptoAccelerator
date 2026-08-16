@@ -135,6 +135,28 @@
  * bytes travel through the same response field the tag of a seal uses,
  * not through the transmit buffer: the two cannot both be present.
  *
+ * The bench command (opcode 05) measures the engine from beside it: the
+ * serial transport runs three orders of magnitude below the core, so a
+ * host-side timing of any command measures the wire, and a cycle count
+ * taken here is the only performance figure this board can produce
+ * honestly. A bench is a seal in every judged respect — same dispatch,
+ * same fail-closed slot check, same key path into the engine, same feed
+ * states — whose one buffered 64-byte block is re-fed N times, sec_left
+ * counting blocks instead of bytes for this opcode alone. The re-read
+ * of the block hides under the engine's per-block cost exactly as a
+ * seal's feed does, so the duration moves at the engine's marginal cost
+ * and nothing else. The window opens on the cycle the packet takes the
+ * engine (bench_t0) and closes on the engine's done (done_tick, caught
+ * beside resp_tag under the same ownership that keeps resp_tag
+ * per-packet); it is published as a 32-bit duration beside the 64-bit
+ * value of `tick` at the close. `tick` runs free and no command resets
+ * it, because the timestamp exists to let a host driving two engines
+ * prove their windows overlapped, and that needs a timebase neither
+ * engine's commands can disturb. The ciphertext of the N blocks goes
+ * where ciphertext goes — the transmit bank, which saturates at BYTES
+ * and is cleared before reuse like any published bank — but the
+ * response body is empty: the product of a bench is the count.
+ *
  * A load-key command whose length is not exactly 40 bytes is refused
  * with status 05. Without that check the 32 key bytes would be read from
  * buffer positions the packet never wrote, which after a previous
@@ -220,6 +242,7 @@ module oca_proto #(
     localparam logic [7:0] OP_SEAL     = 8'h02;
     localparam logic [7:0] OP_OPEN     = 8'h03;
     localparam logic [7:0] OP_STATS    = 8'h04;
+    localparam logic [7:0] OP_BENCH    = 8'h05;
 
     localparam logic [7:0] ST_OK          = 8'h00;
     localparam logic [7:0] ST_BAD_MAGIC   = 8'h01;
@@ -265,6 +288,20 @@ module oca_proto #(
     // (assigned below, next to the register it reads: read_slang requires
     // the declaration to precede the use, where Verilator does not)
     logic drain_empty;
+
+    // ------------------------------------------------------------------
+    // The shared timebase. One writer — this block — read by PROC and
+    // DRAIN to stamp the two ends of a bench window. Free-running and
+    // never cleared, because two engines' windows can only be compared
+    // on a timebase no command resets; 64 bits so it cannot wrap
+    // between two values anyone will ever compare (~12000 years at the
+    // board's 48 MHz).
+    // ------------------------------------------------------------------
+    logic [63:0] tick;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) tick <= 64'd0;
+        else        tick <= tick + 64'd1;
+    end
 
     // ------------------------------------------------------------------
     // RX: one bank of the receive buffer, the request stream, nothing else
@@ -321,6 +358,7 @@ module oca_proto #(
     logic [11:0] rx_len;          // bytes of request received
     logic        crypto_cmd;      // this packet took the engine
     logic [31:0] cnt_rx, cnt_drop;
+    logic [63:0] bench_t0;        // tick when this packet took the engine
 
     // Request bytes 8..39, byte 8 in [7:0], filled a word at a time. The
     // header word arrives through the same register and is read out of
@@ -435,10 +473,11 @@ module oca_proto #(
     // ------------------------------------------------------------------
     // The descriptor: everything about a packet that outlives PROC.
     //
-    // pd_tag carries the received tag of an open, or the two counters
-    // PROC owns for a stats — they cannot both be present, so one
-    // register serves. Nothing DRAIN decides on is read from a register
-    // PROC will reuse, which is the whole point of the copy.
+    // pd_tag carries the received tag of an open, the two counters PROC
+    // owns for a stats, or the cycle a bench took the engine — no
+    // packet is two of those, so one register serves. Nothing DRAIN
+    // decides on is read from a register PROC will reuse, which is the
+    // whole point of the copy.
     // ------------------------------------------------------------------
     logic [  7:0] pd_opcode, pd_slot, pd_status;
     logic [ 15:0] pd_req_id;
@@ -463,6 +502,7 @@ module oca_proto #(
     logic [511:0] outbuf;         // block coming back, drained a word at a time
     logic [  6:0] out_left;
     logic [127:0] resp_tag;       // the tag the engine computed
+    logic [ 63:0] done_tick;      // tick at the done that came with it
     logic         eng_done_seen;
     logic [ 31:0] cnt_done, cnt_auth_fail;
 
@@ -534,13 +574,15 @@ module oca_proto #(
                             VERSION, MAGIC};
 
     // A response carries the extra field when it is a successful seal
-    // (the tag) or a successful stats (the counters). Every other
-    // response goes straight from the header to the buffer body, if it
-    // has one at all.
+    // (the tag), a successful stats (the counters) or a successful
+    // bench (its duration and timestamp). Every other response goes
+    // straight from the header to the buffer body, if it has one at
+    // all.
     logic has_extra;
     always_comb has_extra = (rsp_status == ST_OK)
                             && ((rsp_opcode == OP_SEAL)
-                                || (rsp_opcode == OP_STATS));
+                                || (rsp_opcode == OP_STATS)
+                                || (rsp_opcode == OP_BENCH));
     always_comb begin
         case (beat_sel)
             2'd0:    resp_word = resp_hdr;
@@ -711,6 +753,7 @@ module oca_proto #(
             crypto_cmd   <= 1'b0;
             cnt_rx       <= 32'd0;
             cnt_drop     <= 32'd0;
+            bench_t0     <= 64'd0;
             args         <= 256'd0;
             blk          <= 512'd0;
             feed_addr    <= 12'd0;
@@ -800,7 +843,8 @@ module oca_proto #(
                     end else if (hdr[31:24] != OP_LOAD_KEY
                               && hdr[31:24] != OP_SEAL
                               && hdr[31:24] != OP_OPEN
-                              && hdr[31:24] != OP_STATS) begin
+                              && hdr[31:24] != OP_STATS
+                              && hdr[31:24] != OP_BENCH) begin
                         status   <= ST_BAD_OPCODE;
                         cnt_drop <= cnt_drop + 32'd1;
                         pr_state <= P_ENDREQ;
@@ -831,6 +875,33 @@ module oca_proto #(
                         end else if (!ks_rd_valid) begin
                             status   <= ST_BAD_SLOT;
                             pr_state <= P_ENDREQ;
+                        end else if (opcode == OP_BENCH) begin
+                            // A header, sixteen argument bytes and one
+                            // whole 64-byte block, nothing else. N
+                            // rides in the msg_len field and counts
+                            // blocks; the aad_len field is reserved as
+                            // zero so it can become an argument later
+                            // without moving anything. A zero N has no
+                            // cycle count to mean.
+                            if ((rx_len != 12'(HDR_LEN + 16 + 64))
+                                || (aad_len != 16'd0)
+                                || (msg_len == 16'd0)) begin
+                                status   <= ST_BAD_LENGTH;
+                                pr_state <= P_ENDREQ;
+                            end else begin
+                                eng_dec    <= 1'b0;
+                                eng_key    <= ks_rd_key;
+                                eng_nonce  <= nonce;
+                                sec_aad    <= 1'b0;
+                                // blocks, not bytes, for this opcode
+                                sec_left   <= msg_len;
+                                blk_len    <= 7'd64;
+                                blk_last   <= (msg_len == 16'd1);
+                                feed_addr  <= data_off;
+                                feed_shift <= data_off[2:0];
+                                status     <= ST_OK;
+                                pr_state   <= P_START;
+                            end
                         end else if (len_bad) begin
                             status   <= ST_BAD_LENGTH;
                             pr_state <= P_ENDREQ;
@@ -880,6 +951,10 @@ module oca_proto #(
                         eng_start    <= 1'b1;
                         eng_take_par <= ~eng_take_par;
                         crypto_cmd   <= 1'b1;
+                        // captured for every take, published only for a
+                        // bench: one unconditional copy is cheaper than
+                        // the opcode term
+                        bench_t0     <= tick;
                         rd_ptr       <= feed_addr[11:3];
                         rd_left      <= 4'd9;
                         rd_got       <= 4'd0;
@@ -931,6 +1006,16 @@ module oca_proto #(
                 P_NEXTBLK: begin
                     if (blk_last) begin
                         pr_state <= P_ENDREQ;
+                    end else if (opcode == OP_BENCH) begin
+                        // the same block again: only the count moves,
+                        // so the feed stays inside the one buffered
+                        // block and the engine alone sets the pace
+                        sec_left <= sec_left - 16'd1;
+                        blk_last <= (sec_left == 16'd2);
+                        rd_ptr   <= feed_addr[11:3];
+                        rd_left  <= 4'd9;
+                        rd_got   <= 4'd0;
+                        pr_state <= P_FEED;
                     end else begin
                         sec_aad    <= nx_aad;
                         sec_left   <= nx_left;
@@ -982,6 +1067,11 @@ module oca_proto #(
                         pd_tag     <= args[255:128];   // bytes 24..39
                         if (opcode == OP_STATS)
                             pd_tag[63:0] <= {cnt_drop, cnt_rx};
+                        // the third tenant of the register: the cycle
+                        // this bench took the engine, judged against
+                        // done_tick at publication
+                        if (opcode == OP_BENCH)
+                            pd_tag[63:0] <= bench_t0;
                         pd_put_par <= ~pd_put_par;
 
                         free_par[rx_rd_bank] <= ~free_par[rx_rd_bank];
@@ -1016,6 +1106,7 @@ module oca_proto #(
             outbuf        <= 512'd0;
             out_left      <= 7'd0;
             resp_tag      <= 128'd0;
+            done_tick     <= 64'd0;
             eng_done_seen <= 1'b0;
             cnt_done      <= 32'd0;
             cnt_auth_fail <= 32'd0;
@@ -1051,6 +1142,9 @@ module oca_proto #(
             if (eng_done) begin
                 eng_done_seen <= 1'b1;
                 resp_tag      <= eng_tag;
+                // the close of a bench window, protected by the same
+                // token that keeps resp_tag the right packet's
+                done_tick     <= tick;
             end
 
             case (dr_state)
@@ -1101,8 +1195,13 @@ module oca_proto #(
                     if (dcur_crypto && (dcur_opcode == OP_OPEN)) begin
                         dr_state <= D_CHECK;
                     end else begin
+                        // A bench's ciphertext is a load, not a
+                        // payload: its bank saturated at BYTES and is
+                        // cleared before reuse like any published
+                        // bank, and its response body stays empty.
                         dcur_body_len <= (dcur_crypto
-                                          && (dcur_status == ST_OK))
+                                          && (dcur_status == ST_OK)
+                                          && (dcur_opcode != OP_BENCH))
                                          ? tx_wr_count : 12'd0;
                         dr_state      <= D_PUBLISH;
                     end
@@ -1144,6 +1243,9 @@ module oca_proto #(
                         rsp_extra    <= (dcur_opcode == OP_STATS)
                                         ? {cnt_auth_fail, cnt_done,
                                            dcur_tag[63:0]}
+                                        : (dcur_opcode == OP_BENCH)
+                                        ? {32'd0, done_tick,
+                                           done_tick[31:0] - dcur_tag[31:0]}
                                         : resp_tag;
                         rsp_pub_par  <= ~rsp_pub_par;
                         if (dcur_status == ST_OK) cnt_done <= cnt_done + 32'd1;

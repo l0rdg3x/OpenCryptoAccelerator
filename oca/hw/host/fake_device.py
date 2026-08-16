@@ -68,6 +68,17 @@ class FakeBoard:
     BYTES = 2048                         # oca_pktbuf.sv / oca_slip_rx.sv default
     MIN_BYTES = proto_model.HDR_LEN      # oca_slip_rx.sv's MIN_BYTES default
 
+    # The bench cycle model, deterministic and openly fake:
+    # duration = BENCH_BASE + N * BENCH_PER_BLOCK. Linear in N because
+    # that is the property the real counter is specified to have
+    # (host-protocol.md section 8: two durations differ by exactly the
+    # engine's marginal per-block cost); the constants are arbitrary
+    # round numbers ON PURPOSE, so a fake duration can never be read as
+    # a measured one. The real count comes from the RTL simulation
+    # (hw/sim/test_aead_cycles.py) or the board, nowhere else.
+    BENCH_BASE = 1000
+    BENCH_PER_BLOCK = 100
+
     def __init__(self) -> None:
         self._slots: dict[int, bytes] = {}
         self._reader = SlipReader()
@@ -76,6 +87,11 @@ class FakeBoard:
             "received": 0, "dropped_header": 0,
             "completed": 0, "auth_failures": 0,
         }
+        # The stand-in for oca_proto's free-running `tick`: advances by
+        # each bench's duration, so windows [timestamp - duration,
+        # timestamp] abut without overlapping and every timestamp is
+        # deterministic for a given command sequence.
+        self._tick = 0
         # Test-only misbehaviour hooks, off by default: a fake that can
         # never misbehave cannot prove the host tool detects it when the
         # real link does.
@@ -157,6 +173,7 @@ class FakeBoard:
             proto_model.OP_SEAL: self._op_seal,
             proto_model.OP_OPEN: self._op_open,
             proto_model.OP_STATS: self._op_stats,
+            proto_model.OP_BENCH: self._op_bench,
         }.get(opcode)
         if handler is None:
             self._stats["dropped_header"] += 1
@@ -235,6 +252,32 @@ class FakeBoard:
         self._stats["completed"] += 1
         return (self._header_out(proto_model.OP_OPEN, req_id, slot,
                                    proto_model.ST_OK) + pt)
+
+    def _op_bench(self, req_id: int, slot: int, body: bytes) -> bytes:
+        # Slot first, as the RTL judges it (ks_rd_valid ahead of the
+        # OP_BENCH length checks), then the one shape a bench may have:
+        # sixteen argument bytes and one whole 64-byte block, reserved
+        # field zero, N nonzero (oca_proto.sv's OP_BENCH arm).
+        key = self._slot_key(slot)
+        if key is None:
+            return self._header_out(proto_model.OP_BENCH, req_id, slot,
+                                      proto_model.ST_BAD_SLOT)
+        if len(body) != 16 + 64:
+            return self._header_out(proto_model.OP_BENCH, req_id, slot,
+                                      proto_model.ST_BAD_LENGTH)
+        reserved, nblocks = struct.unpack("<HH", body[12:16])
+        if reserved != 0 or nblocks == 0:
+            return self._header_out(proto_model.OP_BENCH, req_id, slot,
+                                      proto_model.ST_BAD_LENGTH)
+        # No crypto runs here: a bench returns no ciphertext, so there
+        # is nothing a real run would produce that the host could see,
+        # and the duration is the fake model's, not a measurement.
+        duration = self.BENCH_BASE + nblocks * self.BENCH_PER_BLOCK
+        self._tick += duration
+        self._stats["completed"] += 1
+        return (self._header_out(proto_model.OP_BENCH, req_id, slot,
+                                   proto_model.ST_OK)
+                + struct.pack("<IQ4s", duration, self._tick, b"\x00" * 4))
 
     def _op_stats(self, req_id: int, slot: int, body: bytes) -> bytes:
         self._stats["completed"] += 1

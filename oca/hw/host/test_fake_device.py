@@ -216,6 +216,66 @@ def test_open_checks_slot_before_length():
     assert resp["status"] == proto_model.ST_BAD_SLOT
 
 
+def test_bench_wire_format_and_deterministic_count():
+    """A bench response is header + 16 bytes: duration, timestamp,
+    reserved-zero -- parse_bench (the sim side's own parser) must accept
+    it byte for byte, and the duration must equal the fake's documented
+    model exactly, because a count a test cannot predict is a count a
+    test cannot assert."""
+    board = FakeBoard()
+    _send(board, proto_model.build_load_key(1, 0, bytes(range(32))))
+    proto_model.parse_response(_recv(board))
+    _send(board, proto_model.build_bench(2, 0, b"n" * 12, 8, bytes(64)))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_OK
+    r = proto_model.parse_bench(resp)
+    assert r["duration"] == board.BENCH_BASE + 8 * board.BENCH_PER_BLOCK
+
+
+def test_bench_unloaded_slot_status():
+    board = FakeBoard()
+    _send(board, proto_model.build_bench(1, 3, b"n" * 12, 8, bytes(64)))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_SLOT
+
+
+def test_bench_checks_slot_before_length():
+    """oca_proto.sv judges ks_rd_valid ahead of the OP_BENCH length
+    checks; a request wrong both ways must read as ST_BAD_SLOT."""
+    board = FakeBoard()
+    frame = bytearray(proto_model.build_bench(1, 3, b"n" * 12, 8, bytes(64)))
+    frame += b"\x00"  # also the wrong length
+    _send(board, bytes(frame))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_SLOT
+
+
+def test_bench_bad_shapes_are_bad_length():
+    """Everything that is not a header, sixteen argument bytes and one
+    whole 64-byte block is ST_BAD_LENGTH (host-protocol.md section 8):
+    a truncated block, a nonzero reserved field, an N of zero."""
+    board = FakeBoard()
+    _send(board, proto_model.build_load_key(1, 0, bytes(range(32))))
+    proto_model.parse_response(_recv(board))
+    good = proto_model.build_bench(2, 0, b"n" * 12, 8, bytes(64))
+
+    _send(board, good[:-1])  # one byte short of a whole block
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_LENGTH
+
+    reserved = bytearray(good)
+    reserved[proto_model.HDR_LEN + 12] = 0x01  # the reserved field
+    _send(board, bytes(reserved))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_LENGTH
+
+    zero_n = bytearray(good)
+    zero_n[proto_model.HDR_LEN + 14:proto_model.HDR_LEN + 16] = b"\x00\x00"
+    _send(board, bytes(zero_n))
+    resp = proto_model.parse_response(_recv(board))
+    assert resp["status"] == proto_model.ST_BAD_LENGTH
+
+
 def test_force_engine_err_hook_produces_status_07():
     """ST_ENGINE_ERR (07) cannot arise from any request the host protocol
     can express -- chacha20_poly1305.sv's `err` only fires on a block
