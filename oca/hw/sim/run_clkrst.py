@@ -13,10 +13,12 @@ argument for the guards -- nothing downstream of them makes these
 checks -- and the guards are the only part of the PLL arithmetic a
 simulation of a blackbox can reach at all.
 
-Only three of the six guards are reachable from here. VCO_HZ, PFD_HZ and
-CLK_TX_HZ are computed from localparams, not from parameters, so nothing
-outside the file can move them: they fire for an edited divider, which is
-what they are for, and cannot be exercised without editing the file.
+All six guards are reachable from here since 2026-08-16, when the
+divider set became parameters: VCO_HZ, PFD_HZ and CLK_TX_HZ now
+recompute from CLKI_DIV, CLKFB_DIV, CLKOP_DIV and CLKOS_DIV, so the
+three guards on them are exercised below with divider sets rather than
+single values -- the guards check derived quantities, and one divider
+cannot always move one while the others hold.
 """
 
 import os
@@ -67,16 +69,43 @@ GUARDS = {
     "PHY_WAIT_US":     ([20, 1000, 100_000], [19, 0, 100_001]),
 }
 
+# The three guards on derived quantities, exercised as whole divider
+# sets. Accepted sets are the rungs of the module's own ladder: the
+# shipping 625 MHz VCO (the defaults), the 50.00 MHz rung's 500, and a
+# 750 for the band's last legal VCO. Refused sets each isolate one
+# guard -- the other two derived values stay legal, so the refusal has
+# to come from the guard named by its message fragment. `Refused` alone
+# is not enough, per the message check below: a deleted guard can leave
+# a set that fails for another reason entirely.
+DIVIDER_ACCEPT = [
+    {},                                  # defaults: VCO 625, clk_sys 48.08
+    {"CLKOP_DIV": 4, "CLKOS_DIV": 10},   # VCO 500, clk_sys exactly 50.00
+    {"CLKOP_DIV": 6, "CLKOS_DIV": 12},   # VCO 750, clk_sys 62.50
+]
+DIVIDER_REFUSE = [
+    # VCO 375 MHz, under the band; clk_tx stays 125, PFD stays 25.
+    ({"CLKOP_DIV": 3}, "VCO"),
+    # VCO 875 MHz, over the band; clk_tx stays 125, PFD stays 25.
+    ({"CLKOP_DIV": 7}, "VCO"),
+    # PFD 5 MHz, under the 10 MHz minimum, with VCO 500 and clk_tx 125
+    # both legal: the CLKFB_DIV of 25 is what keeps them so.
+    ({"CLKI_DIV": 5, "CLKFB_DIV": 25, "CLKOP_DIV": 4, "CLKOS_DIV": 10},
+     "phase detector"),
+    # clk_tx 100 MHz, not the 125 RGMII needs, with VCO 500 legal.
+    ({"CLKFB_DIV": 4}, "clk_tx"),
+]
 
-def elaborate(name: str, value: int) -> tuple[bool, str]:
-    """Elaborate oca_clkrst with one parameter overridden.
+
+def elaborate(overrides: dict[str, int]) -> tuple[bool, str]:
+    """Elaborate oca_clkrst with the given parameters overridden.
 
     -Wall because that is what makes a failure legible, and it is clean
     at every legal value: the blackbox ports are waived inside
     ecp5_prims.sv and PINMISSING over the PLL instance alone.
     """
     proc = subprocess.run(
-        [VERILATOR_BIN / "verilator", "--lint-only", "-Wall", f"-G{name}={value}",
+        [VERILATOR_BIN / "verilator", "--lint-only", "-Wall",
+         *[f"-G{name}={value}" for name, value in overrides.items()],
          *[str(src) for src in SOURCES], "--top-module", "oca_clkrst"],
         capture_output=True, text=True)
     return proc.returncode == 0, proc.stdout + proc.stderr
@@ -94,14 +123,14 @@ def check_elaboration_guards() -> int:
     for name, (accept, refuse) in GUARDS.items():
         for value in accept:
             legal += 1
-            ok, out = elaborate(name, value)
+            ok, out = elaborate({name: value})
             if not ok:
                 print(f"{name}={value} is legal but does not elaborate\n"
                       f"{diagnostics(out)}", flush=True)
                 rc = 1
         for value in refuse:
             illegal += 1
-            ok, out = elaborate(name, value)
+            ok, out = elaborate({name: value})
             if ok:
                 print(f"{name}={value} elaborated: the guard is gone and the "
                       "design comes up on a value the module refuses",
@@ -115,6 +144,27 @@ def check_elaboration_guards() -> int:
                 print(f"{name}={value} was refused, but not by the module's own "
                       f"guard\n{diagnostics(out)}", flush=True)
                 rc = 1
+    for overrides in DIVIDER_ACCEPT:
+        legal += 1
+        ok, out = elaborate(overrides)
+        if not ok:
+            print(f"divider set {overrides or 'defaults'} is legal but does "
+                  f"not elaborate\n{diagnostics(out)}", flush=True)
+            rc = 1
+    for overrides, fragment in DIVIDER_REFUSE:
+        illegal += 1
+        ok, out = elaborate(overrides)
+        if ok:
+            print(f"divider set {overrides} elaborated: the guard is gone "
+                  "and the design comes up on a set the module refuses",
+                  flush=True)
+            rc = 1
+        # Same discipline as above: the refusal has to name the derived
+        # quantity whose guard this set isolates.
+        elif "oca_clkrst:" not in out or fragment not in out:
+            print(f"divider set {overrides} was refused, but not by the "
+                  f"guard on {fragment}\n{diagnostics(out)}", flush=True)
+            rc = 1
     print(f"elaboration guards: {legal} legal accepted, {illegal} illegal "
           f"refused by their own guard — {'ok' if rc == 0 else 'FAILED'}",
           flush=True)

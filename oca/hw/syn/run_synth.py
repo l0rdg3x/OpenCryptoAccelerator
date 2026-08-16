@@ -238,6 +238,38 @@ DESIGNS = {
         # spread is the part that varies, so the bound stays where it is.
         timeout=7200,
     ),
+    # The crypto console asked for the 50.00 MHz rung of the clk_sys
+    # ladder: oca_crypto_pll_50.sv is a thin instantiation of
+    # oca_crypto_pll with the divider set overridden to a 500 MHz VCO
+    # (CLKOP_DIV 4, CLKOS_DIV 10) and CLK_SYS_HZ to 50_000_000, an
+    # elaboration guard in oca_crypto_pll proving the two agree. The
+    # source list is the entry above plus that one file, in the same
+    # order and for the same reasons.
+    #
+    # colorlight_i9_crypto.lpf again, shared for the reason the entry
+    # above gives: the variant's four ports are exactly the four that
+    # file constrains, on the same balls. The 50.00 MHz clk_sys
+    # constraint needs no .lpf line — nextpnr derives it from the
+    # dividers in the netlist, so overriding the dividers moves the
+    # constraint and the measurement together, and NETLIST_PLL_PARAMS
+    # below is what pins the dividers themselves.
+    #
+    # Whether the netlist closes 50.00 is what building this target
+    # measures; the shipping top's four-seed sweep brackets the
+    # constraint from both sides (docs/RECORD.md). Same bound as the
+    # entry above: same fabric, same size, more timing pressure, and
+    # the bound is a bound, not a prediction.
+    "oca_crypto_pll_50": Design(
+        sv=["ecp5_prims.sv", "oca_clkrst.sv",
+            "oca_uart_rx.sv", "oca_uart_tx8.sv", "oca_fifo.sv",
+            "oca_slip_rx.sv", "oca_slip_tx.sv",
+            "chacha20.sv", "poly1305.sv", "chacha20_poly1305.sv",
+            "oca_keystore.sv", "oca_pktbuf.sv", "oca_proto.sv",
+            "oca_core.sv", "oca_uart_crypto.sv", "oca_crypto_pll.sv",
+            "oca_crypto_pll_50.sv"],
+        lpf="colorlight_i9_crypto.lpf",
+        timeout=7200,
+    ),
     # The receive half of the console. J17 is settled; H18 is litex's
     # pairing and nothing more until a byte travels it, which is what an
     # echo makes the operator prove by supplying the expected value.
@@ -506,6 +538,23 @@ NETLIST_FF_FLOOR = {
                        "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
                        "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 6,
                        "oca_clkrst.sv": 2, "oca_crypto_pll.sv": 32},
+    # The 50.00 MHz variant: the same netlist asked for a faster clock,
+    # so every floor is the entry above's, and the two worth saying so
+    # about explicitly are the UART pair. DIV moves 417 -> 434, but
+    # $clog2 is 9 for both, so the divisor counters do not gain a bit
+    # and 34/23 is the expectation here too — a build of this top that
+    # censuses 33/22 elaborated the core at 25 MHz, exactly as above.
+    # oca_crypto_pll_50.sv itself holds no storage — it is one
+    # instantiation — so it gets no bucket of its own; the heartbeat's
+    # 32 stay attributed to oca_crypto_pll.sv, where the always_ff is
+    # written. Shared with the entry above by derivation, not measured
+    # on this target yet: its first build's census is what confirms
+    # them.
+    "oca_crypto_pll_50": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600,
+                          "oca_uart_rx.sv": 34, "oca_uart_tx8.sv": 23,
+                          "oca_fifo.sv": 22, "oca_slip_rx.sv": 160,
+                          "oca_slip_tx.sv": 75, "oca_uart_crypto.sv": 6,
+                          "oca_clkrst.sv": 2, "oca_crypto_pll.sv": 32},
     "oca_core": {"oca_keystore.sv": 2313, "oca_proto.sv": 3600},
     "oca_dual": {"oca_keystore.sv": 4626, "oca_proto.sv": 7200},
 }
@@ -577,6 +626,12 @@ NETLIST_FF_TOTAL = {"oca_core": 11900, "oca_dual": 23800,
                     # registers, a key store, an accumulator -- cannot
                     # hide under it.
                     "oca_crypto_pll": 12400,
+                    # The 50.00 MHz variant holds the same registers by
+                    # derivation — no width in the design moves between
+                    # 417 and 434, per its NETLIST_FF_FLOOR entry — so
+                    # the floor is shared too. Not yet measured on this
+                    # target; the first build is what confirms it.
+                    "oca_crypto_pll_50": 12400,
                     # Exact rather than a few percent under, because
                     # these two are new and small enough that every
                     # register in them is accounted for: the decoder's
@@ -615,6 +670,11 @@ NETLIST_PRIM_COUNT = {
     # dividers below unchecked, and with them the 48.0769 MHz that every
     # throughput figure for this design divides into a cycle count.
     "oca_crypto_pll": {"EHXPLLL": 1},
+    # The 50.00 MHz variant: the same one PLL, and the entry earns its
+    # place the same way — it is what reaches check_pll, where the
+    # overridden dividers below are the whole difference between this
+    # build and the one above.
+    "oca_crypto_pll_50": {"EHXPLLL": 1},
 }
 
 # The PLL exists is not the same claim as the PLL is the one the design
@@ -642,9 +702,10 @@ NETLIST_PLL_PARAMS = {
     "oca_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                 "CLKOS_DIV": 13},
     # The same four, from the same instance: oca_crypto_pll instantiates
-    # the same oca_clkrst, whose localparams are CLKI_DIV 1, CLKFB_DIV 5,
-    # CLKOP_DIV 5, CLKOS_DIV 13 (oca_clkrst.sv:259-263, ecppll's own
-    # output transcribed in that file's header).
+    # the same oca_clkrst and forwards its own divider defaults —
+    # CLKI_DIV 1, CLKFB_DIV 5, CLKOP_DIV 5, CLKOS_DIV 13, ecppll's own
+    # output transcribed in oca_clkrst.sv's header, held as parameter
+    # defaults in both files since 2026-08-16.
     #
     # WHY 48.0769 CAN ONLY BE CLKOS, which is what makes a checked
     # CLKOS_DIV of 13 the thing this design turns on rather than a
@@ -663,29 +724,40 @@ NETLIST_PLL_PARAMS = {
     # report a clean 48.08 against a clock that is not 48.08.
     "oca_crypto_pll": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 5,
                        "CLKOS_DIV": 13},
+    # The 50.00 MHz rung: a 500 MHz VCO, clk_tx still exactly 125 (the
+    # guard in oca_clkrst refuses anything else), clk_sys exactly
+    # 500/10 = 50.00 MHz. These four are the entire difference between
+    # this netlist and oca_crypto_pll's, and this is the table that
+    # makes the difference checked rather than assumed: nextpnr derives
+    # the 50.00 MHz constraint from these very parameters, so a variant
+    # built with the shipping dividers would close 48.08, report ok,
+    # and be the wrong measurement with a green check beside it.
+    "oca_crypto_pll_50": {"CLKI_DIV": 1, "CLKFB_DIV": 5, "CLKOP_DIV": 4,
+                          "CLKOS_DIV": 10},
 }
 
 # The dividers being the ones this table names is still not the claim
 # that the design knows what frequency they produce.
 #
-# oca_clkrst keeps CLK_SYS_HZ as a localparam and exports no parameter to
-# read it from, so oca_crypto_pll.sv redoes that arithmetic by hand and
-# passes the result to oca_uart_crypto as CLK_HZ -- which is where the
-# UART divisor comes from, and the only thing in the design that decides
-# what a bit time is. Change the divider the supported way, editing
-# oca_clkrst.sv and NETLIST_PLL_PARAMS above together, and nothing
-# anywhere compares the new clock against that copy: EHXPLLL has no body,
-# so no simulation runs at the real frequency; the flip-flop floors see
-# the divisor only through $clog2(DIV), which does not move between
-# 48.08 MHz and 56.82 MHz; and the elaboration guard in
-# oca_uart_crypto.sv checks the copy against itself. The result builds,
-# meets timing, packs, loads, and answers nobody.
+# oca_clkrst exports no parameter to read CLK_SYS_HZ from, so
+# oca_crypto_pll.sv carries it as a parameter beside the divider set and
+# passes it to oca_uart_crypto as CLK_HZ -- which is where the UART
+# divisor comes from, and the only thing in the design that decides what
+# a bit time is. Since 2026-08-16 an elaboration guard in
+# oca_crypto_pll.sv refuses a CLK_SYS_HZ that is not what its divider
+# parameters make, so the pair cannot be overridden apart. What that
+# guard cannot see is the netlist: it compares the parameters this
+# elaboration was given, and this check compares the RTL's constant
+# against the dividers as they actually reached the built EHXPLLL --
+# EHXPLLL has no body, so no simulation runs at the real frequency, and
+# the flip-flop floors see the divisor only through $clog2(DIV), which
+# does not move between 48.08 MHz and 56.82 MHz. A netlist whose
+# dividers disagree with the RTL's constant builds, meets timing, packs,
+# loads, and answers nobody.
 #
-# So the copy is checked here, against the frequency the netlist's own
-# dividers give. Read out of the RTL because it is not in the netlist to
-# read: it is a localparam, synth_ecp5 flattens the hierarchy, and the
-# top module's parameter_default_values in build/oca_crypto_pll.json is
-# empty.
+# Read out of the RTL because it is not in the netlist to read:
+# synth_ecp5 flattens the hierarchy, and the top module's
+# parameter_default_values in build/oca_crypto_pll.json is empty.
 #
 # A top mapped to None declares no such constant and needs none: oca_pll
 # blinks an LED off CLKOP and consumes clk_sys nowhere, so it holds no
@@ -695,7 +767,13 @@ NETLIST_PLL_PARAMS = {
 # missing NETLIST_PLL_PARAMS entry stopped meaning "checked".
 TOP_CLK_SYS_CONST = {
     "oca_pll": None,
+    # A parameter default since 2026-08-16, which is why the reader
+    # below accepts `parameter` as well as `localparam`.
     "oca_crypto_pll": ("oca_crypto_pll.sv", "CLK_SYS_HZ"),
+    # The variant states its own 50_000_000 as a localparam and hands it
+    # to oca_crypto_pll's parameter, so the constant to check lives in
+    # the variant file.
+    "oca_crypto_pll_50": ("oca_crypto_pll_50.sv", "CLK_SYS_HZ"),
 }
 
 # Colorlight i9 v7.2 carries an LFE5U-45F-6BG381C (BOM-MVP.md).
@@ -883,15 +961,20 @@ def check_clk_sys_const(top, clk_sys):
         return 0
     src, name = entry
     path = RTL / src
-    m = re.search(rf"^\s*localparam\s+int\s+{name}\s*=\s*([\d_]+)\s*;",
+    # `localparam ... ;` or `parameter ... ,` both declare the constant
+    # this check exists to read: oca_crypto_pll.sv holds CLK_SYS_HZ as a
+    # parameter default in its parameter list, the variant top as a
+    # localparam.
+    m = re.search(rf"^\s*(?:localparam|parameter)\s+int\s+{name}\s*=\s*"
+                  rf"([\d_]+)\s*[;,]",
                   path.read_text(), re.M)
     if m is None:
         # Not a skip. This table names the constant, so failing to find
         # it means it was renamed, moved or made an expression, and
         # returning "no opinion" would retire the check without a word.
-        sys.exit(f"{path}: no `localparam int {name} = <literal>;` for "
-                 f"run_synth.py to check the PLL against. If it moved, move "
-                 f"TOP_CLK_SYS_CONST with it.")
+        sys.exit(f"{path}: no `localparam/parameter int {name} = <literal>` "
+                 f"for run_synth.py to check the PLL against. If it moved, "
+                 f"move TOP_CLK_SYS_CONST with it.")
     declared = int(m.group(1).replace("_", ""))
     status = "ok" if declared == clk_sys else "FAILED"
     print(f"  {name:<10} {declared} Hz in {src} "
@@ -902,8 +985,8 @@ def check_clk_sys_const(top, clk_sys):
               f"oca_uart_crypto as CLK_HZ, so the UART divisor belongs to a "
               f"clock this board does not run: a bitstream that builds, "
               f"meets timing, packs, loads and answers nobody.\nEdit "
-              f"whichever of the two is wrong — the divider in "
-              f"oca_clkrst.sv with NETLIST_PLL_PARAMS, or the copy in "
+              f"whichever of the two is wrong — the divider set the top "
+              f"elaborates with NETLIST_PLL_PARAMS, or the constant in "
               f"{src}.", file=sys.stderr)
         return 1
     return 0
