@@ -61,49 +61,20 @@ ctest --test-dir build --output-on-failure
 RTL simulation (requires Verilator and a Python virtualenv with cocotb —
 exact tool setup in [AGENTS.md](AGENTS.md)):
 
-```sh
-cd oca
-.venv/bin/python hw/sim/run_chacha20.py
-.venv/bin/python hw/sim/run_poly1305.py
-.venv/bin/python hw/sim/run_chacha20_poly1305.py
-.venv/bin/python hw/sim/run_dirty_pad.py
-.venv/bin/python hw/sim/run_secret_zeroise.py
-.venv/bin/python hw/sim/run_keystore.py
-.venv/bin/python hw/sim/run_pktbuf.py
-.venv/bin/python hw/sim/run_oca_core.py
-.venv/bin/python hw/sim/run_attack.py
-.venv/bin/python hw/sim/run_clkrst.py
-.venv/bin/python hw/sim/run_console.py
-.venv/bin/python hw/sim/run_fifo.py
-.venv/bin/python hw/sim/run_uart_rx.py
-.venv/bin/python hw/sim/run_uart_tx.py
-.venv/bin/python hw/sim/run_uart_console.py
-.venv/bin/python hw/sim/run_uart_echo.py
-.venv/bin/python hw/sim/run_slip_rx.py
-.venv/bin/python hw/sim/run_slip_tx.py
-.venv/bin/python hw/sim/run_uart_crypto.py     # the crypto over the real UART
-.venv/bin/python hw/sim/run_crypto_pll.py      # the board top: PLL, crypto, LED
-.venv/bin/python hw/sim/run_keystore_gate.py   # on a synthesised netlist
-.venv/bin/python hw/sim/run_proto_gate.py      # on a synthesised netlist
-cd hw/sim && ../../.venv/bin/python test_proto_model.py   # plain Python
-```
+The full registry — all 22 cocotb runners with their expected counts,
+plus the host, synthesis and protocol-model suites — lives in
+[AGENTS.md](AGENTS.md) "## How to build and test", the single list a
+suite must appear on to exist. Today it measures **173 passing
+executions with no failures and no skips** (2026-08-12, the two crypto
+suites re-measured 2026-08-15); outside the simulator, `pytest hw/host`
+(46), `pytest hw/syn/test_run_synth.py` (4), the protocol model (2),
+the 6-step `--fake` selftest, and the 126 known-answer checks behind
+`ctest` — different units, never summed.
 
-That is all 22 cocotb runners, and they give **173 passing executions
-with no failures and no skips**, measured 2026-08-12 with the two crypto
-suites re-measured 2026-08-15. More runs outside the
-simulator and needs no toolchain: `pytest hw/host` (46 tests),
-`pytest hw/syn/test_run_synth.py` (4), `test_proto_model.py` above (2),
-and the 6-step `hw/host/cli.py --fake selftest` against an in-process
-fake — all measured 2026-08-13 — plus the 126 known-answer checks
-behind the `ctest` further up. Those are different units and are not
-summed anywhere. There is no aggregate runner, so a suite missing from
-these lists is a suite nobody runs.
-
-The two `*_gate.py` runners need the project-local yosys as well: they
-replay tests on ECP5 primitives, because every other suite elaborates
-the SystemVerilog and cannot see what synthesis did to it. The last line
-is not a simulation at all — the protocol model has no DUT and runs as
-plain Python.
+The two `*_gate.py` runners in that registry need the project-local
+yosys as well: they replay tests on ECP5 primitives, because every
+other suite elaborates the SystemVerilog and cannot see what synthesis
+did to it.
 
 Four further suites belonged to the Ethernet route and were deleted with
 it on 2026-08-12: `run_rgmii`, `run_eth_mac`, `run_udp_seam` and

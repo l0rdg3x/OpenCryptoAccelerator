@@ -34,26 +34,11 @@ was `oca_uart_crypto`'s heartbeat, which needed a `LED_BITS` small
 enough to simulate, and the counter now sits in `oca_crypto_pll`, whose
 only build is that small.
 
-This read 222 executions over 25 runners until the removal, and the
-difference is exactly the four Ethernet suites, all four of which
-passed while they existed: `run_rgmii` 10, `run_udp_seam` 20 (running
-twice at two `HDR_Q_DEPTH` values), `run_eth_mac` 8 and `run_oca_path`
-7. So 222 − 45 = 177. None of the four is on `main` any more.
-
-**That 177 belongs to 2026-08-12 and is not today's figure.** The PLL
-work took `run_uart_crypto` from twelve passing executions over two
-builds to five over one, and gave the heartbeat three of its own in
-`run_crypto_pll`: 177 − 12 + 8 = 173. AGENTS.md carries a second 177 in
-the same history — a count of tests on the pre-removal tree, which
-happened to equal this count of executions and never measured the same
-thing. Read either only with its date and its population attached.
-
-**In a fresh clone the before-figure is 207 over 23 runners instead, and
-that is not a contradiction.** The 222-execution figure includes `run_eth_mac`
-and `run_oca_path`, which built from the patched vendor tree at `oca/hw/vendor/build/`,
-gitignored and now deleted. To reproduce that figure, check out fd3059c (just before
-the Ethernet removal), where `vendor_patches.py build` and the tree still exist.
-The current tree measures 173; both before-figures are real and differ by that precondition.
+Earlier counts — 222 executions before the Ethernet removal, 207 in a
+fresh clone, and two different 177s that never measured the same thing
+— belong to earlier trees and populations. `docs/RECORD.md` carries
+that counting history, each figure with its date and what it counted;
+today's figure is the 173 above.
 
 **The open ECP5 toolchain**, built locally in `tools/`: yosys with the
 slang frontend, nextpnr-ecp5, prjtrellis, Verilator, openFPGALoader.
