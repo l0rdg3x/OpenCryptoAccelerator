@@ -395,41 +395,70 @@ module oca_proto #(
     logic [3:0] rd_left, rd_got;
     logic       rd_v, rd_v_d;
 
-    // Request fields, sliced out of the shift register above.
+    // Request fields. The nonce is still sliced out of the shift register
+    // above, because nothing is computed from it; the two lengths are not.
+    // `args` shifts, so bytes 20..23 only stand at args[127:96] on the very
+    // edge P_ARGS decides on, and everything derived from them -- an 18-bit
+    // adder, two 18-bit compares, the first-block comparators -- had to
+    // resolve inside that one cycle, in front of blk_last's clock enable.
+    // That cone was the critical path of the two-engine build: 21.55 ns,
+    // 46.40 MHz against a 48.08 MHz constraint, 17.50 ns of it routing.
+    // Latched from the word that carries them, two words before the
+    // decision, the same arithmetic closes on an earlier edge and P_ARGS
+    // reads flops. It is still one clock period wide, not two: what the
+    // two words buy is the interval between the lengths landing and the
+    // decision reading them, so nothing here is a multicycle path and
+    // nothing may be constrained as one.
     logic [15:0] aad_len, msg_len;
     logic [95:0] nonce;
-    always_comb nonce   = args[ 95:  0];   // bytes 8..19
-    always_comb aad_len = args[111: 96];   // bytes 20..21
-    always_comb msg_len = args[127:112];   // bytes 22..23
+    always_comb nonce = args[95:0];        // bytes 8..19
+
+    // The opcode decodes, registered beside the opcode itself so that no
+    // eight-bit compare stands in front of the arithmetic below.
+    logic is_open, is_bench, is_stats, is_loadkey, slot_bad;
 
     logic [17:0] want_len;
     always_comb want_len = 18'(HDR_LEN) + 18'd16
-                           + ((opcode == OP_OPEN) ? 18'd16 : 18'd0)
+                           + (is_open ? 18'd16 : 18'd0)
                            + {2'd0, aad_len} + {2'd0, msg_len};
 
-    logic len_bad;
-    always_comb len_bad = rx_rd_full || (want_len > 18'(BYTES))
-                          || (want_len != {6'd0, rx_len});
+    logic len_bad_c, len_bad;
+    always_comb len_bad_c = rx_rd_full || (want_len > 18'(BYTES))
+                            || (want_len != {6'd0, rx_len});
+
+    // The bench command's own shape check, on the same slack: a header,
+    // sixteen argument bytes and one whole block, no AAD, and a block
+    // count that means something.
+    logic bench_bad_c, bench_bad;
+    always_comb bench_bad_c = (rx_len != 12'(HDR_LEN + 16 + 64))
+                              || (aad_len != 16'd0) || (msg_len == 16'd0);
 
     // Offset of the first payload byte: the open command carries the
     // received tag between the lengths and the data.
     logic [11:0] data_off;
-    always_comb data_off = (opcode == OP_OPEN) ? 12'(HDR_LEN + 32)
-                                               : 12'(HDR_LEN + 16);
+    always_comb data_off = is_open ? 12'(HDR_LEN + 32)
+                                   : 12'(HDR_LEN + 16);
 
     // Block sequencing. The AAD is fed first and the message follows it
     // in the buffer, so one offset walks both sections; only the section
     // flag and the remaining count have to change at the boundary.
-    logic        first_aad, first_last;
+    logic        first_aad_c, first_last_c;
+    logic [15:0] first_left_c;
+    logic [ 6:0] first_len_c;
+    always_comb begin
+        first_aad_c  = (aad_len != 16'd0);
+        first_left_c = first_aad_c ? aad_len : msg_len;
+        first_len_c  = (first_left_c >= 16'd64) ? 7'd64 : first_left_c[6:0];
+        first_last_c = first_aad_c
+                       ? ((first_left_c <= 16'd64) && (msg_len == 16'd0))
+                       : (first_left_c <= 16'd64);
+    end
+
+    // The registered face of all of it, one cycle behind inputs that
+    // settle two words before P_ARGS reads them.
+    logic        first_aad, first_last, msg_one;
     logic [15:0] first_left;
     logic [ 6:0] first_len;
-    always_comb begin
-        first_aad  = (aad_len != 16'd0);
-        first_left = first_aad ? aad_len : msg_len;
-        first_len  = (first_left >= 16'd64) ? 7'd64 : first_left[6:0];
-        first_last = first_aad ? ((first_left <= 16'd64) && (msg_len == 16'd0))
-                               : (first_left <= 16'd64);
-    end
 
     logic        nx_aad, nx_blk_last;
     logic [15:0] nx_left;
@@ -747,6 +776,20 @@ module oca_proto #(
             eng_in_len   <= 7'd0;
             eng_in_data  <= 512'd0;
             opcode       <= 8'd0;
+            is_open      <= 1'b0;
+            is_bench     <= 1'b0;
+            is_stats     <= 1'b0;
+            is_loadkey   <= 1'b0;
+            slot_bad     <= 1'b0;
+            aad_len      <= 16'd0;
+            msg_len      <= 16'd0;
+            len_bad      <= 1'b0;
+            bench_bad    <= 1'b0;
+            first_aad    <= 1'b0;
+            first_left   <= 16'd0;
+            first_len    <= 7'd0;
+            first_last   <= 1'b0;
+            msg_one      <= 1'b0;
             slot         <= 8'd0;
             status       <= ST_OK;
             req_id       <= 16'd0;
@@ -793,6 +836,17 @@ module oca_proto #(
             rd_v_d <= rd_v;
             if (rd_v_d) rd_got <= rd_got + 4'd1;
 
+            // Every cycle, unconditionally: the inputs are the two lengths,
+            // which land two words before P_ARGS reads any of this, and
+            // registers that have not moved since P_DISPATCH.
+            len_bad    <= len_bad_c;
+            bench_bad  <= bench_bad_c;
+            first_aad  <= first_aad_c;
+            first_left <= first_left_c;
+            first_len  <= first_len_c;
+            first_last <= first_last_c;
+            msg_one    <= (msg_len == 16'd1);
+
             case (pr_state)
                 P_IDLE: begin
                     if (bank_full[rx_rd_bank]) begin
@@ -811,6 +865,11 @@ module oca_proto #(
 
                 P_DISPATCH: begin
                     opcode     <= hdr[31:24];
+                    is_open    <= (hdr[31:24] == OP_OPEN);
+                    is_bench   <= (hdr[31:24] == OP_BENCH);
+                    is_stats   <= (hdr[31:24] == OP_STATS);
+                    is_loadkey <= (hdr[31:24] == OP_LOAD_KEY);
+                    slot_bad   <= (hdr[55:48] >= 8'(NUM_SLOTS));
                     req_id     <= hdr[47:32];
                     slot       <= hdr[55:48];
                     ks_rd_slot <= hdr[55:48];
@@ -858,10 +917,20 @@ module oca_proto #(
                 end
 
                 P_ARGS: begin
-                    if (rd_v_d) args <= {rx_rd_data, args[255:64]};
+                    if (rd_v_d) begin
+                        args <= {rx_rd_data, args[255:64]};
+                        // The second of the four argument words carries
+                        // both lengths -- bytes 20..21 and 22..23 of the
+                        // request -- and lands two cycles before rd_got
+                        // reaches four.
+                        if (rd_got == 4'd1) begin
+                            aad_len <= rx_rd_data[47:32];
+                            msg_len <= rx_rd_data[63:48];
+                        end
+                    end
                     if (rd_got == 4'd4) begin
-                        if (opcode == OP_LOAD_KEY) begin
-                            if (slot >= 8'(NUM_SLOTS)) begin
+                        if (is_loadkey) begin
+                            if (slot_bad) begin
                                 status   <= ST_BAD_SLOT;
                                 pr_state <= P_ENDREQ;
                             end else if (rx_len != 12'(HDR_LEN + 32)) begin
@@ -870,13 +939,13 @@ module oca_proto #(
                             end else begin
                                 pr_state <= P_LOADKEY;
                             end
-                        end else if (opcode == OP_STATS) begin
+                        end else if (is_stats) begin
                             status   <= ST_OK;
                             pr_state <= P_ENDREQ;
                         end else if (!ks_rd_valid) begin
                             status   <= ST_BAD_SLOT;
                             pr_state <= P_ENDREQ;
-                        end else if (opcode == OP_BENCH) begin
+                        end else if (is_bench) begin
                             // A header, sixteen argument bytes and one
                             // whole 64-byte block, nothing else. N
                             // rides in the msg_len field and counts
@@ -884,9 +953,7 @@ module oca_proto #(
                             // zero so it can become an argument later
                             // without moving anything. A zero N has no
                             // cycle count to mean.
-                            if ((rx_len != 12'(HDR_LEN + 16 + 64))
-                                || (aad_len != 16'd0)
-                                || (msg_len == 16'd0)) begin
+                            if (bench_bad) begin
                                 status   <= ST_BAD_LENGTH;
                                 pr_state <= P_ENDREQ;
                             end else begin
@@ -897,7 +964,7 @@ module oca_proto #(
                                 // blocks, not bytes, for this opcode
                                 sec_left   <= msg_len;
                                 blk_len    <= 7'd64;
-                                blk_last   <= (msg_len == 16'd1);
+                                blk_last   <= msg_one;
                                 feed_addr  <= data_off;
                                 feed_shift <= data_off[2:0];
                                 status     <= ST_OK;
@@ -907,7 +974,7 @@ module oca_proto #(
                             status   <= ST_BAD_LENGTH;
                             pr_state <= P_ENDREQ;
                         end else begin
-                            eng_dec    <= (opcode == OP_OPEN);
+                            eng_dec    <= is_open;
                             eng_key    <= ks_rd_key;
                             eng_nonce  <= nonce;
                             sec_aad    <= first_aad;
@@ -1007,7 +1074,7 @@ module oca_proto #(
                 P_NEXTBLK: begin
                     if (blk_last) begin
                         pr_state <= P_ENDREQ;
-                    end else if (opcode == OP_BENCH) begin
+                    end else if (is_bench) begin
                         // the same block again: only the count moves,
                         // so the feed stays inside the one buffered
                         // block and the engine alone sets the pace
