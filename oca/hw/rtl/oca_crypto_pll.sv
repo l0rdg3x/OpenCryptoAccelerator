@@ -224,7 +224,20 @@ module oca_crypto_pll #(
     // fit in a run. The floor of 5 is the fast tap: at 4 it would be bit
     // 0, which toggles every cycle and is a rate nobody can read off a
     // pad or count in a testbench.
-    parameter int LED_BITS = 25
+    parameter int LED_BITS = 25,
+    // The PLL divider set, forwarded to oca_clkrst, and the frequency
+    // those dividers put on clk_sys, forwarded to oca_uart_crypto as
+    // CLK_HZ. The defaults are the shipping configuration: a 625 MHz
+    // VCO over CLKOS_DIV 13, 48.0769 MHz, and the default elaboration
+    // is the measured netlist unchanged. A variant top overrides the
+    // five together (oca_crypto_pll_50.sv); the guard below refuses a
+    // CLK_SYS_HZ that is not what the dividers make, so the pair cannot
+    // be overridden apart.
+    parameter int CLK_SYS_HZ = 48_076_923,
+    parameter int CLKI_DIV   = 1,
+    parameter int CLKFB_DIV  = 5,
+    parameter int CLKOP_DIV  = 5,
+    parameter int CLKOS_DIV  = 13
 ) (
     input  var logic clk25,
     output var logic led_n,
@@ -240,13 +253,27 @@ module oca_crypto_pll #(
                LED_BITS);
     end
 
-    // oca_clkrst's CLK_SYS_HZ, which is VCO_HZ / CLKOS_DIV = 625e6 / 13.
-    // Written down a second time because that module keeps it as a
-    // localparam and exports no parameter to read it from: editing
-    // CLKOS_DIV there without editing this leaves the UART divisor
-    // derived from a frequency the board does not run at, which is a
-    // mute serial line and not a build failure. The two move together.
-    localparam int CLK_SYS_HZ = 48_076_923;
+    // The board's only oscillator, the same 25 MHz oca_clkrst holds as
+    // its own CLKI_HZ; clk25 is wired straight to it.
+    localparam int CLKI_HZ = 25_000_000;
+
+    // What the divider set makes of it — oca_clkrst.sv's own arithmetic,
+    // int division throughout. oca_clkrst exports no parameter to read
+    // CLK_SYS_HZ from, so it arrives here as a parameter beside the
+    // dividers, and this guard is what keeps that pair together: a
+    // CLK_SYS_HZ that is not what the dividers produce is a UART divisor
+    // computed for a frequency the board does not run — a mute serial
+    // line, not a build failure. hw/syn/run_synth.py's
+    // check_clk_sys_const makes the same comparison against the built
+    // netlist's dividers; this one fails the lint instead of the
+    // synthesis.
+    localparam int DERIVED_CLK_SYS_HZ =
+        ((CLKI_HZ / CLKI_DIV) * CLKFB_DIV * CLKOP_DIV) / CLKOS_DIV;
+
+    if (CLK_SYS_HZ != DERIVED_CLK_SYS_HZ) begin : gen_clk_sys_mismatch
+        $fatal(1, "oca_crypto_pll: CLK_SYS_HZ %0d Hz but the dividers make %0d Hz",
+               CLK_SYS_HZ, DERIVED_CLK_SYS_HZ);
+    end
 
     logic clk_sys, pll_locked, rst_n_sys;
 
@@ -268,7 +295,12 @@ module oca_crypto_pll #(
     logic phy_rst_n, phy_ready;
     /* verilator lint_on UNUSEDSIGNAL */
 
-    oca_clkrst u_clkrst (
+    oca_clkrst #(
+        .CLKI_DIV  (CLKI_DIV),
+        .CLKFB_DIV (CLKFB_DIV),
+        .CLKOP_DIV (CLKOP_DIV),
+        .CLKOS_DIV (CLKOS_DIV)
+    ) u_clkrst (
         .clk_in     (clk25),
         .ext_rst_n  (1'b1),
         .clk_rx     (clk25),

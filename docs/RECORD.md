@@ -634,10 +634,24 @@ now carries all of them, which is the actual fix.
   gives a 500 MHz VCO, `clk_tx` exactly 125 and `clk_sys` exactly
   50.000. One placement is not a sweep, and this project's own rule
   about seeds cuts both ways: on the 48.08-constrained sweep `clk_sys`
-  reaches 50.44 at best and clears 50.00 on three of 32 seeds. So the
-  rung above is **untested rather than unreachable**. It was moot while
-  `rgmii_rx_clk` had to close alongside it; that route was retired on
-  2026-08-12 and no design has asked for the rung since.
+  reaches 50.44 at best and clears 50.00 on three of 32 seeds. The
+  rung read **untested rather than unreachable** here until 2026-08-16,
+  when `oca_crypto_pll_50` asked it of the shipping crypto netlist over
+  four placer seeds on commit `b0a94db` (yosys `f77ddfb87`, dividers
+  1/5/4/10, VCO 500, `clk_tx` exactly 125): **51.83 / 51.91 / 50.48 /
+  49.61 MHz — three seeds close, the fourth misses by 0.78%**. Mean
+  50.96, spread 4.6% on `(max-min)/min`. Provenance of the four: seed
+  4's figure is the sweep's, which stopped at the first seed to miss;
+  seeds 1-3 were re-run individually afterwards, so the one surviving
+  artefact in `build/` is seed 3's (50.48) and the other three rest on
+  the run transcripts. By this project's rule a rung
+  a seed misses is not closed, so the variant is **measured, not
+  shipped**: the board top stays at 48.0769, where every seed clears
+  with margin, and a future seed hunt or netlist change can reopen the
+  question with these four figures as its baseline. Nothing of this ran
+  on silicon.
+  It was moot while `rgmii_rx_clk` had to close alongside it; that
+  route was retired on 2026-08-12.
   The device does carry four PLLs and this design uses one, so a second
   one for `clk_sys` is still a door nobody has opened.
 
