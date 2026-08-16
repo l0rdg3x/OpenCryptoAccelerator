@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """The host side of the OCA host protocol: one command, one SLIP frame,
-one reply, judged the way proto_model.py already defines it.
+one reply, judged the way proto_model.py already defines it. The one
+deliberate exception is bench_pair, which keeps two commands in flight
+to measure the dual-engine device (host-protocol.md section 9) and
+matches the replies back by req_id.
 
 This is plumbing, not a second protocol implementation: request and
 response bytes come from and go to oca/hw/sim/proto_model.py unchanged
@@ -173,6 +176,13 @@ class OcaLink:
         # This says nothing about the accelerator: see selftest.py.
         self.bytes_written = 0
         self.bytes_read = 0
+        # Bytes read off the transport but not yet consumed into a
+        # frame. One transport.read can carry more than one reply once
+        # two commands are in flight (bench_pair), and before this
+        # buffer existed _recv_frame dropped everything in the chunk
+        # past the first frame's END -- invisible with one command out,
+        # a lost reply with two.
+        self._rx_pending = bytearray()
 
     def _next_req_id(self) -> int:
         return next(self._ids) & 0xFFFF
@@ -180,31 +190,47 @@ class OcaLink:
     def _recv_frame(self) -> bytes:
         deadline = time.monotonic() + self.timeout
         reader = SlipReader()
+        buf = self._rx_pending
         while True:
+            for i, b in enumerate(buf):
+                try:
+                    frame = reader.feed(b)
+                except SlipDecodeError as exc:
+                    # The tail stays buffered: SLIP resynchronises on
+                    # the next END, and dropping it would lose a reply
+                    # still in flight along with the garbled one.
+                    del buf[:i + 1]
+                    raise FrameRejected(str(exc)) from exc
+                if frame is not None:
+                    del buf[:i + 1]
+                    return frame
+            # Every buffered byte fed the reader, which now holds any
+            # partial frame; the buffer only ever grows by whole chunks.
+            buf.clear()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise SerialTimeout(
                     f"no complete frame within {self.timeout:.3f}s")
             chunk = self.transport.read(remaining)
             self.bytes_read += len(chunk)
-            for b in chunk:
-                try:
-                    frame = reader.feed(b)
-                except SlipDecodeError as exc:
-                    raise FrameRejected(str(exc)) from exc
-                if frame is not None:
-                    return frame
+            buf += chunk
 
-    def _roundtrip(self, req_frame: bytes, req_id: int) -> dict:
+    def _send_frame(self, req_frame: bytes) -> None:
         if len(req_frame) > self.MAX_FRAME_BYTES:
             raise FrameTooLarge(
                 f"request frame is {len(req_frame)} bytes, over the "
                 f"board's {self.MAX_FRAME_BYTES}-byte limit -- not sent")
-
         wire = encode(req_frame)
         self.transport.write(wire)
         self.bytes_written += len(wire)
 
+    def _recv_response(self, req_opcode: int) -> dict:
+        """One frame off the wire, validated up to but not including the
+        request id: header length, magic, opcode echo. The id check
+        differs between the one-command path (exactly this id) and the
+        pipelined pair (one of the outstanding ids, each once), so it
+        stays with the callers; both keep the same order -- opcode, then
+        id, then status."""
         raw = self._recv_frame()
         if len(raw) < proto_model.HDR_LEN:
             raise ProtocolError(
@@ -212,9 +238,13 @@ class OcaLink:
         resp = proto_model.parse_response(raw)
         if not resp["magic_ok"]:
             raise ProtocolError(f"bad magic in response: {raw[0:2].hex()}")
-        req_opcode = req_frame[3]
         if resp["opcode"] != req_opcode:
             raise OpcodeMismatch(req_opcode, resp["opcode"])
+        return resp
+
+    def _roundtrip(self, req_frame: bytes, req_id: int) -> dict:
+        self._send_frame(req_frame)
+        resp = self._recv_response(req_frame[3])
         if resp["req_id"] != req_id:
             raise RequestIdMismatch(req_id, resp["req_id"])
         if resp["status"] != proto_model.ST_OK:
@@ -291,7 +321,10 @@ class OcaLink:
         resp = self._roundtrip(
             proto_model.build_bench(req_id, slot, nonce, nblocks, block),
             req_id)
-        body = resp["body"]
+        return self._parse_bench_body(resp["body"])
+
+    @staticmethod
+    def _parse_bench_body(body: bytes) -> dict[str, int]:
         if len(body) != 16:
             raise ProtocolError(
                 f"bench response body is {len(body)} bytes, want 16")
@@ -300,3 +333,52 @@ class OcaLink:
             raise ProtocolError(
                 f"bench response reserved bytes not zero: {reserved.hex()}")
         return {"duration": duration, "timestamp": timestamp}
+
+    def bench_pair(self, slot: int, nblocks: int, *,
+                    nonce: bytes = bytes(12),
+                    block: bytes = bytes(64)) -> list[dict[str, int]]:
+        """Two bench requests written back to back, both on the wire
+        before any reply is read -- the pipelined pair the dual-engine
+        device needs to show its two engines running at once
+        (host-protocol.md section 9). On a single-core device both
+        requests still answer; the windows simply serialise.
+
+        Responses arrive in the device's COMPLETION order, which on the
+        dual need not be request order, so they are matched back by the
+        echoed req_id: each reply must echo one of the two outstanding
+        ids, each exactly once, or RequestIdMismatch. Every other check
+        is bench()'s, in the same order -- opcode, id, status -- and a
+        non-OK status on either reply raises StatusError just as a lone
+        bench would.
+
+        Returns the two results in REQUEST order regardless of arrival
+        order, each {"req_id", "duration", "timestamp"} with the cycle
+        semantics of bench(). Whether the two windows
+        [timestamp - duration, timestamp] overlap is the caller's
+        question to ask; both timestamps come from the device's one
+        free-running timebase, so the comparison is meaningful.
+        """
+        req_ids = [self._next_req_id(), self._next_req_id()]
+        frames = [proto_model.build_bench(rid, slot, nonce, nblocks, block)
+                  for rid in req_ids]
+        # Both frames judged against the board's buffer before either is
+        # sent: refusing between the writes would leave one command in
+        # flight with nobody reading its reply.
+        for frame in frames:
+            if len(frame) > self.MAX_FRAME_BYTES:
+                raise FrameTooLarge(
+                    f"request frame is {len(frame)} bytes, over the "
+                    f"board's {self.MAX_FRAME_BYTES}-byte limit -- not sent")
+        for frame in frames:
+            self._send_frame(frame)
+        matched: dict[int, dict[str, int]] = {}
+        for _ in req_ids:
+            resp = self._recv_response(proto_model.OP_BENCH)
+            rid = resp["req_id"]
+            if rid not in req_ids or rid in matched:
+                pending = [r for r in req_ids if r not in matched]
+                raise RequestIdMismatch(pending[0], rid)
+            if resp["status"] != proto_model.ST_OK:
+                raise StatusError(resp["status"], resp)
+            matched[rid] = self._parse_bench_body(resp["body"])
+        return [{"req_id": rid, **matched[rid]} for rid in req_ids]

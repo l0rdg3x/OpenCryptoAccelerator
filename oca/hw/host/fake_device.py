@@ -36,9 +36,19 @@ link-level misbehaviour no legitimate traffic can trigger either.
 
 What this deliberately does not model: oca_proto's own stats counters
 (this keeps a simplified count of its own, documented where it is
-built, not a verified replica of RTL this task does not touch) and
+built, not a verified replica of RTL this task does not touch),
 "busy" -- being synchronous, a load-key command here can never arrive
-mid-block the way it can against real hardware.
+mid-block the way it can against real hardware -- and the dual device's
+concurrency. This is ONE fake engine: write() handles each frame to
+completion before the next, so two pipelined bench requests
+(link.bench_pair) are answered in request order with windows that abut,
+and a bench-pair against this fake deterministically reports
+non-overlap. That is the decision, not a gap: overlap is exactly the
+observable that separates the dual RTL from a single engine, so a fake
+that manufactured it would let the host tool pass against a device
+that serialises. The dual fabric's own overlap proof is the RTL
+simulation's (hw/sim/test_dual_fabric.py, test_bench_windows_overlap),
+not this file's.
 """
 
 from __future__ import annotations

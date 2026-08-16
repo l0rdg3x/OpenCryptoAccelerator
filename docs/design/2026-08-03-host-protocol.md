@@ -460,3 +460,67 @@ out-of-range slot is status `04`, judged first, exactly as a seal is;
 then anything that is not a header, sixteen argument bytes and one
 whole 64-byte block — a short or long packet, a nonzero reserved
 field, N of zero — is status `05`.
+
+## 9. The dual-engine device — added 2026-08-16
+
+Date: 2026-08-16. Additive: nothing above this section changes, and no
+byte on the wire does either. `oca_crypto_dual` puts two identical
+`oca_core` engines behind the one serial line (`oca_dispatch`,
+`oca_collect`); every field, opcode and status code is exactly the
+one-engine device's, and a host tells the two devices apart only by
+throughput and by the bench-window idiom below. A host written against
+this section runs unchanged against the single-core device — the
+differences below all degrade to what sections 4–8 already promise.
+
+**`01` load key broadcasts, and answers once.** Dispatch is free — a
+seal can land on either engine — so the key must exist in both private
+keystores, and the device delivers one load-key frame to both engines.
+There is no shared keystore and no cross-core key path. The host still
+sends one frame and reads exactly one response: the device forwards
+core 0's reply, and if the two engines' status bytes differ it carries
+the ERROR status of the two — fail closed, because a key one engine
+refused is not loaded in the device even if the other took it. Two
+identical engines fed identical bytes cannot legitimately diverge, so
+a divergence also latches the device's sticky trouble bit (the fast
+LED rate): the response the host sees is honest, and the fault is not
+silent.
+
+**Everything else dispatches whole to one idle engine**, alternating
+between them so consecutive commands overlap. Which engine answered is
+not addressable and not reported. When both engines are busy the
+device backpressures the line — the same wait a busy single-core
+device imposes, one command later. One consequence worth naming: `04`
+stats dispatches like any other command, so its counters are the
+answering engine's own, and device-wide totals are not observable
+through it on the dual. Treat stats as a diagnostic, not accounting.
+
+**Responses forward whole, in completion order.** Two pipelined
+commands may answer in either order; a response is never interleaved
+with another. The host matches responses to requests by the echoed
+request id, which section 4 has guaranteed since v1 — on the
+single-core device completion order and request order simply coincide.
+
+**The two-bench overlap idiom.** Write two `05` bench frames back to
+back, read two responses, match them by request id. Free dispatch
+lands them on the two engines, and both report windows
+`[timestamp − duration, timestamp]` on the device's ONE free-running
+timebase — the engines share the clock domain, so the two windows are
+comparable, and their overlap is the proof section 8 built the
+timestamp for: two engines computing at the same time, which no pair
+of bare durations can show. `cli.py bench-pair` is this idiom, and it
+reports overlap as a finding, not a premise: against a single-core
+device (or the offline fake, which is one engine by construction) the
+same two commands still answer and the windows abut — reported as
+`overlap=no`, exit 0. The `overlap=yes` verdict end to end — bench-pair
+against real dual hardware reporting overlapping windows — is bench
+work: no fake and no simulation of the host tool can produce it
+honestly. The RTL-level overlap proof lives in
+`hw/sim/test_dual_fabric.py`.
+
+**A long bench on one engine does not block the other — that is the
+point.** One command pipelined behind a long bench dispatches to the
+idle engine and answers while the bench still runs. Two long benches
+hold both engines and block everything behind them; from there,
+section 8's caution applies unchanged — a bench is a command to wait
+on, and the input FIFOs are sized for crypto traffic, not for a queue
+forming behind two occupied engines.
