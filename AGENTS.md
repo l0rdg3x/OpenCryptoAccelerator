@@ -211,7 +211,7 @@ The suites that need neither simulator nor RTL toolchain — sub-second,
 so there is no excuse for skipping them:
 
 ```sh
-.venv/bin/python -m pytest -q hw/host                  # 60 pass, host link + fake board
+.venv/bin/python -m pytest -q hw/host                  # 73 pass, host link + fake board
 .venv/bin/python -m pytest -q hw/syn/test_run_synth.py # 4 pass, yosys and nextpnr argv shapes
 .venv/bin/python hw/host/cli.py --fake selftest        # 6/6 steps, in-process fake, no wire
 ```
