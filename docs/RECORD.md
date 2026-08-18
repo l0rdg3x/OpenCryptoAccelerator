@@ -1638,6 +1638,57 @@ now carries all of them, which is the actual fix.
   first open after configuration", and how many arrive under what
   conditions is not.
 
+  **Fixed the same evening, and proved on the board.**
+  `transport.RawSerial` now reads the line until it has been quiet for
+  20 ms instead of calling `termios.tcflush`, bounded at 500 ms so a
+  line that never goes quiet cannot hang `open()`. It reports what it
+  ate on stderr rather than swallowing it — reconfigure, run `selftest`,
+  and the first line is `/dev/ttyACM0: discarded 1 stale byte(s) on
+  open: 00`, followed by 6/6. That sequence is exactly the one that
+  failed before the fix.
+
+  **The 20 ms is a margin, not a measured arrival.** Three
+  reconfigurations timed the stray byte and all three found it ALREADY
+  QUEUED when `open()` returned — the first read got it with no wait at
+  all, under the 0.05 ms that measurement could resolve. That is an
+  upper bound, and an upper bound gives no scale to size a window
+  against; what sizes it is USB, which schedules in 1 ms frames, so
+  20 ms is twenty frame times of margin over a byte that needed none.
+  An earlier draft of this entry called the window "two orders of
+  magnitude over" a figure it had itself printed as 0.0 ms — a ratio
+  against zero, which means nothing — and "a fortieth of link.py's 2 s
+  reply timeout" when 0.02 into 2.0 is a hundredth. Both are corrected
+  here and in the comment they came from. A pre-merge review caught
+  them; neither would have changed a line of code, and both would have
+  been quoted later as if they had been measured.
+
+  (The two reconfigurations in the entry above and the three here are
+  different experiments and not a discrepancy: two established that the
+  byte appears at all and is gone by the second open, three timed its
+  arrival. Six reconfigurations that evening produced it, six for six.)
+
+  **Five tests in `hw/host/test_transport.py`, and one of them is the
+  fix's whole justification.** The four written first all queue their
+  byte *before* `RawSerial` is built — which is the case the old
+  `tcflush` already handled, so not one of them could tell the two
+  designs apart. The same review said so and was right: with `tcflush`
+  put back, `test_open_discards_bytes_queued_before_it` still passes.
+  `test_open_catches_a_byte_that_arrives_after_it_started` delivers the
+  byte 5 ms into `__init__`, while the drain is inside its window and
+  after any flush would have run, and that mutation fails it. Each of
+  the five is non-vacuous under a mutation only it sees: a drain that
+  discards nothing; one that discards but reports nothing; one that
+  reports on a clean line; a ceiling that does not raise its flag; and
+  a report conditioned on discarded bytes alone — that last being the
+  corner where the ceiling ends a drain before a single byte is read,
+  leaving the line still talking and the operator told nothing.
+
+  **What the tests do NOT cover** is a genuinely noisy line reaching
+  the ceiling. That branch is exercised with a zero ceiling, which
+  proves the branch and not the race that reaches it; a thread-timing
+  version was written, watched flake, and deleted rather than kept as a
+  test that fails for reasons of its own.
+
 - **D2's fast rate was seen once and its cause is NOT established**
   (2026-08-18). After the failed selftest the LED was reported blinking
   several times a second — the rate `oca_crypto_pll.sv` reserves for

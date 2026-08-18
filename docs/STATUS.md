@@ -23,7 +23,7 @@ executions over 25 cocotb runners, six of them on a synthesised
 netlist**, every runner in the tree run on 2026-08-16: no failures, and
 every runner exits 0. That figure is the
 simulator's alone. Outside it, and outside every count this page gave
-before 2026-08-13: **69 tests in `hw/host/`, 4 in
+before 2026-08-13: **73 tests in `hw/host/`, 4 in
 `hw/syn/test_run_synth.py`, 4 in `hw/sim/test_proto_model.py`** and the
 126 known-answer checks of Phase 1 above. They are not one unit and are
 not summed here. Nothing in any of them has run on hardware. No suite
@@ -234,21 +234,9 @@ describes.
 
 ## Next
 
-1. **Drain the port before the first frame, and say how much was
-   dropped.** Reconfiguring the FPGA leaves at least one `0x00` on the
-   line, delivered to the first process that opens `/dev/ttyACM0`; the
-   `tcflush` in `transport.RawSerial.__init__` cannot reach it, because
-   it sits inside the DAPLink and not in the kernel's queue. It opens a
-   SLIP frame and puts the next reply's magic one byte late, which is
-   the whole of why the first selftest on silicon failed on a board
-   whose reply was byte-perfect. The fix belongs to the host and must
-   count what it discards: a drain that silently eats bytes is the
-   failure this project's own rule names. `docs/RECORD.md` has the
-   measurement and its limits — the count is proved at "at least one",
-   not at one.
-2. Measure bank 2 with the meter, and time `clk_tx` with the stopwatch
+1. Measure bank 2 with the meter, and time `clk_tx` with the stopwatch
    if CLKOP ever carries anything.
-3. **Decide what the two-engine fabric is for.** It closes on three
+2. **Decide what the two-engine fabric is for.** It closes on three
    seeds of four at 48.0769 and is therefore not shippable there. The
    next rung down is 625/14 = 44.643 MHz, where the worst seed measured
    would sit 3.5% inside — two engines at that clock carry 1.86 times
