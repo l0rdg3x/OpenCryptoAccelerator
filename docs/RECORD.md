@@ -1534,6 +1534,129 @@ now carries all of them, which is the actual fix.
   93-minute seed into a killed one: concurrency multiplies straight
   into a wall-clock bound.
 
+- **FIRST LIGHT: the crypto answered on silicon** (2026-08-18,
+  `oca_crypto_pll` built from commit `b3d63db`, seed 1, loaded to SRAM
+  over the DAPLink with `-m`; the board's flash was never written). The
+  bitstream that had been measured since 2026-08-14 was a report about
+  a netlist. This is the board.
+
+  | reading | result |
+  |---|---|
+  | IDCODE before loading | `0x41112043`, LFE5U-45 — unchanged from 2026-08-11 |
+  | `selftest` | **6/6 steps**, RFC 8439 2.8.2 and A.5, both directions, tampered tag refused with no plaintext |
+  | `bench` (opcode 05), 11 points | **36N + 66 exactly**, N = 1 … 4096 |
+  | `bench-pair`, N = 64 | `overlap=no` — the two runs serialised, as one engine must |
+  | `stats` after the run | received 25, dropped_header 0, completed 23, auth_failures 1 |
+  | protocol rate | 1489 bytes in 0.134 s = **11.11 KB/s** — the SERIAL LINK, not the accelerator |
+
+  The eleven bench points are 102, 138, 210, 354, 642, 1218, 2370,
+  4674, 9282, 36930 and 147522 cycles for N = 1, 2, 4, 8, 16, 32, 64,
+  128, 256, 1024 and 4096. Every one of them is `36N + 66` with no
+  residue. **The cycle model measured in simulation is the cycle model
+  the silicon runs**, over four decades of N, and the intercept the
+  testbench predicted is the intercept the chip reports.
+
+  The build itself, rebuilt from `b3d63db` because the worktrees
+  carrying the 2026-08-16 bitstreams were removed: 13412 TRELLIS_COMB,
+  12788 TRELLIS_FF, 6 DP16KD, 20 MULT18X18D, 1 EHXPLLL, `clk_sys`
+  51.06 MHz against the 48.0769 required, `clk25` 311.82 against 25.00,
+  bitstream 431731 bytes. Identical in area and Fmax to seed 1 of
+  `a307d87`'s netlist, which is what an unchanged RTL and an unchanged
+  toolchain owe.
+
+  **What this does NOT establish.** Not a throughput figure for the
+  accelerator: every byte crossed a 115200 baud line, and 11.11 KB/s
+  is a fact about that line. Not correctness beyond the two RFC
+  vectors and the one tamper case the selftest carries — the 126
+  known-answer checks of Phase 1 and the 185 simulator executions
+  remain where the coverage lives. Not thermal or long-run behaviour:
+  the board ran minutes, at room temperature, and the temperature was
+  not measured. One board, one part, one seed.
+
+- **`clk_sys` measured on silicon: 48.0776 MHz** (2026-08-18, same
+  configuration). The board's own free-running cycle counter — the
+  64-bit timestamp opcode 05 returns — read twice across a
+  120.0107 s interval on the host's `CLOCK_MONOTONIC`, giving
+  5769827583 cycles. That is **+14 ppm** from the 48.076923 MHz the
+  PLL's dividers promise, and the promise is kept.
+
+  **The uncertainty is larger than the deviation, so the deviation is
+  not a finding.** Each reading is a request/response round trip of
+  10.3 and 10.9 ms, inside which the board sampled its counter at a
+  moment this method cannot locate; taking the midpoint and bounding
+  the error by half the window gives **± 88 ppm (± 4.25 kHz)**. The
+  +14 ppm sits well inside it. What is established is the frequency to
+  about a hundredth of a percent, and that is enough to settle what
+  four months of this file could not: the VCO is at 625 MHz, the 25 MHz
+  oscillator is a 25 MHz oscillator, and `CLKOS_DIV 13` divides it as
+  the netlist check says.
+
+  A second limit belongs to the host: `CLOCK_MONOTONIC` is
+  NTP-disciplined on this machine (`NTPSynchronized=yes`), so its rate
+  is good to a few ppm, but it was not tracked during the measurement
+  and no allowance for it is in the ± 88 ppm above. Both error terms
+  are far below what this measurement is used for.
+
+  This retires the stopwatch. `.claude/skills/bringup` step 3 asks for
+  thirty blinks timed by hand to turn "about 1 Hz" into 125 MHz to a
+  fraction of a percent; the board counting its own cycles does the
+  same job on `clk_sys` directly, two orders of magnitude more
+  precisely, and without a human reflex in the loop. The stopwatch on
+  `clk_tx` is still unrun and still the only direct reading of CLKOP —
+  this measures CLKOS, which is the one the datapath uses.
+
+- **Reconfiguring the FPGA leaves a stray byte on the serial line, and
+  the host's flush cannot reach it** (2026-08-18). Immediately after
+  `openFPGALoader` finishes, the first process to open `/dev/ttyACM0`
+  reads one `0x00` that no one sent. The second and third opens read
+  nothing. Reproduced on two separate reconfigurations, three opens
+  each; four consecutive opens with no reconfiguration between them
+  read zero bytes, so **it is the configuration that produces it and
+  not the act of opening the port**.
+
+  `transport.RawSerial.__init__` already calls
+  `termios.tcflush(TCIFLUSH)` for exactly this hazard, and it does not
+  help: the byte is not in the kernel's queue when the flush runs. It
+  is inside the DAPLink, which delivers it once a host opens the CDC
+  endpoint — the one buffer on the path that a tty flush cannot see.
+
+  **What it costs is the first frame.** SLIP has no preamble on this
+  link: `slip_model.encode()` emits one END and puts it at the end, so
+  a decoder starting cold treats the stray byte as the first byte of
+  the next frame. The reply that follows is appended to it and the
+  magic lands one byte late. That is the whole of why the first
+  `selftest` of the evening failed, and it failed in the most
+  misleading way available — `bad magic in response`, on a board whose
+  reply was byte-perfect. A raw dump of the same exchange showed the
+  board answering `4f43 01 04 3412 …` with the frame correctly
+  terminated: nothing was wrong with the device.
+
+  **The count is not established at one.** The failing selftest
+  reported `0000` for the two bytes it read as the magic, which takes
+  two stray bytes to produce, while every deliberate probe afterwards
+  measured exactly one. So what is proved is "at least one 0x00, at the
+  first open after configuration", and how many arrive under what
+  conditions is not.
+
+- **D2's fast rate was seen once and its cause is NOT established**
+  (2026-08-18). After the failed selftest the LED was reported blinking
+  several times a second — the rate `oca_crypto_pll.sv` reserves for
+  eight faults, all sticky but the PLL lock. Three candidates were
+  tested and all three are excluded:
+
+  | candidate | test | result |
+  |---|---|---|
+  | the reconfiguration itself | reload, read D2 before any byte crosses | **slow** — clean start |
+  | opening the CDC port | reload, then open and close the port three times, send nothing | **slow** — the glitch is board→host only |
+  | the selftest's tampered tag | read the RTL: `trouble` is framing, FIFO overflow and SLIP errors | auth failures are not among its terms |
+
+  The stray byte above cannot be the cause either: it travels toward
+  the host and the board never sees it. What is left is unexplained,
+  and it is recorded as unexplained rather than attributed to the
+  nearest available story. `stats` after a full clean run reported
+  `dropped_header=0`, so whatever set it is not the counter the
+  protocol exposes.
+
 
 ## The vendored Ethernet stack
 

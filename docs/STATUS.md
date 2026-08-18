@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # Project status
 
-**Updated 2026-08-16.** Where the project is, in one page. Update this at
+**Updated 2026-08-18.** Where the project is, in one page. Update this at
 every merge and at every design gate; a tracker that drifts is worse than
 none.
 
@@ -145,14 +145,40 @@ closed. The spread, 10.6%, is the widest recorded here — a device at
 60% occupancy. The fabric is kept as measured, not shipped, exactly as
 the 50.00 MHz rung is.
 
+**FIRST LIGHT — the crypto answered on silicon** (2026-08-18,
+`oca_crypto_pll` from `b3d63db`, seed 1, loaded to SRAM; the board's
+flash was never written). `selftest` passes **6/6** against RFC 8439
+2.8.2 and A.5 in both directions, with the forged tag refused and no
+plaintext returned. Opcode 05 answers **36N + 66 cycles exactly** at
+eleven values of N from 1 to 4096 — the cycle model measured in
+simulation is the one the chip runs, over four decades, intercept
+included. `bench-pair` reports `overlap=no`: the two runs serialise, as
+one engine must.
+
+**And `clk_sys` is measured, not inferred: 48.0776 MHz.** The board's
+own 64-bit cycle counter read twice across 120.0107 s of the host's
+clock gives 5769827583 cycles, +14 ppm from the 48.076923 the dividers
+promise — inside the ± 88 ppm the two round-trip windows allow, so the
+deviation is not a finding and the frequency is. The VCO is at 625 MHz
+and the oscillator is a 25 MHz oscillator.
+
+The rate the link carried, 11.11 KB/s, is the 115200 baud line and
+nothing about the accelerator.
+
 ## Not established
 
-**No bitstream containing crypto has been loaded onto the board.** What
-is proved is that it builds, that it closes 48.0769 MHz in place and
-route, and that it answers the protocol correctly in simulation down to
-UART bit timing — including a forged tag returning no plaintext, proved
-by mutation rather than asserted. That clock is a report about a
-netlist, not a board that answered.
+**No throughput figure for the accelerator has been taken on
+hardware.** Every byte of every bench above crossed a 115200 baud line,
+and 11.11 KB/s is a fact about that line. What the board reports is its
+own cycle count, which is the engine's rate and not the system's; the
+transport that would show the difference does not exist on this part.
+
+**What ran on silicon is two RFC vectors and one tamper case**, the
+three the selftest carries. The 126 known-answer checks of Phase 1 and
+the 185 simulator executions are where the coverage lives, and they ran
+in simulation. Nor is anything established about heat or long runs: the
+board ran minutes, at room temperature, and the temperature was not
+measured. One board, one part, one seed.
 
 **The margin changed character, and it is now small.** The pre-PLL top
 closed 49.85 MHz against a 25.00 MHz requirement, a 99% margin that
@@ -189,9 +215,17 @@ has been talking through them at 115200 since 2026-08-11, so this is not
 a blocker; the `oca_vccio` method applies if anything faster ever lands
 there.
 
-**The PLL's 1 Hz was never timed with a stopwatch**, so what is
-established is lock and the absence of a gross error, not 125.0 MHz to
-three digits.
+**`clk_tx` — CLKOP, the 125 MHz leg — is still untimed.** What the
+board's counter measured is CLKOS, which is the leg the datapath uses;
+the stopwatch step in `.claude/skills/bringup` covers the other one and
+remains unrun. Nothing in this project depends on CLKOP today.
+
+**D2's fast rate was seen once and its cause is not established.**
+Three candidates were tested and excluded: the reconfiguration itself
+(clean start reads slow), opening the CDC port (three open/close cycles
+with no traffic read slow), and the selftest's forged tag (`trouble` is
+framing, FIFO overflow and SLIP errors — auth failures are not among
+its terms). It is recorded as unexplained rather than attributed.
 
 **Throughput over the serial line is about 11.5 KB/s.** That is a figure
 about the transport and never about the accelerator, which is aimed at
@@ -200,23 +234,20 @@ describes.
 
 ## Next
 
-1. **Load `oca_crypto_pll` onto the board and run the vectors through
-   it** with `oca/hw/host/cli.py selftest`. This is the step the whole
-   project exists to reach: the crypto answering on silicon.
-   `oca_uart_crypto` is not the target to load — it lost the pins to
-   this top and packs no bitstream any more. With the board answering,
-   read opcode 05's durations (`cli.py bench`) — the first performance
-   figure this project can take on silicon, expected 36 N + 66 cycles.
-
-   **Watch D2 for a few seconds before the host opens the port.** The
-   fast heartbeat latches on any malformed UART frame, and the edge a
-   host puts on the line when it opens `/dev/ttyACM0` is enough to
-   produce one. Fast before any traffic is line noise or a PLL that has
-   not locked, which is a seventh cause of the rate and the only one
-   that is not sticky; fast only after traffic is the reading the rate
-   is for. `oca_crypto_pll.sv`'s header has the full table.
-2. Time the PLL with a stopwatch, and measure bank 2 while the meter is
-   out.
+1. **Drain the port before the first frame, and say how much was
+   dropped.** Reconfiguring the FPGA leaves at least one `0x00` on the
+   line, delivered to the first process that opens `/dev/ttyACM0`; the
+   `tcflush` in `transport.RawSerial.__init__` cannot reach it, because
+   it sits inside the DAPLink and not in the kernel's queue. It opens a
+   SLIP frame and puts the next reply's magic one byte late, which is
+   the whole of why the first selftest on silicon failed on a board
+   whose reply was byte-perfect. The fix belongs to the host and must
+   count what it discards: a drain that silently eats bytes is the
+   failure this project's own rule names. `docs/RECORD.md` has the
+   measurement and its limits — the count is proved at "at least one",
+   not at one.
+2. Measure bank 2 with the meter, and time `clk_tx` with the stopwatch
+   if CLKOP ever carries anything.
 3. **Decide what the two-engine fabric is for.** It closes on three
    seeds of four at 48.0769 and is therefore not shippable there. The
    next rung down is 625/14 = 44.643 MHz, where the worst seed measured
